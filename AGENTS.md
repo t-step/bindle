@@ -1,0 +1,328 @@
+# AGENTS
+
+Bindle Working Instructions
+
+Repository purpose
+
+Bindle preserves and reloads durable engineering context across projects and native coding agents.
+
+Claude Code and Codex remain the execution harnesses.
+
+Bindle may eventually own:
+
+* cross-project session identity
+* durable session capture
+* current versus stale knowledge
+* selective promotion
+* portable resume context
+* Obsidian projection
+* provenance across tools and repositories
+
+Bindle does not replace:
+
+* Claude Code
+* Codex
+* Obsidian
+* Git or GitHub
+* project management tools
+* documentation lookup
+* browser automation
+* code intelligence
+* security scanners
+* scientific tooling
+* graph databases
+* agent execution loops
+
+Current phase
+
+This repository is defining the workshop, conventions, and first vertical slice.
+
+Do not implement a memory platform, graph system, background daemon, orchestration framework, or generic agent harness without an approved plan.
+
+The first likely product capability is durable cross-project session continuity.
+
+Repository tooling precedence
+
+Before proposing or adding tooling:
+
+1. Inspect repository instructions, scripts, manifests, task runners, CI workflows, configuration, and development documentation.
+2. Prefer repository-present commands and conventions.
+3. Adapt project-scoped and global skills to the repository.
+4. Extend existing tooling before introducing a parallel mechanism.
+5. Replace tooling only when it is broken, unsafe, contradictory, abandoned, or explicitly under review.
+6. Explain the concrete gap before adding a dependency or system.
+
+Inherit first. Extend second. Replace deliberately. Invent last.
+
+Scope and safety
+
+* Confirm the repository root before making changes.
+* Do not modify sibling repositories.
+* Inspect git status before and after work.
+* Preserve existing uncommitted changes.
+* Do not discard, reset, or overwrite user work.
+* Use the repository’s established verification commands.
+* Do not claim completion without running relevant checks.
+* Do not commit unless explicitly requested.
+* Do not bypass repository hooks.
+
+Agent delegation policy
+
+* Use no more than three subagents concurrently.
+* Only the primary agent may delegate.
+* Subagents must not spawn, nest, or delegate to additional agents.
+* Do not use teams, forks, workflows, repeated waves, or equivalent mechanisms to evade the limit.
+* Prefer direct work in the primary agent for sequential, small, or context-heavy tasks.
+* Use subagents only for genuinely independent, bounded work.
+* Repository-local stricter limits take precedence.
+
+This policy is enforced globally (not just advisory) via Claude Code hooks in
+`~/.claude/settings.json`:
+
+* `PreToolUse` on the `Agent` tool (`~/.claude/hooks/subagent-limit-guard`)
+  denies any call whose payload carries an `agent_id` (a subagent calling
+  `Agent` again — nesting), and denies new top-level calls once three
+  subagents are concurrently active.
+* `SubagentStart` / `SubagentStop` (`subagent-track-start` /
+  `subagent-track-stop`) maintain the per-session active-subagent count the
+  guard checks.
+
+Known gap: the `Workflow` tool's internal `agent()` fan-out does not go
+through the `Agent` tool, so `subagent-limit-guard` never sees it and cannot
+cap a workflow's own internal concurrency (verified empirically — confirmed
+via captured hook payloads that `SubagentStart`/`SubagentStop` do fire for
+workflow-spawned agents with `agent_type: "workflow-subagent"`, but no
+`PreToolUse` fires per individual `agent()` call, only once for the outer
+`Workflow` tool invocation). Workflows remain bound only by their own
+opt-in requirement and internal concurrency cap, not by this policy's
+three-subagent ceiling — this is the "workflows... to evade the limit" case
+called out above, left unpatched by choice rather than oversight.
+
+Secrets and environment files
+
+* Never read, print, search, summarize, modify, copy, or transmit secret-bearing files.
+* Treat .env, .env.local, .env.*.local, private keys, credential files, and secrets/ directories as inaccessible.
+* Use .env.example, .env.template, documentation, and environment-variable names to understand configuration.
+* Do not run commands intended to reveal secret values, including env, printenv, shell startup dumps, Keychain reads, or credential-manager lookups.
+* Ask the user to confirm that a required variable exists rather than requesting or inspecting its value.
+* Do not include secrets in logs, commits, generated files, prompts, or handoffs.
+
+Commits
+
+* Use Conventional Commits.
+* Inspect the staged diff before selecting a commit type and scope.
+* Describe the purpose of the change, not merely the files touched.
+* Keep commits cohesive.
+* Recommend splitting unrelated changes.
+* Run relevant verification before committing.
+* Do not bypass commit hooks.
+* Do not create a commit without explicit approval.
+
+Examples:
+
+docs: define initial toolchain
+chore: add repository hygiene defaults
+feat(session): add durable session records
+fix(projection): preserve human-authored note sections
+
+Planning
+
+* Prefer local Markdown planning.
+* PLAN.md is the concise project orientation.
+* Active work lives in plans/active/.
+* Completed work moves to plans/archive/.
+* Read only the relevant plan unless broader context is required.
+* Update plans when scope, status, decisions, verification, or uncertainties materially change.
+* Do not require GitHub Issues.
+* Publish work to GitHub only when collaboration, review, notification, or external tracking makes it useful.
+* Prefer reviewable outcomes over tiny task fragments.
+
+Recommended flow:
+
+grill-me
+→ to-spec
+→ local plan
+→ implementation
+→ verification
+→ showcase
+
+Do not use the full flow for obvious, mechanical, or already-approved work.
+
+Skills
+
+Skills are advisory procedures, not repository authorities.
+
+* Repository-local instructions and tooling take precedence.
+* Use the smallest relevant skill set.
+* Do not load unrelated specialist skills.
+* Do not allow a skill to introduce frameworks, dependencies, or project structure without a demonstrated need.
+* Prefer proven upstream skills over local reinvention.
+* Treat third-party skills as executable dependencies and review them before installation.
+
+MCP usage
+
+MCP servers are capability profiles, not a default tool buffet.
+
+* Load only the profile relevant to the task.
+* Prefer native repository tools when they provide the same capability clearly.
+* Use MCP for capabilities not cleanly available through files, shell commands, or installed skills.
+* Keep mutation permissions narrow.
+* Prefer read-only access by default.
+* Treat MCP output as evidence to verify, not unquestioned truth.
+
+Code intelligence
+
+code-review-graph is optional and project-scoped.
+
+Use it when:
+
+* reviewing a multi-file or cross-module change
+* estimating blast radius
+* tracing callers, dependents, or execution paths
+* identifying potentially affected tests
+* changing public interfaces or shared models
+* investigating cross-language boundaries
+* orienting in a large or unfamiliar subsystem
+
+Do not use it when:
+
+* the task concerns one or two known files
+* rg, Git, or language tooling answers the question directly
+* performing ordinary text search
+* editing documentation only
+* the repository is small
+* the graph may be stale or absent
+
+Tool precedence:
+
+1. known files
+2. rg, fd, Git, and language tooling
+3. repository documentation and history
+4. code-review-graph
+
+Confirm material conclusions in source code.
+
+Sessions and durable knowledge
+
+A session is evidence that work occurred. It is not automatically durable truth.
+
+Bindle should distinguish:
+
+* raw session records
+* promoted knowledge
+* current guidance
+* superseded guidance
+* human-readable Obsidian projections
+
+Raw sessions should remain durable and auditable.
+
+Obsidian should receive selected, human-useful projections rather than every command, transcript, or intermediate attempt.
+
+Promotion should initially be explicit or proposed for approval.
+
+The intended lifecycle is:
+
+observed → candidate → current → superseded
+
+Do not invent a broad ontology.
+
+Graphs and semantic indexes are derived conveniences, not canonical state.
+
+Obsidian projection
+
+Use a dedicated Bindle vault rather than the user’s personal vault.
+
+The Bindle vault may contain:
+
+* project notes
+* promoted decisions
+* patterns
+* research findings
+* open questions
+* important session landmarks
+* generated views and links
+
+Do not project every raw session into Obsidian.
+
+Prefer:
+
+* ordinary Markdown
+* standard Obsidian links
+* simple properties
+* Bases for curated views
+* JSON Canvas only when spatial representation helps
+
+Generated content must not overwrite human-authored content outside clearly managed sections.
+
+Initial publication should be preview-first and approval-based.
+
+Showcase
+
+Showcasing is part of the definition of done for meaningful work.
+
+When applicable, preserve:
+
+* before and after states
+* architecture diagrams
+* screenshots
+* traces
+* benchmarks
+* scientific figures
+* verification output
+* important tradeoffs
+* known limitations
+* a short walkthrough path
+
+Prefer existing repository showcase tooling, demos, documentation sites, Storybook instances, notebooks, or scripts before introducing a new presentation mechanism.
+
+Communication style
+
+Use concise technical prose during interactive coding.
+
+Do not apply compressed or fragmentary style to:
+
+* repository documentation
+* academic writing
+* scientific explanations
+* stakeholder communication
+* showcases
+* external correspondence
+* material intended for unfamiliar readers
+
+Identify the audience and write complete prose for durable artifacts.
+
+## Development isolation
+
+- Do not implement features directly in the primary `bindle` checkout.
+- Use one Git worktree and feature branch per active product slice.
+- Treat the primary checkout as the integration and release workspace.
+- Confirm the current branch, repository root, and worktree before editing.
+- Do not modify sibling worktrees.
+- Do not use worktrees to bypass the three-subagent limit.
+- Keep `main` releasable.
+
+## Runtime isolation
+
+- Never use live Bindle state during development or tests.
+- Development commands must use a repository-local or temporary Bindle home.
+- Prefer:
+
+  `BINDLE_HOME="$PWD/.bindle-dev" uv run bindle ...`
+
+- Tests must use temporary directories.
+- Do not modify:
+  - `~/.local/share/bindle/`
+  - the real Bindle Obsidian vault
+  - global Claude Code configuration
+  - global Codex configuration
+  - installed skills
+  - live MCP configuration
+
+- Inspection is read-only unless an approved plan explicitly covers mutation.
+- Any future mutation command must support preview before apply.
+
+## CLI invocation
+
+- Use `uv run bindle ...` when testing development code.
+- Treat plain `bindle ...` as the stable installed release.
+- Do not reinstall or replace the stable CLI unless explicitly requested.

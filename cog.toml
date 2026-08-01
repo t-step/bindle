@@ -1,0 +1,23 @@
+from_latest_tag = false
+ignore_merge_commits = true
+branch_whitelist = ["main"]
+
+pre_bump_hooks = []
+post_bump_hooks = []
+
+[git_hooks.commit-msg]
+script = """#!/bin/sh
+cog verify --file $1
+"""
+
+[commit_types]
+feat = { changelog_title = "Features" }
+fix = { changelog_title = "Fixes" }
+docs = { changelog_title = "Documentation" }
+refactor = { changelog_title = "Refactoring" }
+test = { changelog_title = "Tests" }
+build = { changelog_title = "Build" }
+ci = { changelog_title = "Continuous Integration" }
+perf = { changelog_title = "Performance" }
+style = { changelog_title = "Style" }
+chore = { changelog_title = "Maintenance" }
