@@ -8,7 +8,7 @@ Read and follow AGENTS.md in full — it is the authoritative, portable instruct
 
 Bindle is pre-implementation. This repository currently defines the workshop, conventions, and scope for a not-yet-built tool — there is no package manifest, build system, linter, or test suite yet. Do not invent one; do not scaffold a framework, memory platform, graph system, or daemon without an approved plan (AGENTS.md, "Current phase").
 
-`scripts/doctor.sh` is the one script present, intended as a read-only toolchain/file-presence check. It currently contains corrupted smart-quote characters in place of straight quotes and is not functional as-is (`bash -n scripts/doctor.sh` fails) — flag this if asked to run it rather than assuming it works.
+`scripts/doctor.sh` is the one script present: a read-only toolchain/file-presence check. It is functional (`bash scripts/doctor.sh`) and reports missing tools or repository files with a nonzero exit code.
 
 Commit messages are validated by Cocogitto against `cog.toml`. A local `commit-msg` git hook (installed via `cog install-hook`, not tracked by git) runs `cog verify` on every commit — do not bypass it (AGENTS.md, "Do not bypass repository hooks"). If it's missing in a fresh checkout, reinstall with `cog install-hook commit-msg`.
 
