@@ -245,23 +245,18 @@ Generated state remains local and uncommitted.
 
 Memory and sessions
 
-Bindle’s intended responsibility is:
+Bindle does not own memory or sessions. Providers do, and Bindle bridges them (docs/PHILOSOPHY.md, docs/DATA-OWNERSHIP.md):
 
-* durable cross-project session records
-* current versus stale knowledge
-* promotion and supersession
-* resume context for Claude Code and Codex
-* selective projection into a dedicated Obsidian vault
-
-Candidate repository-local memory tool:
-
-* projectmem, trial only
+* repository-local working memory: projectmem, trial only — branch-blind; treat as working notes, never accepted truth
+* durable personal knowledge and work records: obsidian-mind vault with the om MCP server, candidate under evaluation
+* transcripts and live context: Claude Code and Codex natively
+* deterministic evidence: git, stamped into evidence blocks by Bindle
 
 Candidate temporal index:
 
-* Graphiti, deferred
+* Graphiti, deferred — a derived, removable provider experiment
 
-Canonical state must remain independent of any graph backend.
+Durable artifacts must remain independent of any graph backend, and no Bindle code may parse a provider's private store (D014).
 
 Observability
 

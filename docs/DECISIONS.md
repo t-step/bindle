@@ -80,3 +80,29 @@ Agents must not read or reveal .env files, local environment overrides, credenti
 D013: Showcasing is part of completion
 
 Meaningful work should preserve enough evidence to produce a clear walkthrough, diagram, benchmark, scientific figure, or demonstration.
+
+D014: Blocks and pointers, never parsers
+
+No Bindle code may parse another tool’s store; it may only emit blocks others embed and hold pointers others resolve.
+
+This is the replaceability law: losing or swapping a provider (harness, memory tool, vault, index) may cost Bindle pointers, but must never break it. Bindle may call supported interfaces; it may never read a provider's private datastore directly.
+
+D015: Durability
+
+Every durable artifact lives with the system that naturally owns it.
+
+Bindle-owned runtime state is limited to configuration, disposable cache, and explicit export. Nothing under Bindle's control may be the only copy of user history.
+
+D016: Preservation requires a reason
+
+Not every thought deserves to be preserved.
+
+Temporary exploration, conversational branches, and intermediate reasoning remain in transcripts or scratch space and are allowed to disappear. Durable capture requires a reason: an accepted decision, a significant attempt or failure or fix, a reusable cross-project lesson, a meaningful work record, a stable handoff boundary, or a reproducible verification result.
+
+D017: One authoritative copy of policy
+
+AGENTS.md is the provider-neutral instruction set and the single authoritative copy of working policy. CLAUDE.md is a thin Claude-specific bridge that defers to it. Provider-native auto-memory is soft recall, never project authority. Claude Code and Codex write durable summaries and handoffs to one shared location, never to competing per-provider stores.
+
+D018: Worktree identity
+
+Repository identity is the Git common directory plus stable remote metadata. Execution identity is the absolute worktree path. Code-state identity is commit SHA plus dirty state. Branch names are descriptive context, never primary identity. No Bindle feature may assume one checkout per repository.

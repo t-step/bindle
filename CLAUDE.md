@@ -4,6 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Read and follow AGENTS.md in full — it is the authoritative, portable instruction set (shared with Codex), covering scope and safety rules, the three-subagent ceiling, secrets handling, commit conventions, the planning flow, skills/MCP policy, and the development/runtime isolation rules for Bindle itself. This file only adds what AGENTS.md cannot express portably.
 
+That division is deliberate (D017): AGENTS.md holds the single authoritative copy of every policy; this file is a thin Claude-specific bridge and must never restate a policy AGENTS.md already carries. Claude Code's per-project auto-memory is soft recall, never project authority — durable decisions, summaries, and handoffs go to the shared locations in docs/DATA-OWNERSHIP.md, not to a Claude-private store that Codex cannot see.
+
 ## Repository state
 
 Bindle is pre-implementation. This repository currently defines the workshop, conventions, and scope for a not-yet-built tool — there is no package manifest, build system, linter, or test suite yet. Do not invent one; do not scaffold a framework, memory platform, graph system, or daemon without an approved plan (AGENTS.md, "Current phase").
@@ -21,6 +23,10 @@ Reading multiple files is required to get the full picture; short version:
 - `docs/SCOPE.md` — what Bindle owns / may later own / explicitly does not own, the session model, the candidate canonical-state layout (`~/.bindle/{sessions,memories,index.sqlite,config.yaml}`), and the M0–M4 milestone sequence.
 - `docs/DECISIONS.md` — numbered decision log (D001–D013); check it before proposing anything that would revisit a settled decision (e.g. no generic agent loop, no broad ontology, graphs are derived not canonical).
 - `docs/TOOLCHAIN.md` — the full toolchain, skill selection, and MCP profile rationale, with tool precedence order.
+- `docs/PHILOSOPHY.md` — what Bindle is (a stateless toolchain bridge), what it refuses to become, the replaceability/durability/preservation rules, and the feature admission test.
+- `docs/DATA-OWNERSHIP.md` — the authority model for Claude Code and Codex, the ownership and routing tables, durable versus derived.
+- `docs/WORKTREES.md` — the identity model (common dir / worktree path / SHA / branch), provider behavior across linked worktrees, evidence-block fields, operating rules.
+- `docs/PRIVACY.md` — the personal-disclosure threat model, the archived guard's status, and content rules for this repository.
 - `config/skills.yaml`, `config/mcp-profiles.yaml` — machine-readable mirrors of the toolchain doc (skill bundles and MCP server profiles by task category).
 
 Core intent, if you only read one line: Bindle is a continuity layer (capture → promote → project → resume) across Claude Code, Codex, and repositories — not a replacement for any of them. Inherit first, extend second, replace deliberately, invent last.

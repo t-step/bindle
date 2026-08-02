@@ -12,9 +12,9 @@ Next
 
 1. ~~Create the repository skeleton and manifests.~~ Done — `config/skills.yaml`, `config/mcp-profiles.yaml` added; `scripts/doctor.sh` reports all repository-file checks passing.
 2. ~~Implement a read-only doctor command.~~ Done — `scripts/doctor.sh`.
-3. Define the initial session-record schema.
+3. Define the evidence-block schema (fields and worktree semantics in docs/WORKTREES.md).
 4. Trial repository-local memory tooling in Valence.
-5. Establish the dedicated Bindle Obsidian vault.
+5. Trial obsidian-mind as the dedicated vault (deploy the template with the om MCP server; commit `.om-project` markers in participating repos).
 
 Blocked
 
@@ -24,10 +24,10 @@ Blocked
 
 Later
 
-* Session start, close, list, and show
-* Resume-context assembly
-* Promotion and supersession
-* Obsidian projection
+* Evidence-block emission, list, and show
+* Resume-context assembly from provider-owned records
+* Promotion and supersession routing
+* Obsidian projection emission
 * Temporal-index comparison
 * Toolchain bootstrap and drift repair (e.g., installing this repo's cog.toml git-hook pattern into other project repositories, so conventional-commit enforcement is consistent across repos without re-deriving it each time)
 

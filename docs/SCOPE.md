@@ -2,37 +2,32 @@
 
 ## Purpose
 
-Bindle is a continuity layer for engineering work performed across Claude Code, Codex, repositories, and projects.
+Bindle is a stateless toolchain bridge for engineering work performed across Claude Code, Codex, repositories, and projects (docs/PHILOSOPHY.md).
 
-Its primary human interface is expected to be a dedicated Obsidian vault generated from durable structured records.
+It moves context and evidence between tools that already own their domains. The knowledge vault, the harnesses, git, and repository memory tooling remain the stores; Bindle helps work cross the seams between them.
 
-Core loop
+Core loop, stated as seam crossings
 
-capture
-→ promote
-→ project
-→ resume
+capture — deterministic evidence stamped at a session boundary, embedded in a record another system owns
+→ promote — working reasoning routed into the store that owns durable knowledge, only with a reason (D016)
+→ project — selected knowledge emitted into human surfaces the owning systems maintain
+→ resume — bounded context assembled from provider-owned records through supported interfaces
 
 Bindle owns
 
-* cross-project session identity
-* durable session records
-* repository and agent metadata
-* current versus stale knowledge
-* explicit or proposed promotion
-* supersession
-* bounded resume context
-* provenance and evidence links
-* selective Obsidian projection
-* toolchain manifests and audits
+* toolchain manifests, doctor checks, and drift diagnosis
+* evidence-block formats and their deterministic emission
+* pointers and provenance links between provider-owned records
+* lightweight adapters, hooks, templates, and commands at tool seams
+* bounded resume-context assembly from provider-owned records
+* selective projection emission (the receiving surface owns the result)
 
 Bindle may later own
 
 * context assembly across sessions and repositories
-* cross-project related-session retrieval
-* contradiction or stale-knowledge warnings
-* temporal indexing adapters
-* an optional Graphiti integration
+* contradiction or stale-knowledge warnings derived from evidence blocks
+* temporal indexing adapters (derived, disposable)
+* an optional Graphiti integration (a provider experiment, removable)
 * bootstrap and doctor workflows that enforce equivalent behavior across Claude Code and Codex, preferring shared repository-level mechanisms (git hooks, repository configuration) over harness-specific ones, with per-harness adapters only where no portable mechanism exists
 
 Bindle does not own
@@ -49,49 +44,34 @@ Bindle does not own
 * GitHub issue tracking
 * scientific-computing frameworks
 * note-taking
+* notes, transcripts, embeddings, or narrative session records
+* canonical project memories or user knowledge
 * release automation
 * telemetry platforms
 * security scanning
 * a generic project-management system
 
-Canonical state
+Bindle-owned state
 
-Canonical state should be structured, local, inspectable, and portable.
+Bindle is stateless with respect to user history (D015). Its own state, under `BINDLE_HOME` (default `~/.local/share/bindle`), is limited to:
 
-Candidate layout:
+* configuration
+* disposable cache, rebuildable from providers at any time
+* explicit exports the user asked for
 
-~/.bindle/
-├── sessions/
-├── memories/
-├── index.sqlite
-└── config.yaml
+There is no Bindle sessions store, memories store, or index database that acts as the only copy of anything. Durable artifacts live with their owners: decisions in repository decision logs, knowledge in the vault, transcripts with the harnesses, history in git.
 
-The Obsidian vault is a projection and human-curation surface.
+The Obsidian vault is a projection and human-curation surface owned by the vault, not by Bindle.
 
 Graph databases and semantic indexes are derived and replaceable.
 
-Session model
+Evidence blocks
 
-A session is immutable evidence that work occurred.
+An evidence block is an immutable observation that work occurred at a specific place and code state. Field list and worktree semantics live in docs/WORKTREES.md; in summary a block records repository identity (git common directory, remote), execution identity (worktree path), code state (HEAD SHA, dirty summary, detached flag), branch as descriptive context, timestamps, agent, and optional pointers (transcript, thread, PR).
 
-A session may contain:
+Blocks are embedded in records other systems own — a vault work record, a handoff file, a commit message. Bindle emits them; it does not accumulate them.
 
-* identifier
-* timestamps
-* agent
-* project
-* repository
-* branch and worktree
-* intent
-* outcomes
-* decisions
-* changed files
-* evidence
-* remaining work
-* uncertainties
-* related projects
-
-A session is not automatically durable project guidance.
+An evidence block is not automatically durable project guidance.
 
 Promotion
 
@@ -136,14 +116,12 @@ M0: Workshop
 * repository instructions
 * doctor command
 
-M1: Sessions
+M1: Evidence
 
-* start
-* close
-* list
-* show
-* durable structured records
-* deterministic repository metadata
+* evidence-block schema (docs/WORKTREES.md)
+* deterministic emission from git state
+* embed into provider-owned records (vault work record, handoff file, commit message)
+* list and show blocks Bindle has emitted (disposable cache, rebuildable)
 
 M2: Resume
 

@@ -4,19 +4,18 @@ Bindle Working Instructions
 
 Repository purpose
 
-Bindle preserves and reloads durable engineering context across projects and native coding agents.
+Bindle is a stateless toolchain bridge. It moves useful context and evidence between tools that already own their domains; it is not itself a store of user history (docs/PHILOSOPHY.md, D014–D016).
 
 Claude Code and Codex remain the execution harnesses.
 
-Bindle may eventually own:
+Bindle may provide:
 
-* cross-project session identity
-* durable session capture
-* current versus stale knowledge
-* selective promotion
-* portable resume context
-* Obsidian projection
-* provenance across tools and repositories
+* toolchain manifests, doctor checks, and drift diagnosis
+* deterministic evidence blocks emitted from git state
+* pointers and provenance links between provider-owned records
+* lightweight adapters, hooks, templates, and commands at tool seams
+* bounded resume-context assembly from provider-owned records
+* selective projection emission into surfaces the owning systems maintain
 
 Bindle does not replace:
 
@@ -206,15 +205,9 @@ Sessions and durable knowledge
 
 A session is evidence that work occurred. It is not automatically durable truth.
 
-Bindle should distinguish:
+Route information to its owner, not into Bindle: the authority model and routing table live in docs/DATA-OWNERSHIP.md. Bindle distinguishes evidence (deterministic, immutable observations), working reasoning (provider-owned, disposable), and promoted knowledge (owned by the decision log or the vault).
 
-* raw session records
-* promoted knowledge
-* current guidance
-* superseded guidance
-* human-readable Obsidian projections
-
-Raw sessions should remain durable and auditable.
+Not every thought deserves to be preserved. Durable capture requires a reason (D016); temporary exploration stays in transcripts and scratch space and is allowed to disappear.
 
 Obsidian should receive selected, human-useful projections rather than every command, transcript, or intermediate attempt.
 
@@ -227,6 +220,15 @@ observed → candidate → current → superseded
 Do not invent a broad ontology.
 
 Graphs and semantic indexes are derived conveniences, not canonical state.
+
+Architecture rules
+
+* Replaceability (D014): no Bindle code parses another tool's private store; call supported interfaces, emit blocks others embed, hold pointers owners resolve.
+* Durability (D015): durable artifacts live with their owners; Bindle-owned state is configuration, disposable cache, or explicit export.
+* Preservation (D016): capture requires a reason.
+* Worktrees (D018): repository identity is the git common directory; never assume one checkout per repository (docs/WORKTREES.md).
+* Every proposal answers three questions first — who naturally owns this, can that owner be replaced, does this deserve to survive. A weak answer to any of them ends the proposal.
+* Proposals that survive the screen must pass the full admission test in docs/PHILOSOPHY.md.
 
 Obsidian projection
 
