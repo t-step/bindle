@@ -60,7 +60,14 @@ machine-local configuration · **[private]** private file, never committed anywh
   again: `ln -s "<former vault path>" "$HOME/.bindle"` — the former target is recorded in the
   private trial log, not here.
 
-### Phase 1 — remaining machine-local preparation (user-run)
+### Phase 1 — machine-local preparation
+
+Status 2026-08-02: **done on the primary machine** — the guard block was appended to the existing
+projectmem pre-commit hook (below its comment fence), with the denylist path baked into the hook
+so it works for commits from any environment; `~/.config/bindle/private-denylist.txt` exists but
+is **empty — populate it** with private codenames, employer names, hostnames, and vault names.
+Verified by staging a synthetic home-path leak: the hook blocked the commit (exit 1) and passes a
+clean tree. The steps below remain the reference for other machines.
 
 The privacy guard's default denylist home was `~/.bindle` (now gone). Repoint it:
 
@@ -95,6 +102,7 @@ cat > "$hooks_dir/pre-commit" <<'EOF'
 # privacy guard on staged files (docs/PRIVACY.md).
 # Composition rule: if other pre-commit checks are added later, add them here —
 # this file is the single pre-commit entry point, and the guard is one step in it.
+export BINDLE_DENYLIST="${BINDLE_DENYLIST:-$HOME/.config/bindle/private-denylist.txt}"
 files=()
 while IFS= read -r -d '' f; do files+=("$f"); done \
   < <(git diff --cached --name-only --diff-filter=ACM -z)
