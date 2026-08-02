@@ -204,7 +204,13 @@ Confirm material conclusions in source code.
 
 Project memory (projectmem)
 
-This repository uses projectmem as its repository-local memory layer (trial; see docs/TOOLCHAIN.md). Its workflow is mandatory in every harness:
+This repository trials projectmem as a local operational memory layer (see docs/TOOLCHAIN.md). It is machine-local working memory, not repository state:
+
+* projectmem is not required to build, test, run, or understand this repository; everything durable lives in tracked files. Do not assume another contributor — human or agent — has it installed or registered. Work normally when it is absent.
+* Durable architecture, decisions, product rules, and operating instructions live in tracked repository docs (docs/DECISIONS.md, docs/, AGENTS.md), never only in a memory tool.
+* `.projectmem/` (generated summaries, event logs, issues, plans) is gitignored and must not be committed.
+
+When projectmem is available, use its workflow:
 
 * At session start, load the project instructions and summary before answering questions about the project — via the projectmem MCP tools (`get_instructions`, `get_summary`, and `get_project_map` when structure matters) where the server is connected, otherwise via the CLI: `pjm instructions`, `pjm show`, `pjm map`.
 * Before modifying a file, check its failure history: `precheck_file(path)` or `pjm precheck <path>`.
@@ -212,7 +218,7 @@ This repository uses projectmem as its repository-local memory layer (trial; see
 * Never edit `.projectmem/` files directly; `summary.md` regenerates from `events.jsonl`, and direct edits break audit replay. `PROJECT_MAP.md` and `plan.md` are the exceptions and may be edited directly.
 * Prefer these tools over re-scanning source files when they answer the same question.
 
-Harness note: the projectmem MCP server is registered for Claude Code (project scope in user config) and globally for Codex (no `--root`; the server parent-walks from the session directory to find `.projectmem/`, so only initialized repos answer). Prefer the MCP tools when connected; the `pjm` CLI is the fallback.
+Harness note: registration is machine-local (no tracked `.mcp.json`). On this machine the projectmem MCP server is registered for Claude Code (project scope in user config) and globally for Codex (no `--root`; the server parent-walks from the session directory to find `.projectmem/`, so only initialized repos answer). Prefer the MCP tools when connected; the `pjm` CLI is the fallback.
 
 Sessions and durable knowledge
 
@@ -344,7 +350,13 @@ Identify the audience and write complete prose for durable artifacts.
 
 ## Obsidian Mind trial (temporary)
 
-An `om` MCP server may be registered during the current trial.
+An `om` MCP server may be registered during the current trial. om is local operational memory, not repository state:
+
+* om is not required to build, test, run, or understand this repository. Do not assume another contributor — human or agent — has it installed or registered. Work normally when it is absent.
+* The vault, its manifests, indexes, caches, and personal notes live outside this repository and must never be committed here. The only tracked om-related artifact is `.om-project`, a one-line routing label containing no personal or machine-specific data (tracked deliberately so every worktree and branch declares the same project identity; docs/WORKTREES.md).
+* Durable decisions still belong to tracked docs: accepted decisions go to docs/DECISIONS.md, never only to the vault.
+
+When om is available:
 
 * Route session narratives worth keeping to `om record_work`; cross-project lessons to
   `om remember`. The routing table in docs/DATA-OWNERSHIP.md governs; accepted decisions still go

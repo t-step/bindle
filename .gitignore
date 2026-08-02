@@ -94,6 +94,7 @@ export_presets.cfg
 .agents/.cache/
 
 # Local MCP state
+.mcp.json
 .mcp.local.json
 mcp.local.json
 

@@ -37,4 +37,4 @@ Claude-specific configuration belongs under `.claude/` only when it cannot be ex
 
 ## projectmem (Claude-specific note)
 
-The projectmem mandate lives in AGENTS.md ("Project memory (projectmem)"), loaded by the import above. In Claude Code the projectmem MCP server is registered (project scope) and injects its own detailed tool instructions at session start — use the MCP tools, not the `pjm` CLI fallback, when the server is connected.
+projectmem usage guidance lives in AGENTS.md ("Project memory (projectmem)"), loaded by the import above: it is local operational memory, used when available, never required and never committed. If the projectmem MCP server is registered on this machine (project scope in user config), it injects its own detailed tool instructions at session start — prefer the MCP tools over the `pjm` CLI when the server is connected, and proceed without projectmem when neither is available.
