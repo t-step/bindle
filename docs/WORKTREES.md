@@ -43,7 +43,7 @@ obsidian-mind / om v8.3.1 (candidate; not yet deployed):
 
 Claude Code:
 
-* The transcript directory is keyed to the working directory, so each worktree gets its own transcript store. The auto-memory directory was observed (2026-07, prior system's fact log) to follow the primary repository root instead. Re-verify before relying on either detail.
+* The transcript directory is keyed to the working directory, so each worktree gets its own transcript store. The auto-memory directory follows the primary repository root instead, shared across all linked worktrees. Both were re-verified empirically 2026-08-02 (om trial Gate 4): a worktree session created a new munged transcript directory containing only its transcript `.jsonl` — no `memory/` subdirectory — while its memory context resolved to the primary checkout's `memory/`. The two keyings are deliberate and independent: transcripts split per literal path, memory is repo-level. Stated together because either half alone makes the other look wrong.
 
 Codex:
 
