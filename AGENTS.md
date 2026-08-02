@@ -201,6 +201,18 @@ Tool precedence:
 
 Confirm material conclusions in source code.
 
+Project memory (projectmem)
+
+This repository uses projectmem as its repository-local memory layer (trial; see docs/TOOLCHAIN.md). Its workflow is mandatory in every harness:
+
+* At session start, load the project instructions and summary before answering questions about the project — via the projectmem MCP tools (`get_instructions`, `get_summary`, and `get_project_map` when structure matters) where the server is connected, otherwise via the CLI: `pjm instructions`, `pjm show`, `pjm map`.
+* Before modifying a file, check its failure history: `precheck_file(path)` or `pjm precheck <path>`.
+* Log while working: bug found → `log_issue` / `pjm log`; each fix attempt → `record_attempt` / `pjm attempt`; confirmed fix → `record_fix` / `pjm fix`; design choice → `add_decision` / `pjm decision`; gotcha or setup detail → `add_note` / `pjm note`.
+* Never edit `.projectmem/` files directly; `summary.md` regenerates from `events.jsonl`, and direct edits break audit replay. `PROJECT_MAP.md` and `plan.md` are the exceptions and may be edited directly.
+* Prefer these tools over re-scanning source files when they answer the same question.
+
+Harness note: the projectmem MCP server is registered for Claude Code (project scope in user config) and globally for Codex (no `--root`; the server parent-walks from the session directory to find `.projectmem/`, so only initialized repos answer). Prefer the MCP tools when connected; the `pjm` CLI is the fallback.
+
 Sessions and durable knowledge
 
 A session is evidence that work occurred. It is not automatically durable truth.
