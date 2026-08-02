@@ -62,6 +62,7 @@ Scope and safety
 * Do not discard, reset, or overwrite user work.
 * Use the repository’s established verification commands.
 * Do not claim completion without running relevant checks.
+* Verification is local-first: this repository is private, so GitHub CI runs rarely and must never be the first place checks execute. Run every relevant check locally and confirm it passes before opening a PR.
 * Do not commit unless explicitly requested.
 * Do not bypass repository hooks.
 
