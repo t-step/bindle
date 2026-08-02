@@ -10,8 +10,8 @@ Establish the shared workshop and durable-session model before implementing memo
 
 Next
 
-1. Create the repository skeleton and manifests.
-2. Implement a read-only doctor command.
+1. ~~Create the repository skeleton and manifests.~~ Done — `config/skills.yaml`, `config/mcp-profiles.yaml` added; `scripts/doctor.sh` reports all repository-file checks passing.
+2. ~~Implement a read-only doctor command.~~ Done — `scripts/doctor.sh`.
 3. Define the initial session-record schema.
 4. Trial repository-local memory tooling in Valence.
 5. Establish the dedicated Bindle Obsidian vault.

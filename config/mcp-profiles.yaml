@@ -1,0 +1,46 @@
+# Machine-readable mirror of the "MCP profiles" section in docs/TOOLCHAIN.md.
+# docs/TOOLCHAIN.md is the source of truth; keep this in sync when that changes.
+
+default:
+  - context7
+
+web:
+  - context7
+  - playwright
+
+github:
+  - context7
+  - github-mcp-restricted
+
+research_and_ml:
+  - context7
+  - huggingface-mcp
+
+code_intelligence:
+  servers:
+    - code-review-graph
+  note: >-
+    Bounded trial restricted to larger repositories and graph-shaped
+    questions (initial target repositories: Valence, CHILmesh). Not
+    general project memory, not a documentation graph, not an Obsidian
+    graph, not canonical source truth, not appropriate for every
+    repository. Generated state remains local and uncommitted.
+
+academic_later:
+  - zotero-read-only
+  - arxiv
+
+scientific_infrastructure_later:
+  - globus
+  - slurm-or-hpc-mcp
+  - facility-specific-compute-mcps
+
+memory_and_sessions:
+  candidate_repository_local_memory_tool:
+    name: projectmem
+    status: trial-only
+  candidate_temporal_index:
+    name: graphiti
+    status: deferred
+  note: >-
+    Canonical state must remain independent of any graph backend.

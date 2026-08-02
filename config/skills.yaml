@@ -1,0 +1,81 @@
+# Machine-readable mirror of the "Skills" section in docs/TOOLCHAIN.md.
+# docs/TOOLCHAIN.md is the source of truth; keep this in sync when that changes.
+
+core_engineering:
+  - name: superpowers
+  - name: ponytail
+    default_intensity: lite
+  - name: caveman
+    default_intensity: lite
+
+frontend_and_product_quality:
+  - name: vercel-react-best-practices
+  - name: vercel-web-design-guidelines
+
+backend_and_data:
+  - name: supabase-postgres-best-practices
+  note: >-
+    No global generic backend, Python, ORM, or SQL-expert skill.
+
+security_and_correctness:
+  source: trail-of-bits
+  skills:
+    - differential-review
+    - static-analysis
+    - variant-analysis
+    - insecure-defaults
+    - property-based-testing
+
+scientific_and_academic:
+  source: selected-scientific-skill-collection
+  skills:
+    - scientific-critical-thinking
+    - statistical-analysis
+    - uncertainty-and-units
+    - exploratory-data-analysis
+    - scientific-visualization
+    - scientific-writing
+    - literature-review
+    - peer-review
+  note: >-
+    Package-specific scientific skills remain project-scoped.
+
+obsidian:
+  skills:
+    - obsidian-markdown
+    - obsidian-cli
+  on_demand:
+    - obsidian-bases
+    - json-canvas
+  deferred:
+    - defuddle
+
+planning:
+  - superpowers-brainstorming
+  - superpowers-planning
+  - grill-me
+  - grilling
+  - to-spec
+  - to-tickets
+  - triage
+
+diagrams:
+  skills:
+    - mermaid
+  on_demand:
+    - draw-io
+
+showcase:
+  skills:
+    - visual-explainer
+  trial:
+    - walkthrough
+
+project_scoped:
+  - godot-4-skills
+  - hugging-face-cli
+  - hugging-face-jobs
+  - dataset-publication
+  - evaluations
+  - spaces-deployment
+  - package-specific-scientific-skills
