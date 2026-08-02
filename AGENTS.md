@@ -341,3 +341,17 @@ Identify the audience and write complete prose for durable artifacts.
 - Use `uv run bindle ...` when testing development code.
 - Treat plain `bindle ...` as the stable installed release.
 - Do not reinstall or replace the stable CLI unless explicitly requested.
+
+## Obsidian Mind trial (temporary)
+
+An `om` MCP server may be registered during the current trial.
+
+* Route session narratives worth keeping to `om record_work`; cross-project lessons to
+  `om remember`. The routing table in docs/DATA-OWNERSHIP.md governs; accepted decisions still go
+  to docs/DECISIONS.md, never only to the vault.
+* Durable capture requires a reason (D016). Do not record to satisfy tooling.
+* Codex sessions: om currently sees an anonymous caller. Prefer `om search` over `recall`, and
+  expect writes to land in the vault inbox. Do not work around this silently — it is under
+  observation.
+* `.om-project` is a routing label only; repository identity remains the git common directory (D018).
+* Evidence lines in records are conditional; see plans/active/2026-08-02-om-trial-runbook.md.
