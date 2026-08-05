@@ -214,7 +214,7 @@ When projectmem is available, use its workflow:
 
 * At session start, load the project instructions and summary before answering questions about the project — via the projectmem MCP tools (`get_instructions`, `get_summary`, and `get_project_map` when structure matters) where the server is connected, otherwise via the CLI: `pjm instructions`, `pjm show`, `pjm map`.
 * Before modifying a file, check its failure history: `precheck_file(path)` or `pjm precheck <path>`.
-* Log while working: bug found → `log_issue` / `pjm log`; each fix attempt → `record_attempt` / `pjm attempt`; confirmed fix → `record_fix` / `pjm fix`; design choice → `add_decision` / `pjm decision`; gotcha or setup detail → `add_note` / `pjm note`.
+* Log while working: bug found → `log_issue` / `pjm log`; each fix attempt → `record_attempt` / `pjm attempt`; confirmed fix → `record_fix(summary, issue_id=...)` / `pjm fix` with the explicit issue id — never let the tool infer the target from "most recent open issue"; design choice → `add_decision` / `pjm decision`; gotcha or setup detail → `add_note` / `pjm note`.
 * Never edit `.projectmem/` files directly; `summary.md` regenerates from `events.jsonl`, and direct edits break audit replay. `PROJECT_MAP.md` and `plan.md` are the exceptions and may be edited directly.
 * Prefer these tools over re-scanning source files when they answer the same question.
 
