@@ -60,6 +60,20 @@ first manual action to *verified om retrievability* — the 2026-08-04 re-file s
 leaves records om-invisible until the search index is refreshed). The §6 thresholds and §8
 synthesis should read that tally as primary routing evidence.
 
+**Amendment 2026-08-05 — capture protocol change (user decision, D019).** A memory-tooling review
+run in one of the trial's consuming repositories (2026-08-05; repository identified in the private
+trial log) found the capture side of the trial had produced zero durable memories in any scoped
+project — `remember` and `record_work` unused — while several genuinely cross-project lessons went
+unpromoted. The diagnosis was not storage or retrieval (both verified working) but the absence of
+a promotion moment: "route session narratives worth keeping" names destinations, not a time. The
+deployed Claude instruction (user-global `~/.claude/CLAUDE.md`) was rewritten the same day to
+checkpoint-based promotion — initially out-of-band, reconciled into canon by this amendment, D019,
+and matching updates to the runbook's Phase 4 snippet and Bindle's own AGENTS.md trial section.
+Observation consequence: the zero-capture period (2026-08-02 → 2026-08-05) and the post-D019
+period are different experimental conditions; capture-rate evidence must not be read across that
+boundary, and the §6 thresholds and §8 synthesis should treat 2026-08-05 as a protocol-change
+marker.
+
 **Trial log location**: one append-only file in the private vault, suggested
 `thinking/trial/om-trial-log.md`. Two requirements: (a) never in the Bindle repo or any public
 repository; (b) excluded from the qmd index (add the path to the vault's ignore filters) so the

@@ -106,3 +106,11 @@ AGENTS.md is the provider-neutral instruction set and the single authoritative c
 D018: Worktree identity
 
 Repository identity is the Git common directory plus stable remote metadata. Execution identity is the absolute worktree path. Code-state identity is commit SHA plus dirty state. Branch names are descriptive context, never primary identity. No Bindle feature may assume one checkout per repository.
+
+D019: Promotion is a checkpoint, not a routine
+
+Cross-project capture is prompted at natural boundaries, not per session.
+
+The trial's original capture phrasing named destinations ("route session narratives worth keeping…") but no moment at which routing would happen; across the first trial period it produced zero durable memories while genuine cross-project lessons went unpromoted. Promotion to the vault is therefore prompted only at natural boundaries — an experiment concludes, a retrospective is written, a substantial design or engineering review ends, or the same lesson surfaces in a second project — and the prompt is a question, not an obligation: would this lesson change decisions in another repository or a future project? A "no" writes nothing. No per-session capture, no broad backfill, no automatic promotion. D016 is unchanged; this decision supplies the checkpoint at which D016's reason is actually checked.
+
+Deployment: for Claude Code the live copy of this rule sits in the user-global `~/.claude/CLAUDE.md` (accepted placement: the rule is cross-project by nature, and the global file is what Claude reads in every repository); consuming repositories' AGENTS.md trial sections carry the same wording per D017 where the trial snippet is applied.

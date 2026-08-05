@@ -188,9 +188,13 @@ addition — a new short section at the end of AGENTS.md, removed at trial end:
 
 An `om` MCP server may be registered during the current trial.
 
-* Route session narratives worth keeping to `om record_work`; cross-project lessons to
-  `om remember`. The routing table in docs/DATA-OWNERSHIP.md governs; accepted decisions still go
-  to docs/DECISIONS.md, never only to the vault.
+* Capture is checkpoint-based, not per-session (D019): at natural boundaries only — an experiment
+  concludes, a retrospective is written, a substantial design or engineering review ends, or the
+  same lesson surfaces in a second project — ask whether the lesson would change decisions in
+  another repository or future project. If yes, offer `om remember` (cross-project lesson) or
+  `om record_work` (session narrative worth keeping); if no, write nothing. The routing table in
+  docs/DATA-OWNERSHIP.md governs; accepted decisions still go to docs/DECISIONS.md, never only to
+  the vault.
 * Durable capture requires a reason (D016). Do not record to satisfy tooling.
 * Codex sessions: om currently sees an anonymous caller. Prefer `om search` over `recall`, and
   expect writes to land in the vault inbox. Do not work around this silently — it is under
