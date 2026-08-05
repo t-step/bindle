@@ -40,6 +40,26 @@ discipline.
   user-scope MCP registration, `.om-project` committed, `@AGENTS.md` import fix, CLAUDE.md snippet).
   Run audit experiments 1–3 immediately; their outcomes are the first trial-log entries.
 
+**Amendment 2026-08-04 — multi-project scope (user decision).** The vault is now the user's
+personal engineering vault with multiple scoped projects, not a Bindle-dedicated vault.
+`<repo-2>` — the second private repository, named in the private trial log and kept out of tracked
+docs per the sanitization recorded in the runbook §8 — is the planned second trial repository. It
+already carried a tracked, committed `.om-project` marker, and the vault folder
+`projects/<its label>/` matches that label exactly. Context: three anonymous Codex `record_work`
+writes from `<repo-2>` landed in this vault's `inbox/` on
+2026-08-03 because the Codex om registration is global — the second repo joined de facto before the
+protocol's precondition was fully met (experiments 1–2 done via Gates 2–3; experiment 3, same-day
+collision, is still pending and should be run soon). Codex's anonymous routing is intentionally
+**unresolved**: it is an observed characteristic of the system under test, and its operational cost
+is measured, not compensated — no routing adapters, no registration changes, no om modifications,
+no masking automation. The trial question shifts from "does Obsidian Mind function" to "what are
+the operational costs of using it across multiple engineering projects". New apparatus: a
+**routing quality tally** in the trial log (total records / correctly routed / inbox fallback with
+cause / misrouted / unrecoverable / cumulative manual re-file time, where re-file time runs from
+first manual action to *verified om retrievability* — the 2026-08-04 re-file showed a `mv` alone
+leaves records om-invisible until the search index is refreshed). The §6 thresholds and §8
+synthesis should read that tally as primary routing evidence.
+
 **Trial log location**: one append-only file in the private vault, suggested
 `thinking/trial/om-trial-log.md`. Two requirements: (a) never in the Bindle repo or any public
 repository; (b) excluded from the qmd index (add the path to the vault's ignore filters) so the
