@@ -294,6 +294,12 @@ on different days or in different repos, ruling out one bad afternoon.
 
 ## 7. End-of-day review template (two minutes, in the trial log)
 
+**RETIRED at the 2026-08-11 checkpoint**, per this plan's own simplification rule: nine days
+produced zero EOD entries, while four ad-hoc check-in sessions (08-03, 08-04, 08-06, 08-11)
+produced every useful log line. Observation is now: check-in sessions roughly weekly or when
+something surfaces, answering these same four questions ad hoc, plus the trial log and the
+routing tally. The template below is kept for reference only.
+
 ```
 ## EOD YYYY-MM-DD  (sessions: N claude / N codex; repos: ...)
 tallies: resumptions ok N / repeated-context N ; handoffs N ; records written N / warranted-but-missed N ; worktree sessions N

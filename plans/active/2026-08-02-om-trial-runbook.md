@@ -315,7 +315,9 @@ transitions: CC CX XC WT+ WT- S>R R>S E>PM D>DOC TMP>0 L>GH OUT probe
 (template: runbook §5)
 ```
 
-### 4.2 End-of-day review — unchanged, observation plan §7 (four questions + one tally line).
+### 4.2 End-of-day review — RETIRED at the 2026-08-11 checkpoint (observation plan §7 carries
+the retirement note). Observation is now check-in sessions, roughly weekly or when something
+surfaces, answering the same four questions ad hoc.
 
 ### 4.3 Five-session checkpoint template (run after 5 meaningful sessions; ≤ 10 minutes)
 
@@ -333,6 +335,20 @@ NO feature decisions here — unless a serious privacy, correctness, or data-los
 classification and the trusted-wrong-context count).
 
 ---
+
+### 4.5 Inbox re-file recipe (apparatus — a re-file is not just `mv`)
+
+A record is om-retrievable only when it sits in an exposed root AND the qmd index has been
+refreshed since it moved. To re-file stranded inbox records:
+
+```sh
+mv "$OM_VAULT/inbox/<record>.md" "$OM_VAULT/projects/<label>/notes/"
+node --experimental-strip-types "$OM_VAULT/.scripts/qmd-bootstrap.ts"   # embeddings cached; ~1s
+```
+
+Skipping the refresh leaves the record looking correctly filed on disk while om search still
+resolves its stale inbox path (trial log 2026-08-04: 1m26s end-to-end for 3 records, index
+refresh included).
 
 ## 5. (reserved — checkpoint covered in §4.3)
 
