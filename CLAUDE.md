@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 @AGENTS.md
 
-The import above loads AGENTS.md deterministically (Claude Code does not read AGENTS.md natively; the `@` import is the documented bridge). It is the authoritative, portable instruction set (shared with Codex), covering scope and safety rules, the three-subagent ceiling, secrets handling, commit conventions, the planning flow, skills/MCP policy, and the development/runtime isolation rules for Bindle itself. This file only adds what AGENTS.md cannot express portably.
+The import above loads AGENTS.md deterministically (Claude Code does not read AGENTS.md natively; the `@` import is the documented bridge). It is the authoritative, portable instruction set (shared with Codex), covering scope and safety rules, the five-subagent ceiling, secrets handling, commit conventions, the planning flow, skills/MCP policy, and the development/runtime isolation rules for Bindle itself. This file only adds what AGENTS.md cannot express portably.
 
 That division is deliberate (D017): AGENTS.md holds the single authoritative copy of every policy; this file is a thin Claude-specific bridge and must never restate a policy AGENTS.md already carries. Claude Code's per-project auto-memory is soft recall, never project authority — durable decisions, summaries, and handoffs go to the shared locations in docs/DATA-OWNERSHIP.md, not to a Claude-private store that Codex cannot see.
 

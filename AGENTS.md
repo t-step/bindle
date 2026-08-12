@@ -68,7 +68,7 @@ Scope and safety
 
 Agent delegation policy
 
-* Use no more than three subagents concurrently.
+* Use no more than five subagents concurrently.
 * Only the primary agent may delegate.
 * Subagents must not spawn, nest, or delegate to additional agents.
 * Do not use teams, forks, workflows, repeated waves, or equivalent mechanisms to evade the limit.
@@ -81,7 +81,7 @@ This policy is enforced globally (not just advisory) via Claude Code hooks in
 
 * `PreToolUse` on the `Agent` tool (`~/.claude/hooks/subagent-limit-guard`)
   denies any call whose payload carries an `agent_id` (a subagent calling
-  `Agent` again — nesting), and denies new top-level calls once three
+  `Agent` again — nesting), and denies new top-level calls once five
   subagents are concurrently active.
 * `SubagentStart` / `SubagentStop` (`subagent-track-start` /
   `subagent-track-stop`) maintain the per-session active-subagent count the
@@ -95,7 +95,7 @@ workflow-spawned agents with `agent_type: "workflow-subagent"`, but no
 `PreToolUse` fires per individual `agent()` call, only once for the outer
 `Workflow` tool invocation). Workflows remain bound only by their own
 opt-in requirement and internal concurrency cap, not by this policy's
-three-subagent ceiling — this is the "workflows... to evade the limit" case
+five-subagent ceiling — this is the "workflows... to evade the limit" case
 called out above, left unpatched by choice rather than oversight.
 
 Secrets and environment files
@@ -319,7 +319,7 @@ Identify the audience and write complete prose for durable artifacts.
 - Treat the primary checkout as the integration and release workspace.
 - Confirm the current branch, repository root, and worktree before editing.
 - Do not modify sibling worktrees.
-- Do not use worktrees to bypass the three-subagent limit.
+- Do not use worktrees to bypass the five-subagent limit.
 - Keep `main` releasable.
 
 ## Runtime isolation

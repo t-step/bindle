@@ -67,7 +67,9 @@ Release automation remains deferred.
 
 D011: Subagent ceiling
 
-Claude Code and Codex may use no more than three concurrent subagents.
+Claude Code and Codex may use no more than five concurrent subagents.
+
+Amended 2026-08-11: the ceiling was raised from three to five after two weeks of practice showed audit fan-outs routinely queuing behind the lower cap. Enforcement (the `subagent-limit-guard` hook default) was updated in the same change.
 
 Only the primary agent may delegate.
 
