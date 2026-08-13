@@ -202,9 +202,7 @@ Research and ML
 
 Code intelligence
 
-* code-review-graph
-
-This profile is restricted to larger repositories and graph-shaped questions.
+No code intelligence MCP is currently registered. The code-review-graph trial was dropped (docs/DECISIONS.md D020) after zero real invocations across every available session in its two actual usage repos. See "Code intelligence" below for what would need to be true before a replacement gets documented here.
 
 Academic later
 
@@ -219,37 +217,16 @@ Scientific infrastructure later
 
 Code intelligence
 
-code-review-graph is currently a bounded trial.
+code-review-graph (a globally-registered server, `codebase-memory-mcp`) was trialed and dropped 2026-08-12 (docs/DECISIONS.md D020). It was actually indexing two real repositories (Valence, cover-story — not CHILmesh, the originally named target, which was never indexed), kept current to exact HEAD, but a session-by-session audit found zero real invocations across all available sessions in either repo. Evidence, not the tool itself, was the problem: nothing had asked it anything. <!-- private-ok: Bindle's own repo/decision names, not personal info -->
 
-Initial target repositories:
-
-* Valence
-* CHILmesh
-
-Purpose:
-
-* impact analysis
-* callers and dependents
-* affected tests
-* cross-module review
-* cross-language tracing
-
-It is not:
-
-* general project memory
-* a documentation graph
-* an Obsidian graph
-* canonical source truth
-* appropriate for every repository
-
-Generated state remains local and uncommitted.
+Nothing currently fills this role. CodeGraph (github.com/colbymchenry/codegraph) was evaluated and failed its adoption gate — a real 71% tool-call reduction did not translate to lower cost (billing-category shift to cache-write, +64% overall) and it hallucinated a wrong answer on the most representative test question (docs/DECISIONS.md D021). If a candidate is adopted later, D007 (graphs are derived, never canonical) and D008 (project-scoped, not loaded by default) still govern it, and it should clear a higher bar than "available" before being documented here as adopted — demonstrated use and a real cost/correctness check in the target repo, checked the same way D020 and D021 were reached, not a vendor benchmark or a plausible-looking sample query. Default tooling for structural questions remains rg, fd, Git, and language tooling, per AGENTS.md's "Code intelligence" tool precedence.
 
 Memory and sessions
 
 Bindle does not own memory or sessions. Providers do, and Bindle bridges them (docs/PHILOSOPHY.md, docs/DATA-OWNERSHIP.md):
 
 * repository-local working memory: projectmem, trial only — branch-blind; treat as working notes, never accepted truth
-* durable personal knowledge and work records: obsidian-mind vault with the om MCP server, candidate under evaluation
+* durable personal knowledge and work records: obsidian-mind vault with the om MCP server, active trial (AGENTS.md, "Obsidian Mind trial")
 * transcripts and live context: Claude Code and Codex natively
 * deterministic evidence: git, stamped into evidence blocks by Bindle
 

@@ -172,33 +172,16 @@ MCP servers are capability profiles, not a default tool buffet.
 
 Code intelligence
 
-code-review-graph is optional and project-scoped.
+No code intelligence MCP is currently registered or documented as adopted. The code-review-graph trial was dropped (docs/DECISIONS.md D020) after a session audit found zero real invocations despite the server being available in the near totality of sessions across its two actual usage repos.
 
-Use it when:
-
-* reviewing a multi-file or cross-module change
-* estimating blast radius
-* tracing callers, dependents, or execution paths
-* identifying potentially affected tests
-* changing public interfaces or shared models
-* investigating cross-language boundaries
-* orienting in a large or unfamiliar subsystem
-
-Do not use it when:
-
-* the task concerns one or two known files
-* rg, Git, or language tooling answers the question directly
-* performing ordinary text search
-* editing documentation only
-* the repository is small
-* the graph may be stale or absent
-
-Tool precedence:
+Default tool precedence for structural or cross-file questions:
 
 1. known files
 2. rg, fd, Git, and language tooling
 3. repository documentation and history
-4. code-review-graph
+4. a documented code intelligence tool, only if one is adopted
+
+A future candidate — reviewing a multi-file or cross-module change, estimating blast radius, tracing callers/dependents/execution paths, cross-language boundaries, orienting in a large unfamiliar subsystem — would be evaluated against this same precedence, and should not be documented here as adopted on availability alone; it needs demonstrated use, checked the way D020 was (a real session audit, not a sample query).
 
 Confirm material conclusions in source code.
 
