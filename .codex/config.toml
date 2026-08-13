@@ -4,4 +4,7 @@
 
 [mcp_servers.context7]
 command = "npx"
+# @latest is deliberate: context7-mcp ships every few days (multiple major
+# bumps this year); pinning would add upgrade churn without buying real
+# reproducibility for a live, already-mutable docs proxy.
 args = ["-y", "@upstash/context7-mcp@latest"]
