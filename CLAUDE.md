@@ -12,7 +12,10 @@ That division is deliberate (D017): AGENTS.md holds the single authoritative cop
 
 Bindle is pre-implementation. This repository currently defines the workshop, conventions, and scope for a not-yet-built tool — there is no package manifest, build system, linter, or test suite yet. Do not invent one; do not scaffold a framework, memory platform, graph system, or daemon without an approved plan (AGENTS.md, "Current phase").
 
-`scripts/doctor.sh` is the one script present: a read-only toolchain/file-presence check. It is functional (`bash scripts/doctor.sh`) and reports missing tools or repository files with a nonzero exit code.
+Two scripts are present, both shell, both read-only checks:
+
+* `scripts/doctor.sh` — a read-only toolchain/file-presence check. It is functional (`bash scripts/doctor.sh`) and reports missing tools or repository files with a nonzero exit code.
+* `bin/check-private-info.sh` (plus its self-test, `bin/test-check-private-info.sh`) — the personal-disclosure guard described in docs/PRIVACY.md. It is deployed and enforcing as a live pre-commit hook in this repository, not dormant.
 
 Commit messages are validated by Cocogitto against `cog.toml`. A local `commit-msg` git hook (installed via `cog install-hook`, not tracked by git) runs `cog verify` on every commit — do not bypass it (AGENTS.md, "Do not bypass repository hooks"). If it's missing in a fresh checkout, reinstall with `cog install-hook commit-msg`.
 
@@ -22,13 +25,13 @@ Reading multiple files is required to get the full picture; short version:
 
 - `AGENTS.md` — working instructions: scope/safety, subagent limits, secrets, commits, planning flow, skills/MCP policy, Obsidian projection rules, and Bindle's own development/runtime isolation requirements (never touch live `~/.local/share/bindle/` state or the real Bindle vault from dev/tests; use `BINDLE_HOME="$PWD/.bindle-dev" uv run bindle ...`).
 - `PLAN.md` — current outcome and near-term milestones.
-- `docs/SCOPE.md` — what Bindle owns / may later own / explicitly does not own, the session model, the candidate canonical-state layout (`~/.bindle/{sessions,memories,index.sqlite,config.yaml}`), and the M0–M4 milestone sequence.
+- `docs/SCOPE.md` — what Bindle owns / may later own / explicitly does not own, the capture → promote → project → resume loop, the stateless `BINDLE_HOME` (config, disposable cache, explicit export only — no sessions/memories/index store), and the M0–M4 milestone sequence.
 - `docs/DECISIONS.md` — numbered, append-only decision log; check it before proposing anything that would revisit a settled decision (e.g. no generic agent loop, no broad ontology, graphs are derived not canonical).
 - `docs/TOOLCHAIN.md` — the full toolchain, skill selection, and MCP recommendations by task, with tool precedence order. "MCP recommendations by task" is Bindle's own organizing scheme, not a client mechanism — no MCP client has a native profile/bundle-switching concept; it's a reference list, consulted by convention.
 - `docs/PHILOSOPHY.md` — what Bindle is (a stateless toolchain bridge), what it refuses to become, the replaceability/durability/preservation rules, and the feature admission test.
 - `docs/DATA-OWNERSHIP.md` — the authority model for Claude Code and Codex, the ownership and routing tables, durable versus derived.
 - `docs/WORKTREES.md` — the identity model (common dir / worktree path / SHA / branch), provider behavior across linked worktrees, evidence-block fields, operating rules.
-- `docs/PRIVACY.md` — the personal-disclosure threat model, the archived guard's status, and content rules for this repository.
+- `docs/PRIVACY.md` — the personal-disclosure threat model, the `bin/check-private-info.sh` guard's status (deployed and enforcing, not archived), and content rules for this repository.
 - `.mcp.json`, `.codex/config.toml` — the actual, natively-consumed default MCP server config for Claude Code and Codex respectively (currently just Context7). Everything else in the toolchain — skill bundles, task-conditional MCP recommendations — is policy, not data, and lives only in `docs/TOOLCHAIN.md`; neither harness has a native mechanism for committing task-conditional bundles or a cross-tool skill-recommendation list today (Claude Code's `enabledPlugins` project scope is real but Claude-only; Codex has no equivalent — [openai/codex#18115](https://github.com/openai/codex/issues/18115) is open).
 
 Core intent, if you only read one line: Bindle is a continuity layer (capture → promote → project → resume) across Claude Code, Codex, and repositories — not a replacement for any of them. Inherit first, extend second, replace deliberately, invent last.
