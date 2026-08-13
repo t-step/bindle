@@ -34,11 +34,9 @@ Bindle does not replace:
 
 Current phase
 
-This repository is defining the workshop, conventions, and first vertical slice.
+The workshop is established: manifests, doctor checks, the decision log, and toolchain policy are in place (docs/DECISIONS.md, docs/TOOLCHAIN.md). Implementation of the first vertical slice has not started — there is no package manifest, build system, linter, or test suite yet. Current milestone sequence lives in PLAN.md and docs/SCOPE.md.
 
 Do not implement a memory platform, graph system, background daemon, orchestration framework, or generic agent harness without an approved plan.
-
-The first likely product capability is durable cross-project session continuity.
 
 Repository tooling precedence
 
@@ -76,27 +74,17 @@ Agent delegation policy
 * Use subagents only for genuinely independent, bounded work.
 * Repository-local stricter limits take precedence.
 
-This policy is enforced globally (not just advisory) via Claude Code hooks in
-`~/.claude/settings.json`:
+This policy may be enforced by provider- or machine-specific mechanisms (for
+example, Claude Code hooks) outside this repository. Such mechanisms are not
+portable across harnesses and are not documented here — the policy above
+governs regardless of what any specific mechanism does or does not catch.
 
-* `PreToolUse` on the `Agent` tool (`~/.claude/hooks/subagent-limit-guard`)
-  denies any call whose payload carries an `agent_id` (a subagent calling
-  `Agent` again — nesting), and denies new top-level calls once five
-  subagents are concurrently active.
-* `SubagentStart` / `SubagentStop` (`subagent-track-start` /
-  `subagent-track-stop`) maintain the per-session active-subagent count the
-  guard checks.
-
-Known gap: the `Workflow` tool's internal `agent()` fan-out does not go
-through the `Agent` tool, so `subagent-limit-guard` never sees it and cannot
-cap a workflow's own internal concurrency (verified empirically — confirmed
-via captured hook payloads that `SubagentStart`/`SubagentStop` do fire for
-workflow-spawned agents with `agent_type: "workflow-subagent"`, but no
-`PreToolUse` fires per individual `agent()` call, only once for the outer
-`Workflow` tool invocation). Workflows remain bound only by their own
-opt-in requirement and internal concurrency cap, not by this policy's
-five-subagent ceiling — this is the "workflows... to evade the limit" case
-called out above, left unpatched by choice rather than oversight.
+One gap agents should account for regardless of enforcement: a workflow or
+similar fan-out tool's internal concurrency is not necessarily bound by any
+external enforcement of this policy's five-subagent ceiling. Do not treat
+the absence of a technical block as permission — the "do not use
+workflows... to evade the limit" rule above applies whether or not it is
+mechanically enforced.
 
 Secrets and environment files
 
@@ -359,4 +347,7 @@ When om is available:
   closing it needs a roots-injecting adapter or an upstream om change. Prefer `om search` over
   `recall` from Codex, and do not work around it silently.
 * `.om-project` is a routing label only; repository identity remains the git common directory (D018).
-* Evidence lines in records are conditional; see plans/active/2026-08-02-om-trial-runbook.md.
+* Evidence lines in vault records are conditional, not mandatory on every record: include one when
+  a linked worktree is involved, dirty state materially matters, a rebase/squash/force-push/branch
+  abandonment is likely, or exact code-state recovery may matter later; omit it for routine records
+  rather than manufacturing demand for a not-yet-built evidence-block feature.
