@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# SessionEnd hook. /clear fires this with reason "clear" -- Claude Code's own
+# structural signal for a conversation clear (confirmed by reading the
+# shipped binary: clearConversation() calls into the SessionEnd hook path
+# with hook_event_name:"SessionEnd", reason:"clear"). /clear does not rotate
+# the transcript file or write any boundary marker into it, so this hook is
+# the only reliable way to know a clear happened at all.
+#
+# On a clear, records the current UTC timestamp (same ISO-8601 format the
+# transcript itself uses, e.g. "2026-08-13T19:02:02.500Z" -- so string
+# comparison against transcript entries' own "timestamp" field works
+# directly, no date parsing needed) to a per-session marker file. The
+# vaporwave statusline reads this to only count TURN since the last clear,
+# instead of every turn ever logged to the session's transcript file.
+set -euo pipefail
+
+STATE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/state"
+mkdir -p "$STATE_DIR"
+
+input="$(cat)"
+reason="$(jq -r '.reason // empty' <<<"$input" 2>/dev/null)"
+session_id="$(jq -r '.session_id // empty' <<<"$input" 2>/dev/null)"
+
+if [ "$reason" = "clear" ] && [ -n "$session_id" ]; then
+  date -u '+%Y-%m-%dT%H:%M:%S.000Z' > "$STATE_DIR/turn-reset-${session_id}.txt"
+fi
+
+# hygiene: prune marker files older than 30 days so this doesn't grow
+# unbounded across the lifetime of the machine. Best-effort, non-fatal.
+find "$STATE_DIR" -maxdepth 1 -name 'turn-reset-*.txt' -mtime +30 -delete 2>/dev/null || true
+
+exit 0
