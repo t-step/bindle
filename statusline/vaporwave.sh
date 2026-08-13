@@ -143,12 +143,19 @@ if b=$(git -C "$cwd" symbolic-ref --short HEAD 2>/dev/null || git -C "$cwd" rev-
   fi
 fi
 
-# --- Delta: cumulative body-of-work scope relative to the repo's default
-# branch, INCLUDING uncommitted work, so `git commit` never changes the value.
+# --- Delta: cumulative divergence of the local branch from ITS OWN upstream
+# (@{u}, e.g. origin/development), INCLUDING uncommitted work, so `git
+# commit` never changes the value. This answers "how far has local drifted
+# from what's on origin for this branch" -- not "how big will the eventual
+# PR diff be", which would need the actual PR base (see below).
 #
-# base = refs/remotes/origin/HEAD (offline, no gh, no hardcoded main/development)
+# base = @{u} when the current branch has an upstream configured; falls back
+#        to refs/remotes/origin/HEAD (the repo's default branch) only when
+#        there is no upstream yet (e.g. a brand-new local branch never
+#        pushed) -- offline, no gh, no hardcoded main/development.
 # mb   = merge-base(base, HEAD) -- isolates this branch's own divergence from
-#        unrelated commits landed on the base branch since we forked
+#        unrelated commits landed on the base branch since we forked/last
+#        synced
 # tracked changes  = `git diff --numstat <mb>` against the worktree (ONE call;
 #                     already covers committed-since-mb + staged + unstaged,
 #                     so nothing is summed twice)
@@ -159,13 +166,16 @@ fi
 # shows untracked paths; `ls-files --others` never lists tracked/staged ones)
 # so summing them cannot double-count.
 #
-# Known limitation: origin/HEAD is the repo's *default* branch, not
-# necessarily this branch's actual base — a branch forked from `development`
-# in a repo whose default is `main` will overstate scope by whatever
-# `development` is ahead of `main`. A PR-base lookup (via gh) would be more
-# precise but requires a network call; the statusline hook has no tight
-# execution timeout, so that stays out of this synchronous path for now.
-delta_base=$(git -C "$cwd" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null)
+# Known limitation: when using the origin/HEAD fallback (no upstream set),
+# that's the repo's *default* branch, not necessarily this branch's actual
+# base -- a branch forked from `development` in a repo whose default is
+# `main` will overstate scope by whatever `development` is ahead of `main`.
+# Once an upstream exists this fallback never triggers. A true PR-base
+# lookup (via gh) would be more precise but requires a network call; the
+# statusline hook has no tight execution timeout, so that stays out of this
+# synchronous path for now.
+delta_base=$(git -C "$cwd" rev-parse --symbolic-full-name @{u} 2>/dev/null)
+[ -z "$delta_base" ] && delta_base=$(git -C "$cwd" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null)
 delta_mb=""
 [ -n "$delta_base" ] && delta_mb=$(git -C "$cwd" merge-base "$delta_base" HEAD 2>/dev/null)
 delta_files=0 delta_add=0 delta_del=0

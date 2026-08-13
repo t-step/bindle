@@ -12,7 +12,8 @@ install, or depend on it.
 ## What it shows
 
 Row 1 (work/orientation): git branch, dirty/ahead/behind state, Δ (cumulative
-body-of-work scope vs. the repo's default branch, including uncommitted
+divergence from the branch's own upstream — e.g. `origin/development` — or
+the repo's default branch if no upstream is set yet, including uncommitted
 work), elapsed session time.
 
 Row 2 (agent/session pressure): model, TURN (assistant-turn count since the
