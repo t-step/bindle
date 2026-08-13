@@ -323,9 +323,9 @@ Identify the audience and write complete prose for durable artifacts.
 - Treat plain `bindle ...` as the stable installed release.
 - Do not reinstall or replace the stable CLI unless explicitly requested.
 
-## Obsidian Mind
+## Obsidian Mind trial (temporary)
 
-An `om` MCP server is registered (adopted, docs/DECISIONS.md D023). om is local operational memory, not repository state:
+An `om` MCP server may be registered during the current trial (demoted from accepted back to trial, docs/DECISIONS.md D025). om is local operational memory, not repository state:
 
 * om is not required to build, test, run, or understand this repository. Do not assume another contributor — human or agent — has it installed or registered. Work normally when it is absent.
 * The vault, its manifests, indexes, caches, and personal notes live outside this repository and must never be committed here. The only tracked om-related artifact is `.om-project`, a one-line routing label containing no personal or machine-specific data (tracked deliberately so every worktree and branch declares the same project identity; docs/WORKTREES.md).
@@ -341,11 +341,11 @@ When om is available:
   docs/DATA-OWNERSHIP.md governs; accepted decisions still go to docs/DECISIONS.md, never only to
   the vault.
 * Durable capture requires a reason (D016). Do not record to satisfy tooling.
-* Known limitation, not a pending trial item: Codex sessions see an anonymous caller (Codex's MCP
-  client sends no `roots` capability, which om uses exclusively for identity). Project-scoped
-  recall is invisible to Codex; writes land in the vault inbox. Not fixable by configuration —
-  closing it needs a roots-injecting adapter or an upstream om change. Prefer `om search` over
-  `recall` from Codex, and do not work around it silently.
+* Codex sessions see an anonymous caller (Codex's MCP client sends no `roots` capability, which om
+  uses exclusively for identity). Project-scoped recall is invisible to Codex; writes land in the
+  vault inbox. Not fixable by configuration — closing it needs a roots-injecting adapter or an
+  upstream om change. Prefer `om search` over `recall` from Codex. Under observation as part of the
+  trial; do not work around it silently.
 * `.om-project` is a routing label only; repository identity remains the git common directory (D018).
 * Evidence lines in vault records are conditional, not mandatory on every record: include one when
   a linked worktree is involved, dirty state materially matters, a rebase/squash/force-push/branch

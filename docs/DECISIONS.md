@@ -162,3 +162,15 @@ Reviewed 2026-08-12 as a main-readiness question: whether a promoted main baseli
 The repository also has no lockfile or pinned toolchain elsewhere (no package manifest yet, per CLAUDE.md's "Repository state"), so a lone pinned MCP dependency would be an isolated, misleading island of reproducibility rather than a real property of main. A one-line rationale comment was added to `.codex/config.toml`, whose native TOML format supports comments; `.mcp.json` was left byte-identical, since strict JSON has no comment syntax and adding an unknown key risks a stricter MCP client rejecting it — the two files remain semantically equivalent in the fields that matter (`command`, `args`).
 
 This is specific to dependencies that proxy live, already-mutable external data with a high release cadence. It does not generalize to dependencies that gate build or test determinism (compilers, build-critical libraries), where pinning remains the correct default.
+
+D025: Obsidian Mind demoted from accepted back to trial
+
+D023's promotion is reversed. Obsidian Mind is no longer documented as adopted in this repository; it returns to active-trial status.
+
+This is a deliberate readiness call by Thomas, not a technical failure: "not ready for it to be live in main yet." Nothing found since D023 contradicts the interop audit or the five-session checkpoint that motivated the original promotion — this is not a D020/D021-style conclusion driven by evidence of non-use or a failed gate. The reversal is about main-readiness judgment, not a retraction of the earlier findings.
+
+AGENTS.md's "Obsidian Mind" section is renamed back to "Obsidian Mind trial (temporary)"; docs/DATA-OWNERSHIP.md, docs/TOOLCHAIN.md, docs/WORKTREES.md, and docs/SCOPE.md drop their "adopted (D023)" framing for "active trial, demoted (D025)". The Codex anonymous-caller gap (D023) reverts from "known limitation" framing to an open trial item under observation — the underlying technical fact is unchanged, only its documented status. D019 (capture is a checkpoint, not a routine) and the routing table in docs/DATA-OWNERSHIP.md are unchanged: durable decisions still go to docs/DECISIONS.md alone, never only to the vault.
+
+Nothing about the vault, `.om-project`, or the om MCP server registration is removed or uninstalled — this only changes documented acceptance status for main, mirroring D023's own framing in reverse. A future re-promotion, if any, should clear whatever bar is current at that time rather than assuming D023's original evidence still applies untested.
+
+Two things this does not cover, called out explicitly rather than left silently inconsistent: consuming repositories carrying the "Obsidian Mind" (accepted) wording per D017 need the equivalent reversion in their own AGENTS.md — out of scope here, since Bindle does not modify sibling repositories. The user's global `~/.claude/CLAUDE.md` was checked and does not assert bindle-specific acceptance status, so it needs no matching change.

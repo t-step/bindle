@@ -127,7 +127,7 @@ M2: Resume — not started.
 * evidence links
 * Claude-to-Codex and Codex-to-Claude portability
 
-M3: Obsidian projection — not started. The vault and the om MCP server are adopted (D023) as the write target; generation and publication into it are not built.
+M3: Obsidian projection — not started. The vault and the om MCP server are on active trial (demoted from adopted, D025) as the intended write target; generation and publication into it are not built.
 
 * preview generated notes
 * publish approved promoted knowledge
