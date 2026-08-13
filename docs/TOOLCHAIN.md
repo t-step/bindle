@@ -93,28 +93,30 @@ Skills
 
 Core engineering
 
-* Superpowers — heavily used in practice (brainstorming, writing-plans, TDD, using-git-worktrees, finishing-a-development-branch, subagent-driven-development, and more; verified against real session history 2026-08-12)
+* Superpowers — heavily used in practice (brainstorming, writing-plans, TDD, using-git-worktrees, finishing-a-development-branch, subagent-driven-development, and more)
 * Caveman, default lite — used, lightly
 
-Ponytail (previously documented "default lite") is dropped: zero invocations found across 158 real sessions checked 2026-08-12 (Valence, cover-story, bindle, the skills repo). <!-- private-ok: Bindle's own repo/decision names, not personal info -->
+Ponytail (previously documented "default lite") is dropped: zero invocations found in real session history checked 2026-08-12.
 
 Frontend and product quality
 
-Vercel skills, by actual use in Valence (verified 2026-08-12; "Vercel React Best Practices" and "Vercel Web Design Guidelines" — the previously documented pair — had zero invocations, and the second doesn't exist as an installed skill at all):
+Vercel skills, by actual use (verified 2026-08-12):
 
 * vercel:nextjs
 * vercel:vercel-cli
 * vercel:vercel-storage
 
+Previously documented "Vercel React Best Practices" and "Vercel Web Design Guidelines" are dropped — the second was never an installed skill at all.
+
 Backend and data
 
-Nothing currently fills this role. "Supabase Postgres Best Practices" (previously documented) doesn't exist as an installed skill and had zero invocations.
+Nothing currently fills this role. "Supabase Postgres Best Practices" (previously documented) is dropped — never an installed skill.
 
 No global generic backend, Python, ORM, or SQL-expert skill.
 
 Security and correctness
 
-Nothing currently adopted. The previously documented Trail of Bits names (Differential Review, Static Analysis, Variant Analysis, Insecure Defaults, Property-Based Testing) don't exist as installed skills and had zero invocations. What's actually installed is a different family, `testing-handbook-skills:*` (14 fuzzing-specific skills — AddressSanitizer, AFL++, libFuzzer, Wycheproof, and others) plus a separate general-purpose `security-review` skill — neither has been invoked in the sessions checked either.
+Nothing currently adopted. Previously documented Trail of Bits skill names never existed as installed skills. What's actually installed is unrelated: `testing-handbook-skills:*` (fuzzing-specific) and a general-purpose `security-review` skill — neither has seen real use yet.
 
 Scientific and academic
 
@@ -154,17 +156,17 @@ Planning
 * slice-retro
 * next-best-slice
 
-Replaces a previously documented flow (grill-me, grilling, to-spec, to-tickets, triage) that is not installed — verified against the actual skill list 2026-08-12, see AGENTS.md's "Recommended flow."
+Replaces a previously documented flow not installed here; see AGENTS.md's "Recommended flow" for detail.
 
 Diagrams
 
-No discrete diagram skill is adopted. "Mermaid skill" and "Draw.io skill" (previously documented) aren't installed skills — Artifacts render Mermaid natively, without a separate skill, and Draw.io was never confirmed to exist.
+No discrete diagram skill is adopted. Artifacts render Mermaid natively, without a separate skill.
 
 Showcase
 
-* Visual Explainer — installed, but zero invocations found in the sessions checked 2026-08-12; unconfirmed whether it's actually useful in practice or just unused like the items above.
+* Visual Explainer — installed but unused so far (checked 2026-08-12); usefulness in practice unconfirmed.
 
-"Walkthrough" (previously documented as trial) doesn't exist as an installed skill; dropped.
+"Walkthrough" (previously documented as trial) never existed as an installed skill; dropped.
 
 Project-scoped
 
@@ -196,7 +198,9 @@ Research and ML
 
 Code intelligence
 
-No code intelligence MCP is currently registered. The code-review-graph trial was dropped (docs/DECISIONS.md D020) after zero real invocations across every available session in its two actual usage repos. See "Code intelligence" below for what would need to be true before a replacement gets documented here.
+No code intelligence MCP is adopted. code-review-graph was trialed and dropped — available in nearly every session but never actually invoked (docs/DECISIONS.md D020). A replacement candidate, CodeGraph, was evaluated and failed its adoption gate: real-world cost went up despite fewer tool calls, and it hallucinated on the most representative test question (docs/DECISIONS.md D021).
+
+D007 (graphs are derived, never canonical) and D008 (project-scoped, not loaded by default) govern any future candidate. A replacement needs a higher bar than availability — demonstrated use and a real cost/correctness check in the target repo, audited the same way D020 and D021 were, not a vendor benchmark or a sample query. Default tooling for structural questions remains rg, fd, Git, and language tooling, per AGENTS.md's "Code intelligence" precedence.
 
 Academic later
 
@@ -208,12 +212,6 @@ Scientific infrastructure later
 * Globus
 * Slurm or HPC MCP
 * facility-specific compute MCPs
-
-Code intelligence
-
-code-review-graph (a globally-registered server, `codebase-memory-mcp`) was trialed and dropped 2026-08-12 (docs/DECISIONS.md D020). It was actually indexing two real repositories (Valence, cover-story — not CHILmesh, the originally named target, which was never indexed), kept current to exact HEAD, but a session-by-session audit found zero real invocations across all available sessions in either repo. Evidence, not the tool itself, was the problem: nothing had asked it anything. <!-- private-ok: Bindle's own repo/decision names, not personal info -->
-
-Nothing currently fills this role. CodeGraph (github.com/colbymchenry/codegraph) was evaluated and failed its adoption gate — a real 71% tool-call reduction did not translate to lower cost (billing-category shift to cache-write, +64% overall) and it hallucinated a wrong answer on the most representative test question (docs/DECISIONS.md D021). If a candidate is adopted later, D007 (graphs are derived, never canonical) and D008 (project-scoped, not loaded by default) still govern it, and it should clear a higher bar than "available" before being documented here as adopted — demonstrated use and a real cost/correctness check in the target repo, checked the same way D020 and D021 were reached, not a vendor benchmark or a plausible-looking sample query. Default tooling for structural questions remains rg, fd, Git, and language tooling, per AGENTS.md's "Code intelligence" tool precedence.
 
 Memory and sessions
 
@@ -246,16 +244,14 @@ OpenTelemetry should be introduced only when project complexity earns it.
 
 Release policy
 
-Current:
+Current, for Bindle's own commit discipline:
 
 * Conventional Commits
-* Cocogitto validation
+* Cocogitto validation (a local `commit-msg` hook, not tracked by git; see CLAUDE.md "Repository state")
 
-Deferred:
+No CI or release-automation machinery exists in this repository yet — no GitHub Actions workflow, no tagging, no changelog generation, no package publication. Nothing below is partially built or imminent; it is deferred.
 
-* Release Please
-* semantic releases
-* changelog automation
-* package publication automation
+Two distinct questions, kept separate:
 
-Release automation should begin only when Bindle becomes an installable or externally consumed product.
+* Ordinary release infrastructure for Bindle itself (CI checks, versioning, changelog generation, package publication) is deferred until Bindle ships an installable or externally consumed artifact. Release Please, semantic-release, or an equivalent would be evaluated then, under the same precedence as any other tool (inherit first, extend second, replace deliberately, invent last).
+* Bindle becoming a generic release-automation capability — a tool other projects delegate their own release automation to — is a different and larger claim than "Bindle has CI." Nothing above implies it; it is out of scope and would need its own pass against the admission test in docs/PHILOSOPHY.md if ever proposed.
