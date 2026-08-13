@@ -139,12 +139,16 @@ Planning
 
 Recommended flow:
 
-grill-me
-→ to-spec
-→ local plan
+repo-orientation (when unfamiliar with the repo)
+→ brainstorming
+→ slice-plan
 → implementation
-→ verification
-→ showcase
+→ slice-review
+→ slice-retro
+→ next-best-slice (decides what's next, then repeat)
+
+grill-me, to-spec, to-tickets, triage, and grilling — the previously documented flow — are not
+installed; this replaces them with what's actually available (verified 2026-08-12).
 
 Do not use the full flow for obvious, mechanical, or already-approved work.
 

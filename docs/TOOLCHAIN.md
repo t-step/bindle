@@ -93,30 +93,28 @@ Skills
 
 Core engineering
 
-* Superpowers
-* Ponytail, default lite
-* Caveman, default lite
+* Superpowers — heavily used in practice (brainstorming, writing-plans, TDD, using-git-worktrees, finishing-a-development-branch, subagent-driven-development, and more; verified against real session history 2026-08-12)
+* Caveman, default lite — used, lightly
+
+Ponytail (previously documented "default lite") is dropped: zero invocations found across 158 real sessions checked 2026-08-12 (Valence, cover-story, bindle, the skills repo). <!-- private-ok: Bindle's own repo/decision names, not personal info -->
 
 Frontend and product quality
 
-* Vercel React Best Practices
-* Vercel Web Design Guidelines
+Vercel skills, by actual use in Valence (verified 2026-08-12; "Vercel React Best Practices" and "Vercel Web Design Guidelines" — the previously documented pair — had zero invocations, and the second doesn't exist as an installed skill at all):
+
+* vercel:nextjs
+* vercel:vercel-cli
+* vercel:vercel-storage
 
 Backend and data
 
-* Supabase Postgres Best Practices
+Nothing currently fills this role. "Supabase Postgres Best Practices" (previously documented) doesn't exist as an installed skill and had zero invocations.
 
 No global generic backend, Python, ORM, or SQL-expert skill.
 
 Security and correctness
 
-From Trail of Bits:
-
-* Differential Review
-* Static Analysis
-* Variant Analysis
-* Insecure Defaults
-* Property-Based Testing
+Nothing currently adopted. The previously documented Trail of Bits names (Differential Review, Static Analysis, Variant Analysis, Insecure Defaults, Property-Based Testing) don't exist as installed skills and had zero invocations. What's actually installed is a different family, `testing-handbook-skills:*` (14 fuzzing-specific skills — AddressSanitizer, AFL++, libFuzzer, Wycheproof, and others) plus a separate general-purpose `security-review` skill — neither has been invoked in the sessions checked either.
 
 Scientific and academic
 
@@ -149,28 +147,24 @@ Deferred:
 
 Planning
 
-* Superpowers brainstorming and planning
-* grill-me
-* grilling
-* to-spec
-* to-tickets
-* triage
+* Superpowers brainstorming
+* repo-orientation
+* slice-plan
+* slice-review
+* slice-retro
+* next-best-slice
+
+Replaces a previously documented flow (grill-me, grilling, to-spec, to-tickets, triage) that is not installed — verified against the actual skill list 2026-08-12, see AGENTS.md's "Recommended flow."
 
 Diagrams
 
-* Mermaid skill
-
-On demand:
-
-* Draw.io skill
+No discrete diagram skill is adopted. "Mermaid skill" and "Draw.io skill" (previously documented) aren't installed skills — Artifacts render Mermaid natively, without a separate skill, and Draw.io was never confirmed to exist.
 
 Showcase
 
-* Visual Explainer
+* Visual Explainer — installed, but zero invocations found in the sessions checked 2026-08-12; unconfirmed whether it's actually useful in practice or just unused like the items above.
 
-Trial:
-
-* Walkthrough
+"Walkthrough" (previously documented as trial) doesn't exist as an installed skill; dropped.
 
 Project-scoped
 
