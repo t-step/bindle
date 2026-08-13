@@ -24,7 +24,7 @@ When a durable session summary or handoff is worth writing, Claude Code and Code
 | Live session context | the harness | ephemeral | none |
 | Working reasoning in a repo (issues, attempts, fixes) | projectmem (adopted, D022) | working notes — not truth | route to it; never parse its store |
 | Accepted project decisions | `docs/DECISIONS.md` in each repository | durable | route to it |
-| Cross-project lessons, durable personal knowledge | the knowledge vault (obsidian-mind/om, active trial — AGENTS.md, "Obsidian Mind trial") | durable | emit blocks the vault embeds |
+| Cross-project lessons, durable personal knowledge | the knowledge vault (obsidian-mind/om, adopted — docs/DECISIONS.md D023) | durable | emit blocks the vault embeds |
 | Session narrative and work records | vault work records, or a repository handoff file | durable when reasoned | emit blocks; provide templates |
 | Program structure | LSPs, code graphs | derived | none |
 | Toolchain desired state | this repository (`config/`, `docs/TOOLCHAIN.md`) | durable | owned |

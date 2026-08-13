@@ -35,7 +35,7 @@ projectmem v0.2.0:
 * The primary checkout's hooks do fire in linked worktrees but bail out on the missing `.projectmem/`.
 * Net effect: projectmem is single-checkout in this repository. Record decisions made during worktree work from the primary checkout after merging. Accepted as a known limitation.
 
-obsidian-mind / om v8.3.1 (active trial — AGENTS.md, "Obsidian Mind trial"):
+obsidian-mind / om v8.3.1 (adopted — AGENTS.md, "Obsidian Mind"; the Codex anonymous-caller gap below is a known limitation, not a trial-pending item — docs/DECISIONS.md D023):
 
 * Caller identity is the repository folder name from the MCP roots handshake, overridable by a one-line `.om-project` marker file. Without the marker, each worktree registers as a different project — the same basename-keying failure the old prototype had.
 * Operating rule: `.om-project` is committed in this repository so every worktree and branch declares the same project identity.
