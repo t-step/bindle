@@ -40,7 +40,7 @@ Before writing a memory system, graph database, or orchestration framework, the 
 * the toolchain
 * shared conventions
 * portable skills
-* MCP profiles
+* MCP recommendations by task
 * project boundaries
 
 What Bindle owns — and what it refuses to own — is written down in [docs/PHILOSOPHY.md](docs/PHILOSOPHY.md) and [docs/SCOPE.md](docs/SCOPE.md).

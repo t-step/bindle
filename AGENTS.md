@@ -161,9 +161,9 @@ Skills are advisory procedures, not repository authorities.
 
 MCP usage
 
-MCP servers are capability profiles, not a default tool buffet.
+MCP servers are capability tools, not a default buffet — registering one doesn't mean every session should reach for it. No MCP client has a native "profile" concept; docs/TOOLCHAIN.md's "MCP recommendations by task" section is a curated reference list for deciding what's worth registering, not something any client loads or switches automatically based on task type — and nothing in this repository enforces consulting it either. Treat it as a reference to check, not a trigger that fires on its own.
 
-* Load only the profile relevant to the task.
+* Load only the server relevant to the task.
 * Prefer native repository tools when they provide the same capability clearly.
 * Use MCP for capabilities not cleanly available through files, shell commands, or installed skills.
 * Keep mutation permissions narrow.

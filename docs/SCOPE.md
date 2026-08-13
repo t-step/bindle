@@ -112,7 +112,7 @@ M0: Workshop
 
 * toolchain manifest
 * skill manifest
-* MCP profiles
+* MCP recommendations by task
 * repository instructions
 * doctor command
 

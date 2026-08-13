@@ -6,13 +6,13 @@ The repository records desired state. It does not store credentials or blindly r
 
 Machine-readable configuration
 
-This document is the single source for toolchain policy — skill bundles and task-conditional MCP profiles are prose here, not duplicated into a parallel YAML file, because neither Claude Code nor Codex has a native mechanism to consume task-conditional profiles, and no cross-tool skill-recommendation manifest exists yet (Claude Code's project-scoped `enabledPlugins` is real but Claude-only; Codex has no equivalent — see [openai/codex#18115](https://github.com/openai/codex/issues/18115)). The one exception is MCP servers that are unconditionally default (currently just Context7, below): those are committed as real, natively-consumed config in `.mcp.json` (Claude Code) and `.codex/config.toml` (Codex), not described here as data to keep in sync by hand.
+This document is the single source for toolchain policy — skill bundles and task-conditional MCP recommendations are prose here, not duplicated into a parallel YAML file. "Task-conditional MCP recommendations" is Bindle's own organizing scheme, not a client feature: no MCP client has a native profile concept that loads or switches server bundles by task type — what follows is a curated reference list for deciding what's worth registering, consulted by convention, not enforced by any mechanism. No cross-tool skill-recommendation manifest exists yet either (Claude Code's project-scoped `enabledPlugins` is real but Claude-only; Codex has no equivalent — see [openai/codex#18115](https://github.com/openai/codex/issues/18115)). The one exception is MCP servers that are unconditionally default (currently just Context7, below): those are committed as real, natively-consumed config in `.mcp.json` (Claude Code) and `.codex/config.toml` (Codex), not described here as data to keep in sync by hand.
 
 Tool precedence
 
 1. Repository-present tooling
 2. Repository-local instructions
-3. Project-scoped skills and MCP profiles
+3. Project-scoped skills and MCP recommendations
 4. Global skills
 5. Generic defaults
 
@@ -182,7 +182,7 @@ Project-scoped
 * Spaces deployment
 * package-specific scientific skills
 
-MCP profiles
+MCP recommendations by task
 
 Default (committed as real config: `.mcp.json`, `.codex/config.toml`)
 
