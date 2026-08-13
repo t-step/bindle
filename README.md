@@ -27,18 +27,9 @@ A few concepts guide the project.
 
 ## Current workshop
 
-Today Bindle assumes a fairly standard engineering toolkit.
+Today Bindle assumes a fairly standard engineering toolkit — coding harnesses, a knowledge vault, source control, and a handful of domain-specific tools spanning scientific computing and game development.
 
-* Coding: Claude Code, Codex
-* Knowledge: Obsidian
-* Documentation: Context7
-* Verification: Playwright
-* Source Control: Git and GitHub
-* Research: Hugging Face
-* Scientific Computing: CHILmesh, ADCIRC, DG-SWEM
-* Game Development: Godot
-
-These aren’t dependencies so much as assumptions. Bindle should adapt to them rather than competing with them.
+These aren’t dependencies so much as assumptions. Bindle should adapt to them rather than competing with them. The full, current toolchain — and why each tool is there — lives in [docs/TOOLCHAIN.md](docs/TOOLCHAIN.md); this file doesn't duplicate that list.
 
 ## Current focus
 

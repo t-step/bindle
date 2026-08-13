@@ -35,10 +35,10 @@ projectmem v0.2.0:
 * The primary checkout's hooks do fire in linked worktrees but bail out on the missing `.projectmem/`.
 * Net effect: projectmem is single-checkout in this repository. Record decisions made during worktree work from the primary checkout after merging. Accepted as a trial limitation.
 
-obsidian-mind / om v8.3.1 (candidate; not yet deployed):
+obsidian-mind / om v8.3.1 (active trial — AGENTS.md, "Obsidian Mind trial"):
 
 * Caller identity is the repository folder name from the MCP roots handshake, overridable by a one-line `.om-project` marker file. Without the marker, each worktree registers as a different project — the same basename-keying failure the old prototype had.
-* Operating rule if adopted: commit `.om-project` so every worktree and branch declares the same project identity.
+* Operating rule: `.om-project` is committed in this repository so every worktree and branch declares the same project identity.
 * om records no VCS state anywhere; two branches of one repository are indistinguishable in its records. An embedded Bindle evidence block is the intended fix.
 
 Claude Code:
@@ -85,6 +85,6 @@ Inherent risks (cannot be eliminated, only documented): SHA unreachability after
 ## Known single-checkout assumptions today
 
 * `.projectmem/` is fully gitignored, so repository memory exists only in the primary checkout, and projectmem hooks can only be (re)installed from there.
-* If obsidian-mind is adopted without a committed `.om-project`, worktree folder names would fragment project identity.
+* obsidian-mind's project identity depends on the committed `.om-project` marker (in place in this repository); without it, worktree folder names would fragment project identity.
 
 Both are documented limitations, not bugs to fix in this pass.

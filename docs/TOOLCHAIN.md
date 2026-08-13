@@ -4,6 +4,10 @@ Bindle describes and audits a development workshop shared by Claude Code and Cod
 
 The repository records desired state. It does not store credentials or blindly rewrite client configuration.
 
+Machine-readable configuration
+
+This document is the single source for toolchain policy — skill bundles and task-conditional MCP profiles are prose here, not duplicated into a parallel YAML file, because neither Claude Code nor Codex has a native mechanism to consume task-conditional profiles, and no cross-tool skill-recommendation manifest exists yet (Claude Code's project-scoped `enabledPlugins` is real but Claude-only; Codex has no equivalent — see [openai/codex#18115](https://github.com/openai/codex/issues/18115)). The one exception is MCP servers that are unconditionally default (currently just Context7, below): those are committed as real, natively-consumed config in `.mcp.json` (Claude Code) and `.codex/config.toml` (Codex), not described here as data to keep in sync by hand.
+
 Tool precedence
 
 1. Repository-present tooling
@@ -180,7 +184,7 @@ Project-scoped
 
 MCP profiles
 
-Default
+Default (committed as real config: `.mcp.json`, `.codex/config.toml`)
 
 * Context7
 
@@ -189,10 +193,7 @@ Web
 * Context7
 * Playwright
 
-GitHub
-
-* Context7
-* restricted GitHub MCP
+GitHub work uses the `gh` CLI directly, not a dedicated MCP server — no MCP server was ever wired up here, and `gh` already covers PR/issue/repo interaction for both harnesses without the added context cost of a registered server.
 
 Research and ML
 

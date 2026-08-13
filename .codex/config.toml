@@ -1,0 +1,7 @@
+# Project-scoped Codex MCP configuration. Loads only for trusted projects.
+# Mirrors the "context7" server declared in .mcp.json (Claude Code).
+# Personal servers go in your user-scoped ~/.codex/config.toml, not here.
+
+[mcp_servers.context7]
+command = "npx"
+args = ["-y", "@upstash/context7-mcp@latest"]

@@ -89,12 +89,14 @@ export_presets.cfg
 .claude/agent-memory-local
 .claude/first-run
 .claude/assistant-daemon-state.json
-.codex/
+.codex/*
+!.codex/config.toml
 .agent/
 .agents/.cache/
 
-# Local MCP state
-.mcp.json
+# Local MCP state — .mcp.json and .codex/config.toml carry only default,
+# secret-free, publicly-installable servers (e.g. Context7) and are tracked.
+# Personal/machine-local overrides go in these instead:
 .mcp.local.json
 mcp.local.json
 

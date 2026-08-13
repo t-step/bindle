@@ -23,13 +23,13 @@ Reading multiple files is required to get the full picture; short version:
 - `AGENTS.md` — working instructions: scope/safety, subagent limits, secrets, commits, planning flow, skills/MCP policy, Obsidian projection rules, and Bindle's own development/runtime isolation requirements (never touch live `~/.local/share/bindle/` state or the real Bindle vault from dev/tests; use `BINDLE_HOME="$PWD/.bindle-dev" uv run bindle ...`).
 - `PLAN.md` — current outcome and near-term milestones.
 - `docs/SCOPE.md` — what Bindle owns / may later own / explicitly does not own, the session model, the candidate canonical-state layout (`~/.bindle/{sessions,memories,index.sqlite,config.yaml}`), and the M0–M4 milestone sequence.
-- `docs/DECISIONS.md` — numbered decision log (D001–D018); check it before proposing anything that would revisit a settled decision (e.g. no generic agent loop, no broad ontology, graphs are derived not canonical).
+- `docs/DECISIONS.md` — numbered, append-only decision log; check it before proposing anything that would revisit a settled decision (e.g. no generic agent loop, no broad ontology, graphs are derived not canonical).
 - `docs/TOOLCHAIN.md` — the full toolchain, skill selection, and MCP profile rationale, with tool precedence order.
 - `docs/PHILOSOPHY.md` — what Bindle is (a stateless toolchain bridge), what it refuses to become, the replaceability/durability/preservation rules, and the feature admission test.
 - `docs/DATA-OWNERSHIP.md` — the authority model for Claude Code and Codex, the ownership and routing tables, durable versus derived.
 - `docs/WORKTREES.md` — the identity model (common dir / worktree path / SHA / branch), provider behavior across linked worktrees, evidence-block fields, operating rules.
 - `docs/PRIVACY.md` — the personal-disclosure threat model, the archived guard's status, and content rules for this repository.
-- `config/skills.yaml`, `config/mcp-profiles.yaml` — machine-readable mirrors of the toolchain doc (skill bundles and MCP server profiles by task category).
+- `.mcp.json`, `.codex/config.toml` — the actual, natively-consumed default MCP server config for Claude Code and Codex respectively (currently just Context7). Everything else in the toolchain — skill bundles, task-conditional MCP profiles — is policy, not data, and lives only in `docs/TOOLCHAIN.md`; neither harness has a native mechanism for committing task-conditional profiles or a cross-tool skill-recommendation list today (Claude Code's `enabledPlugins` project scope is real but Claude-only; Codex has no equivalent — [openai/codex#18115](https://github.com/openai/codex/issues/18115) is open).
 
 Core intent, if you only read one line: Bindle is a continuity layer (capture → promote → project → resume) across Claude Code, Codex, and repositories — not a replacement for any of them. Inherit first, extend second, replace deliberately, invent last.
 

@@ -10,7 +10,7 @@ Establish the shared workshop and durable-session model before implementing memo
 
 Next
 
-1. ~~Create the repository skeleton and manifests.~~ Done — `config/skills.yaml`, `config/mcp-profiles.yaml` added; `scripts/doctor.sh` reports all repository-file checks passing.
+1. ~~Create the repository skeleton and manifests.~~ Done — `config/skills.yaml`/`config/mcp-profiles.yaml` were added, then superseded: neither tool ever consumed them as data, so they were deleted in favor of `docs/TOOLCHAIN.md` as the sole policy source plus a real, natively-consumed `.mcp.json`/`.codex/config.toml` for the one unconditionally-default MCP server (Context7). `scripts/doctor.sh` reports all repository-file checks passing.
 2. ~~Implement a read-only doctor command.~~ Done — `scripts/doctor.sh`.
 3. Define the evidence-block schema (fields and worktree semantics in docs/WORKTREES.md).
 4. Trial repository-local memory tooling in Valence.
