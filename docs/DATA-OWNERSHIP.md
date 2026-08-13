@@ -27,7 +27,7 @@ When a durable session summary or handoff is worth writing, Claude Code and Code
 | Cross-project lessons, durable personal knowledge | the knowledge vault (obsidian-mind/om, adopted — docs/DECISIONS.md D023) | durable | emit blocks the vault embeds |
 | Session narrative and work records | vault work records, or a repository handoff file | durable when reasoned | emit blocks; provide templates |
 | Program structure | LSPs, code graphs | derived | none |
-| Toolchain desired state | this repository (`config/`, `docs/TOOLCHAIN.md`) | durable | owned |
+| Toolchain desired state | `docs/TOOLCHAIN.md` (policy/recommendations); `.mcp.json` and `.codex/config.toml` (unconditional MCP config, natively consumed) | durable | owned |
 | Deterministic git evidence blocks | Bindle emits the format; owning records embed the block | derived from git at capture time | owned format — never an owned store |
 | Bindle runtime state | `BINDLE_HOME` | configuration, disposable cache, explicit export only | owned |
 
