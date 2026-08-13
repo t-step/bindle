@@ -46,7 +46,7 @@ Bindle does not own
 * note-taking
 * notes, transcripts, embeddings, or narrative session records
 * canonical project memories or user knowledge
-* release automation
+* release automation as a product other projects delegate to (ordinary CI, versioning, tagging, or packaging for Bindle's own repository is a separate question and is not excluded by this — docs/TOOLCHAIN.md, "Release policy")
 * telemetry platforms
 * security scanning
 * a generic project-management system
@@ -108,22 +108,17 @@ Generated content must not overwrite human-authored content outside managed regi
 
 First milestones
 
-M0: Workshop
+These are the fixed milestone labels PLAN.md and docs/DECISIONS.md cite. Current status and next-step sequencing live in PLAN.md, not here.
 
-* toolchain manifest
-* skill manifest
-* MCP recommendations by task
-* repository instructions
-* doctor command
+M0: Workshop — done. Toolchain policy and MCP recommendations as prose in docs/TOOLCHAIN.md (not separate manifest files: `config/skills.yaml` and `config/mcp-profiles.yaml` were added, then deliberately removed once neither tool ever consumed them as data), repository instructions, doctor command.
 
-M1: Evidence
+M1: Evidence — schema done (docs/WORKTREES.md: fields and worktree semantics). Not yet built:
 
-* evidence-block schema (docs/WORKTREES.md)
 * deterministic emission from git state
 * embed into provider-owned records (vault work record, handoff file, commit message)
 * list and show blocks Bindle has emitted (disposable cache, rebuildable)
 
-M2: Resume
+M2: Resume — not started.
 
 * recent sessions
 * unfinished work
@@ -132,7 +127,7 @@ M2: Resume
 * evidence links
 * Claude-to-Codex and Codex-to-Claude portability
 
-M3: Obsidian projection
+M3: Obsidian projection — not started. The vault and the om MCP server are adopted (D023) as the write target; generation and publication into it are not built.
 
 * preview generated notes
 * publish approved promoted knowledge
@@ -140,7 +135,7 @@ M3: Obsidian projection
 * Bases-compatible properties
 * links across projects and knowledge
 
-M4: Temporal-index experiment
+M4: Temporal-index experiment — not started. Governed by the same derived-not-canonical graph policy (D007) that governed the separate code-intelligence graph trials concluded in D020 (dropped) and D021 (adoption gate failed) — those trials evaluated structural code graphs, not Graphiti, so they set a precedent for the evaluation bar rather than substitute for one.
 
 * Graphiti adapter
 * derived episode ingestion
