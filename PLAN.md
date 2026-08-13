@@ -2,57 +2,23 @@
 
 Outcome
 
-Define and validate the smallest useful Bindle vertical slice.
+Define and validate the smallest useful Bindle vertical slice: a stateless toolchain bridge that moves evidence and context across Claude Code, Codex, and repositories without becoming a memory or session store itself.
 
 Current
 
-Establish the shared workshop and durable-session model before implementing memory or graph infrastructure.
+M0 (workshop) is established: toolchain manifest, doctor checks, the decision log, and toolchain policy are in place. The evidence-block schema is defined (docs/WORKTREES.md), but deterministic emission from git state has not been implemented — M1 is schema-complete, not built. projectmem (D022) and Obsidian Mind (D023) are both adopted as local operational memory, not trials. `config/skills.yaml` and `config/mcp-profiles.yaml` were added and then removed after neither tool ever consumed them as data; docs/TOOLCHAIN.md is now the sole policy source, backed by a real, natively-consumed `.mcp.json`/`.codex/config.toml` for the one unconditionally-default MCP server (Context7). Work is now preparing `main` as a promoted baseline, with CI/repository wiring for that promotion under consideration.
 
 Next
 
-1. ~~Create the repository skeleton and manifests.~~ Done — `config/skills.yaml`/`config/mcp-profiles.yaml` were added, then superseded: neither tool ever consumed them as data, so they were deleted in favor of `docs/TOOLCHAIN.md` as the sole policy source plus a real, natively-consumed `.mcp.json`/`.codex/config.toml` for the one unconditionally-default MCP server (Context7). `scripts/doctor.sh` reports all repository-file checks passing.
-2. ~~Implement a read-only doctor command.~~ Done — `scripts/doctor.sh`.
-3. Define the evidence-block schema (fields and worktree semantics in docs/WORKTREES.md).
-4. Trial repository-local memory tooling in Valence.
-5. Trial obsidian-mind as the dedicated vault (deploy the template with the om MCP server; commit `.om-project` markers in participating repos).
+1. Promote `development` to `main` as the accepted baseline.
+2. Decide and implement whatever CI/repository wiring that promotion needs (scope not yet fixed).
+3. Implement the first evidence-block emission path — deterministic emission from git state, embedding into a provider-owned record, list/show of emitted blocks — as the first concrete piece of M1.
+4. Begin the first vertical slice implementation once M1 emission lands.
 
-Blocked
+Blocked/Deferred
 
-* Graphiti adoption waits on real session records and retrieval failures.
+* Graphiti adoption (M4) waits on real session records and retrieval failures.
 * Automatic Obsidian publication waits on preview quality.
-* Release automation waits on an installable product.
+* Full release automation for Bindle itself (versioning, changelog generation, package publication) still waits on an installable or externally consumed artifact — distinct from the narrower CI/repository wiring under consideration for the `main` promotion above.
 
-Later
-
-* Evidence-block emission, list, and show
-* Resume-context assembly from provider-owned records
-* Promotion and supersession routing
-* Obsidian projection emission
-* Temporal-index comparison
-* Toolchain bootstrap and drift repair (e.g., installing this repo's cog.toml git-hook pattern into other project repositories, so conventional-commit enforcement is consistent across repos without re-deriving it each time)
-
-Recent decisions
-
-See docs/DECISIONS.md.
-
-plans/active/README.md
-
-Active plans
-
-This directory contains executable work packets for current outcomes.
-
-Each plan should include:
-
-* outcome
-* why now
-* scope
-* evidence
-* work
-* verification
-* decisions
-* open questions
-* showcase evidence
-
-Completed plans move to ../archive/.
-
-plans/archive/.gitkeep
+See docs/DECISIONS.md for the decision history and plans/active/ for in-flight work packets.
