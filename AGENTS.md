@@ -187,7 +187,7 @@ Confirm material conclusions in source code.
 
 Project memory (projectmem)
 
-This repository trials projectmem as a local operational memory layer (see docs/TOOLCHAIN.md). It is machine-local working memory, not repository state:
+This repository adopts projectmem as a local operational memory layer (accepted, docs/DECISIONS.md D022; see docs/TOOLCHAIN.md). It is machine-local working memory, not repository state:
 
 * projectmem is not required to build, test, run, or understand this repository; everything durable lives in tracked files. Do not assume another contributor — human or agent — has it installed or registered. Work normally when it is absent.
 * Durable architecture, decisions, product rules, and operating instructions live in tracked repository docs (docs/DECISIONS.md, docs/, AGENTS.md), never only in a memory tool.

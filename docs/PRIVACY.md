@@ -16,7 +16,7 @@ This is personal-disclosure protection, not secret scanning. Credentials are a s
 
 ## The guard
 
-The archived prototype ships a working implementation: `bin/check-private-info.sh` (~430 lines of deliberately boring offline grep, four modes, 20 self-test fixtures, plus `bin/test-check-private-info.sh`). It is dormant but functional, and it already encodes two hard-won lessons:
+`bin/check-private-info.sh` (~430 lines of deliberately boring offline grep, four modes, 20 self-test fixtures, plus `bin/test-check-private-info.sh`) is deployed and enforcing, not dormant: it runs as a live pre-commit hook in this repository, verified 2026-08-11 when the personal denylist half was populated and confirmed against both pattern rules and personal-topology terms on every commit. It already encodes two hard-won lessons:
 
 * Verdict disclosure: a clean run must state whether a personal denylist was actually loaded, so "pattern rules only" can never masquerade as a full scan.
 * Scope honesty: it scans tracked files, so it prints a warning when untracked files were skipped — a gap that once shipped three real home-path leaks that were green before `git add`.
@@ -27,7 +27,7 @@ At the repository boundary, as a pre-commit check and in any publish or release 
 
 ## Disposition
 
-The guard is one of the strongest extraction candidates in the project's history: it survived a full redesign, has its own tests and vocabulary, and applies to every public repository regardless of Bindle. It is not extracted in this pass — it stays dormant in the archive until a Bindle repository actually publishes content that needs it, at which point restore it (or extract it to a standalone tool) rather than rewriting it.
+The guard is one of the strongest extraction candidates in the project's history: it survived a full redesign, has its own tests and vocabulary, and applies to every public repository regardless of Bindle. It is deployed in place here (embedded in `bin/`, not a standalone tool) rather than extracted — extraction to a standalone package remains a live option if a second repository needs the same guard, but restore-the-implementation-don't-rewrite-it still applies whenever that happens.
 
 ## Private configuration
 

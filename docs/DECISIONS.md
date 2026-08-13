@@ -134,3 +134,11 @@ Rather than repeat D020's mistake (deploy broadly, hope it gets used, find out m
 Worth stating plainly: CodeGraph's own disclosed README benchmark claims "44% cheaper." This real-world test found the opposite. A benchmark with genuinely disclosed methodology can still not hold in a specific target repo — evaluate empirically in the actual context that matters, not on a vendor's published numbers, however well-sourced.
 
 CodeGraph was fully uninstalled and unregistered from Valence and global Claude Code config; nothing was left standing. D007 and D008 remain the governing policy; no code intelligence MCP is currently adopted anywhere. The next candidate, if one appears, clears the same gate before any standing deployment — not the other way around.
+
+D022: projectmem promoted from trial to accepted
+
+projectmem is accepted as Bindle's local operational memory layer. No longer documented as a trial.
+
+Running since 2026-08-01 across bindle, Valence, cover-story, and skills. <!-- private-ok: Bindle's own repo/decision names, not personal info --> In bindle alone: 48 events by 2026-08-12 — dated, attributed gotchas and decisions, an issue/fix pair — substantive content, not noise, plus a demonstrated real hit: the churn/stale-memory-citation check at commit time correctly flagged this repository's own decision-log and AGENTS.md citations as due for a re-check during today's commits.
+
+This changes projectmem's documented status, not its epistemic weight. It remains branch-blind (events carry only a HEAD SHA, no branch or worktree awareness — docs/DATA-OWNERSHIP.md), its content stays working notes rather than accepted truth, and it remains optional and machine-local: no contributor may be assumed to have it installed or registered, and durable decisions still route to docs/DECISIONS.md, never to projectmem alone. "Accepted" means Bindle formally keeps using it as part of the workflow — it does not mean its recorded content becomes authoritative.

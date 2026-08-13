@@ -33,7 +33,7 @@ projectmem v0.2.0:
 * Store discovery walks the filesystem for `.projectmem/`, not git. This repository ignores `.projectmem/` entirely, so a linked worktree has no store and auto-capture there is a silent no-op.
 * `pjm hooks install` fails inside a linked worktree (`.git` is a file there, not a directory).
 * The primary checkout's hooks do fire in linked worktrees but bail out on the missing `.projectmem/`.
-* Net effect: projectmem is single-checkout in this repository. Record decisions made during worktree work from the primary checkout after merging. Accepted as a trial limitation.
+* Net effect: projectmem is single-checkout in this repository. Record decisions made during worktree work from the primary checkout after merging. Accepted as a known limitation.
 
 obsidian-mind / om v8.3.1 (active trial — AGENTS.md, "Obsidian Mind trial"):
 
