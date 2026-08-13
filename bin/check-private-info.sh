@@ -173,13 +173,16 @@ self_test() {
     printf '  ✗ self-test: denylist.md NOT flagged\n'
     failed=1
   fi
-  if BINDLE_DENYLIST="$t/deny.txt" "$0" "$t/denylist.md" >/dev/null 2>&1; then
+  # env -u clears the operator's own denylist vars so an ambient BINDLE_DENYLIST
+  # (higher precedence, line ~44) can't shadow the alias under test and produce
+  # a false pass/fail depending on what happens to be exported in this shell.
+  if env -u CLAUDE_KIT_DENYLIST BINDLE_DENYLIST="$t/deny.txt" "$0" "$t/denylist.md" >/dev/null 2>&1; then
     printf '  ✗ self-test: BINDLE_DENYLIST alias NOT honored\n'
     failed=1
   else
     pass=$((pass + 1))
   fi
-  if CLAUDE_KIT_DENYLIST="$t/deny.txt" "$0" "$t/denylist.md" >/dev/null 2>&1; then
+  if env -u BINDLE_DENYLIST CLAUDE_KIT_DENYLIST="$t/deny.txt" "$0" "$t/denylist.md" >/dev/null 2>&1; then
     printf '  ✗ self-test: CLAUDE_KIT_DENYLIST alias NOT honored\n'
     failed=1
   else

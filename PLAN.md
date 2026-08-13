@@ -6,7 +6,7 @@ Define and validate the smallest useful Bindle vertical slice: a stateless toolc
 
 Current
 
-M0 (workshop) is established: toolchain manifest, doctor checks, the decision log, and toolchain policy are in place. The evidence-block schema is defined (docs/WORKTREES.md), but deterministic emission from git state has not been implemented — M1 is schema-complete, not built. projectmem (D022) and Obsidian Mind (D023) are both adopted as local operational memory, not trials. `config/skills.yaml` and `config/mcp-profiles.yaml` were added and then removed after neither tool ever consumed them as data; docs/TOOLCHAIN.md is now the sole policy source, backed by a real, natively-consumed `.mcp.json`/`.codex/config.toml` for the one unconditionally-default MCP server (Context7). Work is now preparing `main` as a promoted baseline, with CI/repository wiring for that promotion under consideration.
+M0 (workshop) is established: toolchain manifest, doctor checks, the decision log, and toolchain policy are in place. The evidence-block schema is defined (docs/WORKTREES.md), but deterministic emission from git state has not been implemented — M1 is schema-complete, not built. projectmem (D022) is adopted as local operational memory. Obsidian Mind (D023) was briefly adopted the same way but is back on active trial (D025) — not ready for main. `config/skills.yaml` and `config/mcp-profiles.yaml` were added and then removed after neither tool ever consumed them as data; docs/TOOLCHAIN.md is now the sole policy source, backed by a real, natively-consumed `.mcp.json`/`.codex/config.toml` for the one unconditionally-default MCP server (Context7). Work is now preparing `main` as a promoted baseline, with CI/repository wiring for that promotion under consideration.
 
 Next
 
