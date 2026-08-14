@@ -16,12 +16,14 @@ divergence from the branch's own upstream — e.g. `origin/development` — or
 the repo's default branch if no upstream is set yet, including uncommitted
 work), elapsed session time.
 
-Row 2 (agent/session pressure): model, TURN (assistant-turn count since the
-last `/clear`, or since session start if none — see "Optional: TURN reset on
-/clear" below), CMP (compaction count, only shown when nonzero, never reset
-by `/clear` since a past compaction is evidence about context quality
-independent of what's currently visible), context-window usage, and
-5-hour/7-day rate-limit usage with reset countdowns.
+Row 2 (agent/session pressure): model, TURN (assistant-turn count for the
+current transcript file — `/clear` starts Claude Code on a fresh transcript
+with a new session id, so this is already scoped to "since the last clear"
+without any extra bookkeeping; see docs/DECISIONS.md D027), CMP (compaction
+count, only shown when nonzero — a past compaction is evidence about context
+quality independent of what's currently visible, so it isn't cleared by
+starting a new transcript either), context-window usage, and 5-hour/7-day
+rate-limit usage with reset countdowns.
 
 Width shrinks information density (bars drop first, then routine detail,
 then optional segments) rather than wrapping or adding rows — see the
@@ -68,40 +70,3 @@ bundled with Git Bash and must be installed separately.
 A `refreshInterval` of 30s or higher is recommended — the script shells out
 to `git` several times and does one `jq` pass over the session transcript
 per render.
-
-## Optional: TURN reset on /clear
-
-Without this step, TURN counts every assistant turn logged to the session's
-transcript file for the life of the terminal session, including turns from
-before a `/clear` — the transcript itself has no structural boundary marker
-for `/clear` to filter on (unlike compaction, which does: `compact_boundary`).
-
-`/clear` does fire a real `SessionEnd` hook with `reason:"clear"`, though, so
-`hooks/session-end-clear-marker` catches that event and records a timestamp
-per session under `~/.claude/hooks/state/turn-reset-<session_id>.txt`. The
-statusline reads that marker, when present, and only counts turns at or
-after it.
-
-To enable it:
-
-1. Copy or symlink `hooks/session-end-clear-marker` into
-   `~/.claude/hooks/session-end-clear-marker` and make it executable.
-2. Add a `SessionEnd` entry to `~/.claude/settings.json`'s `hooks` object:
-
-   ```json
-   "SessionEnd": [
-     {
-       "matcher": "",
-       "hooks": [
-         {
-           "type": "command",
-           "command": "~/.claude/hooks/session-end-clear-marker",
-           "timeout": 5
-         }
-       ]
-     }
-   ]
-   ```
-
-Without this, TURN still works — it just counts from session start rather
-than from the last clear.

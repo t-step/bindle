@@ -13,7 +13,6 @@ project_dir=$(j '.workspace.project_dir // empty')
 worktree_name=$(j '.workspace.git_worktree // empty')
 model=$(j '.model.display_name // empty')
 tpath=$(j '.transcript_path // empty')
-session_id=$(j '.session_id // empty')
 
 # round any percentage to a clean integer at the source — upstream JSON can
 # hand back float noise (e.g. 2.0000000000000004 from a fraction*100 calc).
@@ -194,40 +193,31 @@ fi
 # --- TURN/CMP: single jq pass over the transcript.
 # turn = count of distinct assistant message.id values (an assistant turn can
 #   span multiple JSONL rows -- one per content block -- sharing one id, so
-#   dedupe or it's overcounted) since the last /clear. A direct count of a
-#   real thing Claude Code writes, not an inferred/estimated proxy.
+#   dedupe or it's overcounted). A direct count of a real thing Claude Code
+#   writes, not an inferred/estimated proxy.
 # cmp  = count of {type:"system", subtype:"compact_boundary"} entries -- the
 #   literal marker Claude Code's own compaction code emits (confirmed by
-#   reading the shipped binary's own check for that exact shape). NOT reset
-#   on /clear -- a past compaction is session-scoped evidence about context
-#   quality, independent of what's currently visible in the conversation.
+#   reading the shipped binary's own check for that exact shape).
 #
-# /clear's own implementation (confirmed by reading the shipped binary) does
-# not rotate the transcript file or write any structured boundary marker
-# into the JSONL (unlike compaction's compact_boundary) -- the transcript is
-# append-only across /clear, so it alone can't tell TURN where a clear
-# happened. What /clear DOES do is fire a real SessionEnd hook with
-# reason:"clear" -- so a companion hook
-# (~/.claude/hooks/session-end-clear-marker, registered in settings.json)
-# catches that event and records a timestamp per session_id under
-# ~/.claude/hooks/state/turn-reset-<session_id>.txt. If that marker exists
-# for this session, TURN only counts assistant messages at or after it
-# (plain ISO-8601 string comparison against the transcript's own timestamp
-# field -- same format, no date parsing needed). No marker means no clear
-# has happened yet this session, so TURN counts from the start as before.
+# TURN is a plain count over the whole transcript file, uncorrected for
+# /clear. This used to need a companion SessionEnd hook (session-end-
+# clear-marker) writing a boundary timestamp, on the assumption that /clear
+# appends to the same transcript file without rotating it. That assumption
+# didn't hold: checked empirically across every transcript this machine has
+# (37 files, one Claude Code project) and every single one carries exactly
+# one session_id -- /clear starts a fresh transcript file with a fresh
+# session_id rather than appending, so TURN is already scoped to "since the
+# last /clear" for free, and a boundary marker has nothing to do (see
+# docs/DECISIONS.md D027). If a future Claude Code version stops rotating
+# the transcript on /clear, TURN would start counting pre-clear turns again
+# and this comment is the first place to look.
 #
 # Measured cost on a real ~2.5MB/632-line transcript: ~17ms -- cheap enough
 # not to need caching at this refresh interval.
-clear_since=""
-if [ -n "$session_id" ]; then
-  reset_file="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/state/turn-reset-${session_id}.txt"
-  [ -f "$reset_file" ] && clear_since=$(cat "$reset_file" 2>/dev/null)
-fi
 turn_count="" cmp_count=0
 if [ -n "$tpath" ] && [ -f "$tpath" ]; then
-  read -r turn_count cmp_count <<< "$(jq -s -r --arg since "$clear_since" '
-    (([.[] | select(.type=="assistant" and ($since=="" or (.timestamp // "") >= $since))]
-      | group_by(.message.id) | length)) as $t |
+  read -r turn_count cmp_count <<< "$(jq -s -r '
+    (([.[] | select(.type=="assistant")] | group_by(.message.id) | length)) as $t |
     (([.[] | select(.type=="system" and .subtype=="compact_boundary")] | length)) as $c |
     "\($t) \($c)"
   ' "$tpath" 2>/dev/null)"
