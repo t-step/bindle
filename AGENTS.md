@@ -1,51 +1,37 @@
-# AGENTS
+AGENTS
 
 Bindle Working Instructions
 
 Repository purpose
 
-Bindle preserves and reloads durable engineering context across projects and native coding agents.
+Bindle is a stateless toolchain bridge. It moves useful context and evidence between tools that already own their domains; it is not itself a store of user history (docs/PHILOSOPHY.md, D014–D016).
 
 Claude Code and Codex remain the execution harnesses.
 
-Bindle may eventually own:
+Bindle may provide:
 
-* cross-project session identity
-* durable session capture
-* current versus stale knowledge
-* selective promotion
-* portable resume context
-* Obsidian projection
-* provenance across tools and repositories
+* toolchain manifests, doctor checks, and drift diagnosis
+* deterministic evidence blocks emitted from git state
+* pointers and provenance links between provider-owned records
+* lightweight adapters, hooks, templates, and commands at tool seams
+* bounded resume-context assembly from provider-owned records
+* selective projection into surfaces maintained by owning systems
 
-Bindle does not replace:
-
-* Claude Code
-* Codex
-* Obsidian
-* Git or GitHub
-* project management tools
-* documentation lookup
-* browser automation
-* code intelligence
-* security scanners
-* scientific tooling
-* graph databases
-* agent execution loops
+Bindle does not replace execution harnesses, Git/GitHub, Obsidian, project management, documentation lookup, code intelligence, security or scientific tooling, graph databases, or generic agent loops.
 
 Current phase
 
-This repository is defining the workshop, conventions, and first vertical slice.
+The workshop is established. Manifests, doctor checks, the decision log, and toolchain policy are in place. Implementation of the first vertical slice has not started.
+
+Use PLAN.md for current orientation and docs/SCOPE.md for scope and milestone sequencing.
 
 Do not implement a memory platform, graph system, background daemon, orchestration framework, or generic agent harness without an approved plan.
-
-The first likely product capability is durable cross-project session continuity.
 
 Repository tooling precedence
 
 Before proposing or adding tooling:
 
-1. Inspect repository instructions, scripts, manifests, task runners, CI workflows, configuration, and development documentation.
+1. Inspect repository instructions, scripts, manifests, task runners, CI, configuration, and development documentation.
 2. Prefer repository-present commands and conventions.
 3. Adapt project-scoped and global skills to the repository.
 4. Extend existing tooling before introducing a parallel mechanism.
@@ -56,95 +42,74 @@ Inherit first. Extend second. Replace deliberately. Invent last.
 
 Scope and safety
 
-* Confirm the repository root before making changes.
-* Do not modify sibling repositories.
+* Confirm the repository root, branch, and worktree before making changes.
+* Do not modify sibling repositories or worktrees.
 * Inspect git status before and after work.
 * Preserve existing uncommitted changes.
 * Do not discard, reset, or overwrite user work.
-* Use the repository’s established verification commands.
-* Do not claim completion without running relevant checks.
+* Use established repository verification commands.
+* Run relevant checks locally before claiming completion or opening a PR.
+* Do not use GitHub CI as the first execution of a check.
 * Do not commit unless explicitly requested.
 * Do not bypass repository hooks.
 
-Agent delegation policy
+Agent delegation
 
-* Use no more than three subagents concurrently.
+* Use no more than five subagents concurrently.
 * Only the primary agent may delegate.
-* Subagents must not spawn, nest, or delegate to additional agents.
-* Do not use teams, forks, workflows, repeated waves, or equivalent mechanisms to evade the limit.
-* Prefer direct work in the primary agent for sequential, small, or context-heavy tasks.
-* Use subagents only for genuinely independent, bounded work.
+* Subagents must not spawn or delegate to additional agents.
+* Prefer direct work for sequential, small, or context-heavy tasks.
+* Delegate only genuinely independent, bounded work.
+* The five-subagent ceiling applies regardless of provider-specific enforcement or fan-out mechanism.
 * Repository-local stricter limits take precedence.
-
-This policy is enforced globally (not just advisory) via Claude Code hooks in
-`~/.claude/settings.json`:
-
-* `PreToolUse` on the `Agent` tool (`~/.claude/hooks/subagent-limit-guard`)
-  denies any call whose payload carries an `agent_id` (a subagent calling
-  `Agent` again — nesting), and denies new top-level calls once three
-  subagents are concurrently active.
-* `SubagentStart` / `SubagentStop` (`subagent-track-start` /
-  `subagent-track-stop`) maintain the per-session active-subagent count the
-  guard checks.
-
-Known gap: the `Workflow` tool's internal `agent()` fan-out does not go
-through the `Agent` tool, so `subagent-limit-guard` never sees it and cannot
-cap a workflow's own internal concurrency (verified empirically — confirmed
-via captured hook payloads that `SubagentStart`/`SubagentStop` do fire for
-workflow-spawned agents with `agent_type: "workflow-subagent"`, but no
-`PreToolUse` fires per individual `agent()` call, only once for the outer
-`Workflow` tool invocation). Workflows remain bound only by their own
-opt-in requirement and internal concurrency cap, not by this policy's
-three-subagent ceiling — this is the "workflows... to evade the limit" case
-called out above, left unpatched by choice rather than oversight.
 
 Secrets and environment files
 
-* Never read, print, search, summarize, modify, copy, or transmit secret-bearing files.
-* Treat .env, .env.local, .env.*.local, private keys, credential files, and secrets/ directories as inaccessible.
-* Use .env.example, .env.template, documentation, and environment-variable names to understand configuration.
-* Do not run commands intended to reveal secret values, including env, printenv, shell startup dumps, Keychain reads, or credential-manager lookups.
-* Ask the user to confirm that a required variable exists rather than requesting or inspecting its value.
-* Do not include secrets in logs, commits, generated files, prompts, or handoffs.
+Never read, print, search, summarize, modify, copy, or transmit secret-bearing files.
+
+Treat .env, .env.local, .env.*.local, private keys, credential files, and secrets/ directories as inaccessible.
+
+Use examples, templates, documentation, and environment-variable names to understand configuration. Ask the user to confirm that a required variable exists rather than inspecting its value.
+
+Do not run commands intended to reveal secrets, including env, printenv, shell startup dumps, Keychain reads, or credential-manager lookups.
+
+Do not include secrets in logs, commits, generated files, prompts, or handoffs.
 
 Commits
 
-* Use Conventional Commits.
-* Inspect the staged diff before selecting a commit type and scope.
-* Describe the purpose of the change, not merely the files touched.
-* Keep commits cohesive.
-* Recommend splitting unrelated changes.
-* Run relevant verification before committing.
-* Do not bypass commit hooks.
-* Do not create a commit without explicit approval.
+Use Conventional Commits.
 
-Examples:
+Before committing:
 
-docs: define initial toolchain
-chore: add repository hygiene defaults
-feat(session): add durable session records
-fix(projection): preserve human-authored note sections
+* inspect the staged diff
+* choose type and scope from the purpose of the change
+* keep the commit cohesive
+* recommend splitting unrelated changes
+* run relevant verification
+* allow repository hooks to run
+
+Never create a commit without explicit approval.
+
+Commit messages are validated by Cocogitto. If the local commit-msg hook is absent in a fresh checkout, install it with:
+
+cog install-hook commit-msg
 
 Planning
 
-* Prefer local Markdown planning.
-* PLAN.md is the concise project orientation.
+Prefer local Markdown planning.
+
+* PLAN.md is concise project orientation.
 * Active work lives in plans/active/.
-* Completed work moves to plans/archive/.
+* Completed work lives in plans/archive/.
 * Read only the relevant plan unless broader context is required.
 * Update plans when scope, status, decisions, verification, or uncertainties materially change.
 * Do not require GitHub Issues.
-* Publish work to GitHub only when collaboration, review, notification, or external tracking makes it useful.
+* Publish work to GitHub when collaboration, review, notification, or external tracking makes it useful.
 * Prefer reviewable outcomes over tiny task fragments.
 
-Recommended flow:
+For substantial product work, the default flow is:
 
-grill-me
-→ to-spec
-→ local plan
-→ implementation
-→ verification
-→ showcase
+repo-orientation → brainstorming → slice-plan → implementation → slice-review → slice-retro → next-best-slice
 
 Do not use the full flow for obvious, mechanical, or already-approved work.
 
@@ -155,174 +120,199 @@ Skills are advisory procedures, not repository authorities.
 * Repository-local instructions and tooling take precedence.
 * Use the smallest relevant skill set.
 * Do not load unrelated specialist skills.
-* Do not allow a skill to introduce frameworks, dependencies, or project structure without a demonstrated need.
+* Do not allow a skill to introduce frameworks, dependencies, or project structure without demonstrated need.
 * Prefer proven upstream skills over local reinvention.
 * Treat third-party skills as executable dependencies and review them before installation.
 
+See docs/TOOLCHAIN.md for the current skill and tooling recommendations.
+
 MCP usage
 
-MCP servers are capability profiles, not a default tool buffet.
+MCP servers provide capabilities; registration is not an instruction to use them.
 
-* Load only the profile relevant to the task.
-* Prefer native repository tools when they provide the same capability clearly.
-* Use MCP for capabilities not cleanly available through files, shell commands, or installed skills.
-* Keep mutation permissions narrow.
-* Prefer read-only access by default.
+* Use only servers relevant to the task.
+* Prefer repository-native tools when they provide the capability clearly.
+* Use MCP when the capability is not cleanly available through repository files, shell commands, language tooling, or installed skills.
+* Keep mutation permissions narrow and prefer read-only access.
 * Treat MCP output as evidence to verify, not unquestioned truth.
+
+docs/TOOLCHAIN.md contains Bindle’s task-oriented MCP recommendations. They are reference guidance, not native client profiles or automatic routing.
 
 Code intelligence
 
-code-review-graph is optional and project-scoped.
+No code-intelligence MCP is currently adopted.
 
-Use it when:
-
-* reviewing a multi-file or cross-module change
-* estimating blast radius
-* tracing callers, dependents, or execution paths
-* identifying potentially affected tests
-* changing public interfaces or shared models
-* investigating cross-language boundaries
-* orienting in a large or unfamiliar subsystem
-
-Do not use it when:
-
-* the task concerns one or two known files
-* rg, Git, or language tooling answers the question directly
-* performing ordinary text search
-* editing documentation only
-* the repository is small
-* the graph may be stale or absent
-
-Tool precedence:
+For structural or cross-file questions, prefer:
 
 1. known files
 2. rg, fd, Git, and language tooling
 3. repository documentation and history
-4. code-review-graph
+4. an adopted code-intelligence tool, if one exists
 
-Confirm material conclusions in source code.
+Do not treat tool availability as adoption. Confirm material conclusions in source code.
 
-Sessions and durable knowledge
+See D020 for the prior code-intelligence trial and its outcome.
 
-A session is evidence that work occurred. It is not automatically durable truth.
+Project memory
 
-Bindle should distinguish:
+projectmem is an optional, machine-local operational memory layer, not repository state.
 
-* raw session records
-* promoted knowledge
-* current guidance
-* superseded guidance
-* human-readable Obsidian projections
+Tracked repository files remain authoritative. projectmem must never be required to build, test, run, or understand Bindle.
 
-Raw sessions should remain durable and auditable.
+When projectmem is available:
 
-Obsidian should receive selected, human-useful projections rather than every command, transcript, or intermediate attempt.
+* At session start, load project instructions and summary before substantive project work; load the project map when structure matters.
+* Prefer projectmem MCP tools when connected; use the pjm CLI as fallback.
+* Before modifying a file, check its recorded failure history.
+* Record useful bugs, fix attempts, confirmed fixes, design decisions, and durable setup gotchas while working.
+* Associate confirmed fixes with their explicit issue IDs rather than relying on implicit “most recent” selection.
+* Never edit generated .projectmem/ state directly. PROJECT_MAP.md and plan.md are the exceptions where direct editing is supported.
+* Use projectmem to avoid unnecessary rediscovery, but verify material current-state conclusions against tracked repository state.
 
-Promotion should initially be explicit or proposed for approval.
+.projectmem/ is gitignored and must not be committed.
+
+Durable architecture, product rules, decisions, and operating instructions belong in tracked repository documentation, never only in projectmem.
+
+See docs/TOOLCHAIN.md and D022 for details.
+
+Durable knowledge
+
+A session is evidence that work occurred, not automatically durable truth.
+
+Route information to its natural owner according to docs/DATA-OWNERSHIP.md.
+
+Temporary exploration may remain disposable. Durable capture requires a reason.
 
 The intended lifecycle is:
 
 observed → candidate → current → superseded
 
-Do not invent a broad ontology.
+Do not invent a broad ontology. Graphs and semantic indexes are derived conveniences, not canonical state.
 
-Graphs and semantic indexes are derived conveniences, not canonical state.
+Architecture rules
+
+Apply these rules to proposals before implementation:
+
+* Replaceability (D014): do not parse another tool’s private store. Use supported interfaces and owner-resolved pointers.
+* Durability (D015): durable artifacts live with their owners. Bindle-owned state is configuration, disposable cache, or explicit export.
+* Preservation (D016): capture requires a reason.
+* Worktrees (D018): repository identity is the Git common directory; never assume one checkout per repository.
+
+Every proposal must first answer:
+
+1. Who naturally owns this?
+2. Can that owner be replaced?
+3. Does this deserve to survive?
+
+A weak answer ends the proposal. Proposals that survive this screen must pass the full admission test in docs/PHILOSOPHY.md.
 
 Obsidian projection
 
-Use a dedicated Bindle vault rather than the user’s personal vault.
+Use the dedicated Bindle vault, not the user’s personal vault.
 
-The Bindle vault may contain:
+Project only selected, human-useful durable material. Do not project every command, transcript, session, or intermediate attempt.
 
-* project notes
-* promoted decisions
-* patterns
-* research findings
-* open questions
-* important session landmarks
-* generated views and links
-
-Do not project every raw session into Obsidian.
-
-Prefer:
-
-* ordinary Markdown
-* standard Obsidian links
-* simple properties
-* Bases for curated views
-* JSON Canvas only when spatial representation helps
+Prefer ordinary Markdown, standard Obsidian links, simple properties, and Bases for curated views. Use JSON Canvas only when spatial representation adds value.
 
 Generated content must not overwrite human-authored content outside clearly managed sections.
 
 Initial publication should be preview-first and approval-based.
 
+See docs/DATA-OWNERSHIP.md for routing and authority.
+
+Development isolation
+
+Do not implement features directly in the primary bindle checkout.
+
+* Use one Git worktree and feature branch per active product slice.
+* Treat the primary checkout as the integration and release workspace.
+* Confirm repository root, branch, and worktree before editing.
+* Do not modify sibling worktrees.
+* Do not use worktrees to bypass delegation limits.
+* Keep main releasable.
+
+See docs/WORKTREES.md for the identity model and operating details.
+
+Runtime isolation
+
+Never use live Bindle state during development or tests.
+
+Development commands must use a repository-local or temporary Bindle home. Prefer:
+
+BINDLE_HOME="$PWD/.bindle-dev" uv run bindle ...
+
+Tests must use temporary directories.
+
+Do not modify:
+
+* ~/.local/share/bindle/
+* the real Bindle Obsidian vault
+* global Claude Code configuration
+* global Codex configuration
+* installed skills
+* live MCP configuration
+
+Inspection is read-only unless an approved plan explicitly covers mutation.
+
+Any future mutation command must support preview before apply.
+
+CLI invocation
+
+Use:
+
+uv run bindle ...
+
+when testing development code.
+
+Treat:
+
+bindle ...
+
+as the stable installed release.
+
+Do not reinstall or replace the stable CLI unless explicitly requested.
+
+Obsidian Mind trial
+
+om remains an optional, demoted trial (D025), not repository authority.
+
+When available, use it only for checkpoint-based cross-project capture under docs/DATA-OWNERSHIP.md. Do not capture routinely merely because the tool is available.
+
+Accepted decisions still belong in tracked repository documentation.
+
+Do not silently work around known provider-identity limitations. See D019, D025, and docs/TOOLCHAIN.md for trial details.
+
 Showcase
 
-Showcasing is part of the definition of done for meaningful work.
-
-When applicable, preserve:
+For meaningful work, preserve useful evidence when applicable:
 
 * before and after states
 * architecture diagrams
 * screenshots
-* traces
-* benchmarks
+* traces or benchmarks
 * scientific figures
 * verification output
 * important tradeoffs
 * known limitations
 * a short walkthrough path
 
-Prefer existing repository showcase tooling, demos, documentation sites, Storybook instances, notebooks, or scripts before introducing a new presentation mechanism.
+Prefer existing repository showcase tooling before introducing a new presentation mechanism.
 
-Communication style
+Communication
 
 Use concise technical prose during interactive coding.
 
-Do not apply compressed or fragmentary style to:
+For durable documentation, academic or scientific material, stakeholder communication, showcases, and external correspondence, identify the audience and use complete prose rather than compressed working notes.
 
-* repository documentation
-* academic writing
-* scientific explanations
-* stakeholder communication
-* showcases
-* external correspondence
-* material intended for unfamiliar readers
+Canonical references
 
-Identify the audience and write complete prose for durable artifacts.
+Consult these when their subject is material to the task:
 
-## Development isolation
-
-- Do not implement features directly in the primary `bindle` checkout.
-- Use one Git worktree and feature branch per active product slice.
-- Treat the primary checkout as the integration and release workspace.
-- Confirm the current branch, repository root, and worktree before editing.
-- Do not modify sibling worktrees.
-- Do not use worktrees to bypass the three-subagent limit.
-- Keep `main` releasable.
-
-## Runtime isolation
-
-- Never use live Bindle state during development or tests.
-- Development commands must use a repository-local or temporary Bindle home.
-- Prefer:
-
-  `BINDLE_HOME="$PWD/.bindle-dev" uv run bindle ...`
-
-- Tests must use temporary directories.
-- Do not modify:
-  - `~/.local/share/bindle/`
-  - the real Bindle Obsidian vault
-  - global Claude Code configuration
-  - global Codex configuration
-  - installed skills
-  - live MCP configuration
-
-- Inspection is read-only unless an approved plan explicitly covers mutation.
-- Any future mutation command must support preview before apply.
-
-## CLI invocation
-
-- Use `uv run bindle ...` when testing development code.
-- Treat plain `bindle ...` as the stable installed release.
-- Do not reinstall or replace the stable CLI unless explicitly requested.
+* PLAN.md — current project orientation and near-term work
+* docs/SCOPE.md — ownership boundaries and milestones
+* docs/DECISIONS.md — accepted decisions and historical rationale
+* docs/TOOLCHAIN.md — tooling, skills, and MCP guidance
+* docs/PHILOSOPHY.md — architecture principles and feature admission
+* docs/DATA-OWNERSHIP.md — authority, routing, and durable knowledge
+* docs/WORKTREES.md — repository/worktree identity and operations
+* docs/PRIVACY.md — disclosure threat model and repository privacy rules
