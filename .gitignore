@@ -1,9 +1,7 @@
-# macOS
+# OS / editors
 .DS_Store
 .AppleDouble
 .LSOverride
-
-# Editors
 .idea/
 .vscode/*
 !.vscode/extensions.json
@@ -15,9 +13,8 @@
 *~
 .history/
 
-# Environment and secrets
-.env
-.env.*
+# Environment / secrets
+.env*
 !.env.example
 !.env.template
 *.pem
@@ -28,11 +25,11 @@ credentials.json
 secrets.json
 secrets/
 
-# Logs and runtime files
+# Runtime / caches
 *.log
-logs/
 *.pid
 *.pid.lock
+logs/
 tmp/
 temp/
 .cache/
@@ -40,7 +37,6 @@ temp/
 # Python
 __pycache__/
 *.py[cod]
-*.pyo
 .python-version
 .venv/
 venv/
@@ -56,7 +52,7 @@ dist/
 build/
 *.egg-info/
 
-# Node.js
+# Node
 node_modules/
 .npm/
 .pnpm-store/
@@ -68,16 +64,14 @@ node_modules/
 coverage/
 *.tsbuildinfo
 
-# Rust
+# Rust / Godot
 target/
-
-# Godot
 .godot/
 .import/
 export.cfg
 export_presets.cfg
 
-# Local agent state
+# Agent / MCP state
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
 .claude/scheduled_tasks.json
@@ -89,51 +83,40 @@ export_presets.cfg
 .claude/agent-memory-local
 .claude/first-run
 .claude/assistant-daemon-state.json
-.codex/
+.codex/*
+!.codex/config.toml
 .agent/
 .agents/.cache/
-
-# Local MCP state
 .mcp.local.json
 mcp.local.json
-
-# Local code intelligence
 .code-review-graph/
 
-# Local bindle runtime state
+# Bindle / project state
 .bindle/
 .bindle-dev/
 .projectmem/
 
-# Generated artifacts
+# Generated / scratch
 artifacts/generated/
 reports/generated/
-site/
 public/generated/
-
-# Local planning scratch
+site/
 plans/scratch/
 scratch/
 
-# SQLite and local databases
+# Local databases
 *.db
 *.db-shm
 *.db-wal
 *.sqlite
 *.sqlite3
 
+!tests/fixtures/**/*.db
+!tests/fixtures/**/*.sqlite
+!tests/fixtures/**/*.sqlite3
+
 # Archives
 *.zip
 *.tar
 *.tar.gz
 *.tgz
-
-# Keep intentionally committed fixtures
-!tests/fixtures/**/*.db
-!tests/fixtures/**/*.sqlite
-!tests/fixtures/**/*.sqlite3
-
-.projectmem/events.jsonl
-.projectmem/watch.pid
-.projectmem/watch.log
-.projectmem/structure.json
