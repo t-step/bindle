@@ -2,40 +2,40 @@
 
 ## Purpose
 
-Bindle is a continuity layer for engineering work performed across Claude Code, Codex, repositories, and projects.
+Bindle is a stateless toolchain bridge for engineering work performed across coding harnesses, repositories, and projects (`docs/PHILOSOPHY.md`).
 
-Its primary human interface is expected to be a dedicated Obsidian vault generated from durable structured records.
+Claude Code and Codex are the currently supported execution harnesses.
 
-Core loop
+Bindle moves context and evidence between tools that already own their domains. Harnesses, Git, repository memory, and knowledge systems remain the stores; Bindle helps work cross the seams between them.
 
-capture
-→ promote
-→ project
-→ resume
+The core loop is expressed as seam crossings:
 
-Bindle owns
+capture → promote → project → resume
 
-* cross-project session identity
-* durable session records
-* repository and agent metadata
-* current versus stale knowledge
-* explicit or proposed promotion
-* supersession
-* bounded resume context
-* provenance and evidence links
-* selective Obsidian projection
-* toolchain manifests and audits
+* capture — deterministic evidence stamped at a work boundary and embedded in a record another system owns
+* promote — working reasoning routed into the system that owns durable knowledge, only with a reason (D016)
+* project — selected knowledge emitted into human-facing surfaces maintained by owning systems
+* resume — bounded context assembled from provider-owned records through supported interfaces
 
-Bindle may later own
+## Bindle owns
+
+* toolchain manifests, doctor checks, and drift diagnosis
+* evidence-block formats and deterministic emission
+* pointers and provenance links between provider-owned records
+* lightweight adapters, hooks, templates, and commands at tool seams
+* bounded resume-context assembly from provider-owned records
+* selective projection emission; the receiving system owns the result
+
+## Bindle may later own
 
 * context assembly across sessions and repositories
-* cross-project related-session retrieval
-* contradiction or stale-knowledge warnings
-* temporal indexing adapters
-* an optional Graphiti integration
-* bootstrap and doctor workflows that enforce equivalent behavior across Claude Code and Codex, preferring shared repository-level mechanisms (git hooks, repository configuration) over harness-specific ones, with per-harness adapters only where no portable mechanism exists
+* contradiction or stale-knowledge warnings derived from evidence
+* optional derived temporal or semantic indexing adapters
+* cross-harness bootstrap and doctor workflows, preferring portable repository-level mechanisms where possible
 
-Bindle does not own
+Experimental providers or integrations do not become part of Bindle’s permanent scope merely by being evaluated or adopted temporarily.
+
+## Bindle does not own
 
 * coding-agent execution
 * model routing
@@ -44,56 +44,50 @@ Bindle does not own
 * code editing
 * browser automation
 * external documentation retrieval
-* code graphs
+* canonical code graphs
 * Git history
 * GitHub issue tracking
 * scientific-computing frameworks
-* note-taking
-* release automation
+* note-taking systems
+* canonical notes, transcripts, embeddings, project memories, or user knowledge
+* release automation for other projects
 * telemetry platforms
 * security scanning
-* a generic project-management system
+* generic project management
 
-Canonical state
+Bindle may interact with these systems through supported interfaces without becoming their owner.
 
-Canonical state should be structured, local, inspectable, and portable.
+## Bindle-owned state
 
-Candidate layout:
+Bindle is stateless with respect to user history (D015).
 
-~/.bindle/
-├── sessions/
-├── memories/
-├── index.sqlite
-└── config.yaml
+State under BINDLE_HOME is limited to:
 
-The Obsidian vault is a projection and human-curation surface.
+* configuration
+* disposable cache that can be rebuilt from owning providers
+* explicit exports requested by the user
 
-Graph databases and semantic indexes are derived and replaceable.
+There is no Bindle sessions store, memories store, or index database that acts as the only copy of durable information.
 
-Session model
+Durable artifacts remain with their natural owners. Decisions belong in repository decision logs, knowledge in approved knowledge systems, transcripts with execution harnesses, and source history in Git.
 
-A session is immutable evidence that work occurred.
+Projection and human-curation surfaces remain owned by their receiving systems, not by Bindle.
 
-A session may contain:
+Graph databases, semantic indexes, and similar retrieval structures are derived and replaceable.
 
-* identifier
-* timestamps
-* agent
-* project
-* repository
-* branch and worktree
-* intent
-* outcomes
-* decisions
-* changed files
-* evidence
-* remaining work
-* uncertainties
-* related projects
+## Evidence blocks
 
-A session is not automatically durable project guidance.
+An evidence block is an immutable observation that work occurred at a specific place and code state.
 
-Promotion
+Its schema, repository identity rules, and worktree semantics live in docs/WORKTREES.md.
+
+Evidence blocks may be embedded in records owned by other systems, such as knowledge records, handoff files, or commits.
+
+Bindle emits evidence blocks; it does not accumulate them as canonical history.
+
+An evidence block establishes provenance. It is not automatically durable project guidance or promoted knowledge.
+
+## Promotion
 
 Use a small lifecycle:
 
@@ -105,67 +99,70 @@ Promotion should initially be:
 * proposed by the agent
 * approved or edited by the user
 
+Temporary reasoning does not need promotion merely because it exists.
+
 Do not invent a broad ontology.
 
-Obsidian projection
+## Projection
 
-The dedicated Bindle vault may contain:
+Bindle may emit selected, human-useful knowledge into approved projection and curation surfaces.
+
+Projection is selective. Do not project every raw session, command, transcript, or intermediate attempt.
+
+Projected material may include:
 
 * project notes
 * current decisions
-* superseded decisions when historically important
+* historically important superseded decisions
 * patterns
 * research findings
 * open questions
-* important session landmarks
-* links across projects and evidence
+* important work landmarks
+* links across projects, evidence, and knowledge
 
-Do not project every raw session.
+The receiving system owns the projected result.
 
-Use ordinary Markdown, simple properties, and standard links.
+Generated content must not overwrite human-authored content outside clearly managed regions.
 
-Generated content must not overwrite human-authored content outside managed regions.
+For Markdown-based knowledge surfaces such as Obsidian, prefer ordinary Markdown, simple properties, and standard links. Use provider-specific features only when they add clear value without making the durable content unnecessarily dependent on that provider.
 
-First milestones
+Initial publication should be preview-first and approval-based.
 
-M0: Workshop
+## Milestones
 
-* toolchain manifest
-* skill manifest
-* MCP profiles
-* repository instructions
-* doctor command
+These labels define the stable product decomposition. Current status, sequencing, and active work live in PLAN.md.
 
-M1: Sessions
+### M0: Workshop
 
-* start
-* close
-* list
-* show
-* durable structured records
-* deterministic repository metadata
+Establish repository instructions, toolchain policy, diagnostics, development conventions, and the boundaries required to build Bindle safely.
 
-M2: Resume
+### M1: Evidence
 
-* recent sessions
-* unfinished work
-* current knowledge
-* stale-knowledge warnings
-* evidence links
-* Claude-to-Codex and Codex-to-Claude portability
+Emit deterministic evidence describing work and code state into provider-owned records while preserving provenance and worktree identity.
 
-M3: Obsidian projection
+### M2: Resume
 
-* preview generated notes
-* publish approved promoted knowledge
-* project notes
-* Bases-compatible properties
-* links across projects and knowledge
+Assemble bounded context from provider-owned records to support resuming work across sessions, repositories, and supported execution harnesses.
 
-M4: Temporal-index experiment
+### M3: Projection
 
-* Graphiti adapter
-* derived episode ingestion
-* retrieval comparison
-* provenance preservation
-* removal path
+Emit selected promoted knowledge into human-facing knowledge and curation surfaces without transferring canonical ownership to Bindle.
+
+### M4: Derived indexing experiment
+
+Evaluate optional derived indexing for retrieval, contradiction detection, or stale-knowledge discovery while preserving provenance, replaceability, and a clean removal path.
+
+Any provider evaluated for this milestone remains an implementation choice rather than part of Bindle’s fundamental scope.
+
+## Scope test
+
+Before adding a capability to Bindle, ask:
+
+1. Who naturally owns the underlying information or behavior?
+2. Can that owner be replaced without losing durable Bindle-owned truth?
+3. Does the proposed information deserve to survive beyond the work that produced it?
+4. Is Bindle crossing a tool seam, or absorbing another tool’s responsibility?
+
+If the capability requires Bindle to become the canonical owner of another system’s domain, it is outside scope unless the architecture and scope are deliberately revised.
+
+Proposals that survive this screen must pass the full feature-admission test in `docs/PHILOSOPHY.md`.
