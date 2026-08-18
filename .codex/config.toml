@@ -1,0 +1,10 @@
+# Project-scoped Codex MCP configuration. Loads only for trusted projects.
+# Mirrors the "context7" server declared in .mcp.json (Claude Code).
+# Personal servers go in your user-scoped ~/.codex/config.toml, not here.
+
+[mcp_servers.context7]
+command = "npx"
+# @latest is deliberate: context7-mcp ships every few days (multiple major
+# bumps this year); pinning would add upgrade churn without buying real
+# reproducibility for a live, already-mutable docs proxy.
+args = ["-y", "@upstash/context7-mcp@latest"]
