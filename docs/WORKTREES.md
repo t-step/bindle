@@ -16,7 +16,7 @@ The previous Bindle prototype keyed project identity on the worktree directory b
 | Scope | Examples | Behavior across linked worktrees |
 | --- | --- | --- |
 | Shared via the common directory | object store, refs, remotes, git config, `.git/hooks` (unless `core.hooksPath` overrides) | one copy for all worktrees |
-| Branch-specific (tracked files) | `AGENTS.md`, `CLAUDE.md`, `docs/`, `cog.toml`, `.gitignore`, `.om-project` if adopted | follow the checked-out branch; two worktrees on different branches can present different instructions |
+| Branch-specific (tracked files) | `AGENTS.md`, `CLAUDE.md`, `docs/`, `cog.toml`, `.gitignore` | follow the checked-out branch; two worktrees on different branches can present different instructions |
 | Worktree-local (untracked or ignored) | `.projectmem/` (fully ignored here), scratch files, build output | exist only in the checkout that created them |
 
 Consequences:
@@ -35,15 +35,9 @@ projectmem v0.2.0:
 * The primary checkout's hooks do fire in linked worktrees but bail out on the missing `.projectmem/`.
 * Net effect: projectmem is single-checkout in this repository. Record decisions made during worktree work from the primary checkout after merging. Accepted as a known limitation.
 
-obsidian-mind / om v8.3.1 (active trial — AGENTS.md, "Obsidian Mind trial"; demoted from accepted, docs/DECISIONS.md D025; the Codex anonymous-caller gap below is under observation as part of the trial):
-
-* Caller identity is the repository folder name from the MCP roots handshake, overridable by a one-line `.om-project` marker file. Without the marker, each worktree registers as a different project — the same basename-keying failure the old prototype had.
-* Operating rule: `.om-project` is committed in this repository so every worktree and branch declares the same project identity.
-* om records no VCS state anywhere; two branches of one repository are indistinguishable in its records. An embedded Bindle evidence block is the intended fix.
-
 Claude Code:
 
-* The transcript directory is keyed to the working directory, so each worktree gets its own transcript store. The auto-memory directory follows the primary repository root instead, shared across all linked worktrees. Both were re-verified empirically 2026-08-02 (om trial Gate 4): a worktree session created a new munged transcript directory containing only its transcript `.jsonl` — no `memory/` subdirectory — while its memory context resolved to the primary checkout's `memory/`. The two keyings are deliberate and independent: transcripts split per literal path, memory is repo-level. Stated together because either half alone makes the other look wrong.
+* The transcript directory is keyed to the working directory, so each worktree gets its own transcript store. The auto-memory directory follows the primary repository root instead, shared across all linked worktrees. Both were re-verified empirically 2026-08-02 (during the now-closed Obsidian Mind trial's Gate 4, docs/DECISIONS.md D028): a worktree session created a new munged transcript directory containing only its transcript `.jsonl` — no `memory/` subdirectory — while its memory context resolved to the primary checkout's `memory/`. The two keyings are deliberate and independent: transcripts split per literal path, memory is repo-level. Stated together because either half alone makes the other look wrong.
 
 Codex:
 
@@ -85,6 +79,5 @@ Inherent risks (cannot be eliminated, only documented): SHA unreachability after
 ## Known single-checkout assumptions today
 
 * `.projectmem/` is fully gitignored, so repository memory exists only in the primary checkout, and projectmem hooks can only be (re)installed from there.
-* obsidian-mind's project identity depends on the committed `.om-project` marker (in place in this repository); without it, worktree folder names would fragment project identity.
 
-Both are documented limitations, not bugs to fix in this pass.
+A documented limitation, not a bug to fix in this pass.

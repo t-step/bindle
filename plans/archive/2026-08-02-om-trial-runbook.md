@@ -1,6 +1,11 @@
 # Obsidian Mind trial — execution runbook
 
-Date: 2026-08-02. Companion to the interoperability audit and the observation plan in this
+Date: 2026-08-02. Status: **archived — trial closed without adoption, docs/DECISIONS.md D028.**
+Preserved as the historical deployment/rollback record; the vault, MCP registration, and
+`.om-project` marker described below have been removed from this repository and its user-level
+configuration. Section 9 ("Rollback") is the closure procedure that was actually followed.
+
+Companion to the interoperability audit and the observation plan in this
 directory. This document converts the settled design into a safe, observable experiment. It builds
 nothing: no roots proxy, no evidence block, no hooks, no stores, no worktree sync, no retrieval
 machinery.

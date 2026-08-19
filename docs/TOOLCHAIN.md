@@ -218,7 +218,7 @@ Memory and sessions
 Bindle does not own memory or sessions. Providers do, and Bindle bridges them (docs/PHILOSOPHY.md, docs/DATA-OWNERSHIP.md):
 
 * repository-local working memory: projectmem, adopted (D022) — branch-blind; treat as working notes, never accepted truth
-* durable personal knowledge and work records: obsidian-mind vault with the om MCP server, active trial (AGENTS.md, "Obsidian Mind trial"; demoted from accepted, docs/DECISIONS.md D025)
+* durable personal knowledge and cross-project lessons: no standing provider. The obsidian-mind/om trial closed (docs/DECISIONS.md D028); cross-project synthesis is now deliberate and human/skill-driven (see `.claude/skills/promote-learning/`) rather than a continuously installed memory system
 * transcripts and live context: Claude Code and Codex natively
 * deterministic evidence: git, stamped into evidence blocks by Bindle
 

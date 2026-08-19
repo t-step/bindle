@@ -194,3 +194,28 @@ That assumption doesn't hold against observed behavior. Checked empirically acro
 Since a fresh transcript file has nothing pre-clear in it to filter, TURN was already correctly scoped to "since the last clear" without the hook doing anything — the marker mechanism wasn't fixing a real miscount, it just wasn't the thing making TURN correct. Removed rather than kept as a defensive fallback: this is the "boring, read it, edit it" statusline script (see its own header comments), and dead code whose stated justification is empirically false is a worse trade than the small risk of a future Claude Code version reverting to non-rotating `/clear`. `statusline/vaporwave.sh` drops the `session_id`/marker-lookup code and now computes TURN as a plain count over the transcript file; `statusline/README.md` drops the "Optional: TURN reset on /clear" section; `statusline/hooks/session-end-clear-marker` is deleted. If transcript rotation-on-`/clear` ever stops being true, `vaporwave.sh`'s TURN comment is the documented first place to look.
 
 This narrows D026's own file list (`vaporwave.sh`, `session-end-clear-marker`, `README.md`) to just the first and third; D026 is left as written, an append-only record of what was true when it was made, rather than edited to match.
+
+D028: Obsidian Mind trial closed — om removed from Bindle
+
+The Obsidian Mind (`om`) trial that D023 accepted and D025 demoted back to trial is closed. **Supersedes D025.**
+
+This is a workflow-cost decision, not a finding that om failed technically. The interop audit and five-session checkpoint that motivated D023's original promotion are unchanged and remain valid historical evidence, preserved (not deleted) in `plans/archive/` by this decision. The reversal is: the incremental value om supplied did not justify the dependency, operational, and evaluation overhead of running the experiment itself. Measuring and maintaining the trial — checkpoints, the gap register, routing-quality tallies, working around the Codex anonymous-caller gap — was competing with, not supporting, actual project progression.
+
+Replacement operating model, effective immediately:
+
+* projectmem (D022) remains the accepted repository-local operational memory layer; nothing about it changes here. It already covers enough project-local memory for this workflow.
+* Cross-project synthesis — the role om's `remember`/`recall` played — is deliberate and human/skill-driven rather than a continuously installed memory system: correlate information across projects by hand, or add a narrowly targeted skill (see `.claude/skills/promote-learning/`, which already performs promotion judgment without any om dependency) when a concrete cross-project need actually emerges.
+* No standing durable-knowledge vault dependency is adopted in its place. Cross-project aggregation does not currently require a continuously installed extra memory system. If a concrete future need appears, it should be solved from that need, not by reviving om speculatively.
+
+Removed from this repository by this decision:
+
+* `.om-project` (the routing-label marker) — no longer needed; it existed only to unify om's per-worktree identity.
+* The "Obsidian Mind trial (temporary)" section of `AGENTS.md`.
+* om-specific documentation in `docs/TOOLCHAIN.md`, `docs/DATA-OWNERSHIP.md`, `docs/SCOPE.md`, and `docs/WORKTREES.md`.
+* `plans/active/2026-08-02-obsidian-mind-interop-audit.md`, `2026-08-02-om-trial-observation-plan.md`, and `2026-08-02-om-trial-runbook.md` — moved to `plans/archive/` with their content otherwise unchanged, preserved as the historical audit/observation/runbook record so the sequence (trial → promotion consideration → D025 demotion → D028 closure) stays reconstructable.
+
+Not covered by this decision, and intentionally out of scope here (consistent with D023/D025's own precedent that Bindle does not modify sibling repositories): Valence's and cover-story's own AGENTS.md still carry "Obsidian Mind" capture sections propagated under D017. Those repositories' instructions are now stale relative to this closure and need their own equivalent update, tracked separately in each repository.
+
+The `om` MCP server registration in user-level Claude Code (`~/.claude.json`) and Codex (`~/.codex/config.toml`) configuration — global, not bindle-specific — was deregistered on the machine as part of closing this experiment out of active development use generally, since no repository's project-scoped MCP config depended on it. The underlying vault and its tooling at the user's private Obsidian path were left untouched: user-owned data and scripts, plausibly reusable, never Bindle's to delete (D015).
+
+D016 and D019 remain unchanged and continue to govern preservation and promotion generally. D022 (projectmem) is unaffected.
