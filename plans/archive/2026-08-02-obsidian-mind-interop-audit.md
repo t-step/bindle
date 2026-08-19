@@ -1,6 +1,10 @@
 # Obsidian Mind interoperability audit
 
-Date: 2026-08-02. Status: audit only — nothing installed, nothing deployed.
+Date: 2026-08-02. Status: **archived — trial closed without adoption, docs/DECISIONS.md D028.**
+Findings below are preserved as historical evidence; the om MCP server is no longer registered or
+used in this repository.
+
+Original status: audit only — nothing installed, nothing deployed.
 
 Question under audit: can obsidian-mind (github.com/breferrari/obsidian-mind, v8.3.1) serve as the
 shared durable-notes and work-record layer across Claude Code and Codex without parallel stores,

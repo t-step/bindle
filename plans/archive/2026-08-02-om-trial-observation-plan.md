@@ -1,7 +1,10 @@
 # Obsidian Mind trial — observation and measurement plan
 
-Date: 2026-08-02. Companion to `plans/active/2026-08-02-obsidian-mind-interop-audit.md`.
-Status: plan only — no Bindle features are implemented by this document.
+Date: 2026-08-02. Companion to `plans/archive/2026-08-02-obsidian-mind-interop-audit.md`.
+Status: **archived — trial closed without adoption, docs/DECISIONS.md D028.** Preserved as the
+historical observation/measurement record; no longer an active protocol.
+
+Original status: plan only — no Bindle features are implemented by this document.
 
 Purpose: determine, from real work, whether the known gaps (Codex anonymous caller, no VCS state in
 records, no lifecycle automation in consuming repos, worktree identity by name only) create enough

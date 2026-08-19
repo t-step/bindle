@@ -24,8 +24,8 @@ When a durable session summary or handoff is worth writing, Claude Code and Code
 | Live session context | the harness | ephemeral | none |
 | Working reasoning in a repo (issues, attempts, fixes) | projectmem (adopted, D022) | working notes — not truth | route to it; never parse its store |
 | Accepted project decisions | `docs/DECISIONS.md` in each repository | durable | route to it |
-| Cross-project lessons, durable personal knowledge | the knowledge vault (obsidian-mind/om, active trial — AGENTS.md, "Obsidian Mind trial"; demoted from accepted, docs/DECISIONS.md D025) | durable | emit blocks the vault embeds |
-| Session narrative and work records | vault work records, or a repository handoff file | durable when reasoned | emit blocks; provide templates |
+| Cross-project lessons, durable personal knowledge | no standing provider — the obsidian-mind/om trial closed (docs/DECISIONS.md D028); a human or a narrowly scoped skill (e.g. `promote-learning`) synthesizes across projects deliberately, when a concrete need exists | not a durable store | none |
+| Session narrative and work records | a dated repository handoff file under `plans/` | durable when reasoned | provide templates |
 | Program structure | LSPs, code graphs | derived | none |
 | Toolchain desired state | `docs/TOOLCHAIN.md` (policy/recommendations); `.mcp.json` and `.codex/config.toml` (unconditional MCP config, natively consumed) | durable | owned |
 | Deterministic git evidence blocks | Bindle emits the format; owning records embed the block | derived from git at capture time | owned format — never an owned store |
@@ -38,8 +38,8 @@ When a durable session summary or handoff is worth writing, Claude Code and Code
 | Accepted project decision | `docs/DECISIONS.md` (repo-scoped); a vault decision record when personal and cross-repo | projectmem alone, chat, auto-memory |
 | Significant attempt, failure, or fix | projectmem as a working record; promote the durable lesson explicitly | projectmem's summary treated as settled truth |
 | Temporary exploration, speculative branches | transcript or scratch space — allowed to disappear | any durable store |
-| Session narrative worth keeping | one shared location: a vault work record (`om record_work`), or a dated handoff file under `plans/` when a durable vault record isn't warranted | per-provider session summaries |
-| Cross-project lesson | a vault memory with declared reach (`om remember`) | projectmem global gotchas, provider auto-memory |
+| Session narrative worth keeping | a dated handoff file under `plans/` | per-provider session summaries |
+| Cross-project lesson | deliberate human or skill-driven synthesis (e.g. `promote-learning`) when a concrete need exists — no standing cross-project store | projectmem global gotchas, provider auto-memory |
 | Project instructions | `AGENTS.md` | `CLAUDE.md` duplicates, global skills |
 | Personal preferences | provider-native memory (soft recall) | repository files |
 | Deterministic git evidence | an emitted block embedded in the receiving record | prose reconstruction from memory |

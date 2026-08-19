@@ -1,4 +1,0 @@
-# om routing label only — one lowercase name, identical in every worktree and branch.
-# This is NOT canonical repository identity; that remains the git common directory
-# plus stable remote metadata (D018, docs/WORKTREES.md).
-bindle
