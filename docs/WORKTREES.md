@@ -17,7 +17,7 @@ The previous Bindle prototype keyed project identity on the worktree directory b
 | --- | --- | --- |
 | Shared via the common directory | object store, refs, remotes, git config, `.git/hooks` (unless `core.hooksPath` overrides) | one copy for all worktrees |
 | Branch-specific (tracked files) | `AGENTS.md`, `CLAUDE.md`, `docs/`, `cog.toml`, `.gitignore` | follow the checked-out branch; two worktrees on different branches can present different instructions |
-| Worktree-local (untracked or ignored) | `.projectmem/` (fully ignored here), scratch files, build output | exist only in the checkout that created them |
+| Worktree-local (untracked or ignored) | `.projectmem/` (fully ignored here), scratch files, build output, local databases (e.g. PlanDB's `.plandb.db`) | exist only in the checkout that created them |
 
 Consequences:
 

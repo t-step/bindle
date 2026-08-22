@@ -28,6 +28,8 @@ When a durable session summary or handoff is worth writing, Claude Code and Code
 | Session narrative and work records | a dated repository handoff file under `plans/` | durable when reasoned | provide templates |
 | Program structure | LSPs, code graphs | derived | none |
 | Toolchain desired state | `docs/TOOLCHAIN.md` (policy/recommendations); `.mcp.json` and `.codex/config.toml` (unconditional MCP config, natively consumed) | durable | owned |
+| Bounded-change specification and technical plan | Spec Kit artifacts (tracked repo files) | durable | none — adopted default provider (D030), Bindle does not parse or duplicate its format |
+| Local operational execution graph / task state | PlanDB (`.plandb.db`) | local, non-canonical | none — optional recommended provider (D030), gitignored, never required |
 | Deterministic git evidence blocks | Bindle emits the format; owning records embed the block | derived from git at capture time | owned format — never an owned store |
 | Bindle runtime state | `BINDLE_HOME` | configuration, disposable cache, explicit export only | owned |
 
@@ -44,6 +46,9 @@ When a durable session summary or handoff is worth writing, Claude Code and Code
 | Personal preferences | provider-native memory (soft recall) | repository files |
 | Deterministic git evidence | an emitted block embedded in the receiving record | prose reconstruction from memory |
 | Transcripts | stay with the harness; record the pointer | copies in the vault or a repository |
+| Operational execution discovery (needed subtask, found dependency, replan within an agreed plan) | PlanDB | overwriting the Spec Kit plan; `docs/DECISIONS.md` |
+| Contract or technical-design discovery found during implementation | the relevant Spec Kit spec/plan artifact | staying only in PlanDB task notes |
+| Scope, priority, or larger-dependency discovery | the epic/roadmap or human decision layer | silent absorption as a PlanDB execution task |
 
 ## Durable versus derived
 
