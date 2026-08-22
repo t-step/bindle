@@ -149,14 +149,7 @@ Deferred:
 
 Planning
 
-* Superpowers brainstorming
-* repo-orientation
-* slice-plan
-* slice-review
-* slice-retro
-* next-best-slice
-
-Replaces a previously documented flow not installed here; see AGENTS.md's "Recommended flow" for detail.
+Installed and available on demand, not prescribed as a default or canonical sequence: Superpowers brainstorming, repo-orientation, slice-plan, slice-review, slice-retro, next-best-slice. Discovery, specification, technical-planning, task-decomposition, and next-change-selection are intentionally unassigned workflow stages pending a deliberate tooling decision; see AGENTS.md, "Planning".
 
 Diagrams
 

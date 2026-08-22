@@ -125,20 +125,7 @@ Planning
 * Publish work to GitHub only when collaboration, review, notification, or external tracking makes it useful.
 * Prefer reviewable outcomes over tiny task fragments.
 
-Recommended flow:
-
-repo-orientation (when unfamiliar with the repo)
-→ brainstorming
-→ slice-plan
-→ implementation
-→ slice-review
-→ slice-retro
-→ next-best-slice (decides what's next, then repeat)
-
-grill-me, to-spec, to-tickets, triage, and grilling — the previously documented flow — are not
-installed; this replaces them with what's actually available (verified 2026-08-12).
-
-Do not use the full flow for obvious, mechanical, or already-approved work.
+Bindle does not currently prescribe a canonical discovery, specification, technical-planning, task-decomposition, or next-change-selection workflow. repo-orientation, brainstorming (including Superpowers brainstorming), slice-plan, slice-review, slice-retro, and next-best-slice remain installed and may be invoked ad hoc when one genuinely fits the task at hand, but none of them — individually or as a sequence — is the default. This is an intentional gap (docs/TOOLCHAIN.md, "Planning"), not an oversight, pending a deliberate tooling decision. Do not invent or default to a replacement workflow without an approved plan.
 
 Skills
 

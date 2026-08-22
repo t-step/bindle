@@ -219,3 +219,13 @@ Not covered by this decision, and intentionally out of scope here (consistent wi
 The `om` MCP server registration in user-level Claude Code (`~/.claude.json`) and Codex (`~/.codex/config.toml`) configuration — global, not bindle-specific — was deregistered on the machine as part of closing this experiment out of active development use generally, since no repository's project-scoped MCP config depended on it. The underlying vault and its tooling at the user's private Obsidian path were left untouched: user-owned data and scripts, plausibly reusable, never Bindle's to delete (D015).
 
 D016 and D019 remain unchanged and continue to govern preservation and promotion generally. D022 (projectmem) is unaffected.
+
+D029: No canonical discovery/planning/review workflow — the slice sequence is no longer a default
+
+AGENTS.md and docs/TOOLCHAIN.md previously named repo-orientation → brainstorming → slice-plan → implementation → slice-review → slice-retro → next-best-slice as, in turn, "the default flow" and then "Recommended flow." A 2026-08-22 session-history audit of this machine's retained Claude Code transcripts for this repository (~3 weeks, 42 sessions) found the flow essentially unexercised: `brainstorming` had fired once; `repo-orientation`, `slice-plan`, `slice-review`, `slice-retro`, and `next-best-slice` had zero observed invocations. Availability and a documented recommendation had not translated into use.
+
+This decision removes the sequence's canonical/default status. The individual skills are unaffected — they remain installed and may still be invoked ad hoc when one genuinely fits a task — but AGENTS.md and docs/TOOLCHAIN.md no longer describe them as the workflow this repository defaults to.
+
+This does not adopt a replacement. Discovery, specification, technical planning, task decomposition, parallel-execution organization, and next-change selection are intentionally unassigned stages in this repository's workflow map, not gaps to be silently filled by whichever skill happens to be installed. Candidate tooling for these stages (for example Spec Kit, PlanDB, LangGraph, LangSmith) was surveyed the same day this decision was made but is explicitly not adopted, installed, or configured by it — see PLAN.md for that survey's status. A future default workflow, if any, requires its own deliberate decision under the same evidence bar D020/D021 already set for tool adoption: demonstrated use, not availability.
+
+D002 (repository tooling precedence) and D008 (availability does not imply adoption) remain the governing general policy this decision applies to planning workflow specifically.
