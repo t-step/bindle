@@ -111,6 +111,17 @@ check_decision_references() {
 }
 check_decision_references || fail=1
 
+# --- 8. bindle CLI unit tests -------------------------------------------------
+section "python3 -m unittest (bindle CLI)"
+if ! command -v python3 >/dev/null 2>&1; then
+  printf '  ✗ python3 not found on PATH — install it and re-run\n'
+  fail=1
+elif python3 -m unittest discover -s tests -t . -v; then
+  printf '  ✓ bindle CLI unit tests passed\n'
+else
+  fail=1
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then
   echo "scripts/check.sh: all checks passed"

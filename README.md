@@ -25,6 +25,21 @@ A few concepts guide the project.
 * Make useful things explicit before making them automated.
 * Build only after a pattern appears more than once.
 
+## CLI
+
+Bindle has a minimal, provider-neutral CLI. Run it in development with `uv run`:
+
+```sh
+uv run bindle --version
+uv run bindle repo info
+uv run bindle repo info --json
+```
+
+* `bindle --version` — deterministic package version.
+* `bindle repo info` — repository/execution/code-state identity (docs/WORKTREES.md): repository root, current worktree root, Git directory, Git common directory, current branch (when attached), and HEAD SHA. Add `--json` for machine-readable output.
+
+The CLI stays intentionally small; it is infrastructure for future narrow capabilities, not a work-DAG or orchestration layer (see AGENTS.md, docs/SCOPE.md).
+
 ## Current workshop
 
 Today Bindle assumes a fairly standard engineering toolkit — coding harnesses, a knowledge vault, source control, and a handful of domain-specific tools spanning scientific computing and game development.
