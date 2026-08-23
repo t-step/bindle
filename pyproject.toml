@@ -1,0 +1,20 @@
+[project]
+name = "bindle"
+dynamic = ["version"]
+description = "Bindle CLI — a minimal, provider-neutral entrypoint for toolchain seam helpers."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+[project.scripts]
+bindle = "bindle.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/bindle/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bindle"]
