@@ -6,20 +6,18 @@ Define and validate the smallest useful Bindle vertical slice.
 
 Current
 
-Establish the shared workshop and durable-session model before implementing memory or graph infrastructure.
+Repository baseline integrity is promoted: `main` is protected via an active ruleset and changes land through PR review. `bash scripts/check.sh` is the canonical local repository verification gate, and GitHub Actions CI (`.github/workflows/ci.yml`) reruns it as a required check on each PR revision, not as the first execution of these checks. The Obsidian Mind (`om`) trial is closed (docs/DECISIONS.md D028); no standing cross-project memory system replaces it. The repo-orientation → brainstorming → slice-plan → implementation → slice-review → slice-retro → next-best-slice sequence is retired as this repository's canonical/default workflow (docs/DECISIONS.md D029); the individual skills remain available ad hoc. A replacement discovery/planning/execution coordination model is under exploration, not adopted.
 
 Next
 
-1. Create the repository skeleton and manifests.
-2. Implement a read-only doctor command.
-3. Define the initial session-record schema.
-4. Trial repository-local memory tooling in Valence.
-5. Establish the dedicated Bindle Obsidian vault.
+1. Evaluate a provider-neutral implementation-work model, including a minimal repository-scoped local SQLite coordination ledger and selected Symphony-style scheduling semantics, before adopting a replacement workflow architecture. This is exploration, not adoption — no tool, framework, or schema from this evaluation is standing repository policy until a decision records it.
+2. Implement the first evidence-block emission path — deterministic emission from git state, embedding into a provider-owned record, list/show of emitted blocks — as the first concrete piece of M1.
+3. Begin the first vertical slice implementation once M1 emission lands.
 
 Blocked
 
 * Graphiti adoption waits on real session records and retrieval failures.
-* Automatic Obsidian publication waits on preview quality.
+* Automated knowledge projection waits on a defined projection mechanism and preview quality (docs/SCOPE.md M3).
 * Release automation waits on an installable product.
 
 Later
