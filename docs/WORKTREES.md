@@ -17,7 +17,7 @@ The previous Bindle prototype keyed project identity on the worktree directory b
 | --- | --- | --- |
 | Shared via the common directory | object store, refs, remotes, git config, `.git/hooks` (unless `core.hooksPath` overrides) | one copy for all worktrees |
 | Branch-specific (tracked files) | `AGENTS.md`, `CLAUDE.md`, `docs/`, `cog.toml`, `.gitignore` | follow the checked-out branch; two worktrees on different branches can present different instructions |
-| Worktree-local (untracked or ignored) | `.projectmem/` (fully ignored here), scratch files, build output | exist only in the checkout that created them |
+| Worktree-local (untracked or ignored) | `.projectmem/` (fully ignored here), scratch files, build output, local databases (e.g. PlanDB's `.plandb.db`) | exist only in the checkout that created them |
 
 Consequences:
 
@@ -42,6 +42,14 @@ Claude Code:
 Codex:
 
 * Thread records natively carry cwd, git SHA, branch, and origin URL (observed in local state).
+
+PlanDB v0.2.1 (at adoption, docs/DECISIONS.md D030):
+
+* `.plandb.db` defaults to the current working directory, so it is worktree-local like the other entries in the table above: linked worktrees do not share it automatically.
+* A PlanDB execution graph belongs to the worktree executing the bounded change it coordinates. Agents being coordinated by that graph must operate against that same `.plandb.db` — in practice, run from that worktree.
+* Do not assume atomic claiming, ready/blocked state, or dependency updates coordinate agents that are operating against separate, independent PlanDB databases in separate worktrees.
+* Net effect: the normal model for a PlanDB-coordinated bounded change is one executing worktree with multiple native Claude Code / Codex agents operating against its graph — not a graph spanning worktrees. This is consistent with, not a change to, the one-worktree-per-active-slice rule (AGENTS.md, "Development isolation").
+* If future usage demonstrates a real need to coordinate PlanDB execution across separate worktrees, treat that as a concrete seam to solve then (AGENTS.md, "Repository tooling precedence"). No synchronization mechanism or adapter is built by this note.
 
 ## Operating rules for now
 

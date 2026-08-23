@@ -125,20 +125,22 @@ Planning
 * Publish work to GitHub only when collaboration, review, notification, or external tracking makes it useful.
 * Prefer reviewable outcomes over tiny task fragments.
 
-Recommended flow:
+Workflow lifecycle (docs/DECISIONS.md D030)
 
-repo-orientation (when unfamiliar with the repo)
-→ brainstorming
-→ slice-plan
-→ implementation
-→ slice-review
-→ slice-retro
-→ next-best-slice (decides what's next, then repeat)
+Bindle documents ownership across an engineering lifecycle; it does not implement any stage of it:
 
-grill-me, to-spec, to-tickets, triage, and grilling — the previously documented flow — are not
-installed; this replaces them with what's actually available (verified 2026-08-12).
+discovery / product thinking → epic / roadmap / larger outcome → bounded change → Spec Kit (specify → clarify when needed → plan) → PlanDB when execution benefits from a dependency graph, otherwise direct implementation → ready-work frontier executed by Claude Code / Codex native agents → integration → review / verification → durable project learning where warranted.
 
-Do not use the full flow for obvious, mechanical, or already-approved work.
+* Discovery, epic/roadmap prioritization, and selecting the next bounded change are intentionally unassigned. Do not silently fill this gap with a personal skill (slice-*, next-best-*, repo-orientation) or an invented mechanism.
+* A bounded change enters specification and technical planning through Spec Kit. The adopted stopping point is specify → clarify (as needed) → plan; Spec Kit's own tasks/implement stages are not part of Bindle's adopted execution model. Do not invent a parallel Bindle specification format.
+* A small or naturally sequential technical plan may be implemented directly. When execution would materially benefit from a dependency-aware graph — several independent implementation branches, multiple coding agents, atomic claiming, execution spanning sessions, in-flight replanning — PlanDB owns that operational execution graph: decomposition, dependencies, ready/blocked/active/completed state, and agent claiming. PlanDB is optional, local (`.plandb.db`, gitignored by the repository's generic `*.db` rule), and never canonical repository truth; it does not replace projectmem or docs/DECISIONS.md, and its context/notes facility does not replace projectmem or tracked project documentation.
+* Operational feedback discipline keeps execution state from becoming hidden product or design authority: operational discoveries (a needed subtask, a found dependency, replanning within an already-agreed plan) may mutate PlanDB freely; contract or technical-design discoveries must flow back into the relevant Spec Kit spec/plan artifact; scope, priority, or larger-dependency discoveries must flow back to the epic/roadmap or human decision layer, never be silently absorbed as execution tasks.
+* Express only real dependency constraints and let independent work become ready concurrently, rather than prescribing a manually ordered sequence of slices. Ready work is executed by Claude Code's and Codex's native agent mechanisms, not a Bindle-built orchestration layer — the five-subagent delegation ceiling above applies regardless of how many tasks PlanDB reports ready.
+* Integration, review, and durable-learning routing are governed by this repository's own conventions elsewhere in this file and in docs/DATA-OWNERSHIP.md; this section does not redefine them.
+
+repo-orientation, brainstorming (including Superpowers brainstorming), slice-plan, slice-review, slice-retro, and next-best-slice remain installed and may be invoked ad hoc when one genuinely fits the task at hand; none of them defines this workflow's canonical stages.
+
+For an application that genuinely needs explicit stateful agent orchestration — branching/loops, checkpointing and resumption, human-in-the-loop transitions, multiple cooperating agents — LangGraph is a project-scoped runtime recommendation (docs/TOOLCHAIN.md), not part of Bindle's own execution harness and not required for ordinary model calls or non-agentic code. LangSmith is not adopted.
 
 Skills
 

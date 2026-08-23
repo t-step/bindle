@@ -89,6 +89,14 @@ Game development
 
 Other engines are outside the initial toolchain.
 
+Agentic application runtime
+
+Project-scoped, adopted for applications that need it — not part of Bindle's own execution harness and not required for ordinary model calls or non-agentic code (docs/DECISIONS.md D030):
+
+* LangGraph — when an application genuinely needs explicit stateful agent orchestration: branching/loops, checkpointing and resumption, human-in-the-loop transitions, multiple cooperating agents, explicit orchestration topology. Does not require LangChain.
+
+LangSmith is not adopted. Agent observability and evals are a separate, later question.
+
 Skills
 
 Core engineering
@@ -149,14 +157,16 @@ Deferred:
 
 Planning
 
-* Superpowers brainstorming
-* repo-orientation
-* slice-plan
-* slice-review
-* slice-retro
-* next-best-slice
+Workflow-stage tooling adopted (docs/DECISIONS.md D030); see AGENTS.md, "Planning" for the lifecycle and ownership boundaries.
 
-Replaces a previously documented flow not installed here; see AGENTS.md's "Recommended flow" for detail.
+* Spec Kit (`specify`, installed user-wide, v1.0.1 at adoption) — shared specification and technical planning for a bounded change. Adopted stopping point: specify → clarify (as needed) → plan. Its tasks/implement stages are not part of Bindle's adopted execution model.
+* PlanDB (`plandb`, installed user-wide, v0.2.1 at adoption) — optional local operational execution graph (dependency-aware decomposition, ready/blocked/active/completed state, atomic agent claiming) when execution genuinely benefits from one. `.plandb.db` is local, gitignored (covered by `.gitignore`'s generic `*.db` rule), non-canonical state — never required, never a projectmem or docs/DECISIONS.md substitute.
+
+Discovery, epic/roadmap prioritization, and next-bounded-change selection remain intentionally unassigned; do not fill the gap with a personal skill or an invented mechanism (AGENTS.md, "Planning").
+
+Superpowers brainstorming, repo-orientation, slice-plan, slice-review, slice-retro, next-best-slice remain installed and available on demand; none of them defines this workflow's canonical stages.
+
+Known manual seam: a Spec Kit technical plan does not flow automatically into a PlanDB execution graph. No adapter is built; translate by hand until repeated friction justifies one (AGENTS.md, "Repository tooling precedence").
 
 Diagrams
 

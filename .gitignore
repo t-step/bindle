@@ -118,7 +118,7 @@ public/generated/
 plans/scratch/
 scratch/
 
-# SQLite and local databases
+# SQLite and local databases (also covers PlanDB's default `.plandb.db`)
 *.db
 *.db-shm
 *.db-wal

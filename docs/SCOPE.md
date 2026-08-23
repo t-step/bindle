@@ -49,7 +49,7 @@ Bindle does not own
 * release automation as a product other projects delegate to (ordinary CI, versioning, tagging, or packaging for Bindle's own repository is a separate question and is not excluded by this — docs/TOOLCHAIN.md, "Release policy")
 * telemetry platforms
 * security scanning
-* a generic project-management system
+* a generic project-management system (recommending an external, optional execution-graph provider such as PlanDB for local task state — docs/DECISIONS.md D030 — is not Bindle building one; PlanDB is not required, and its state is never canonical)
 
 Bindle-owned state
 

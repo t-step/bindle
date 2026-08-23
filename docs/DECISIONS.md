@@ -219,3 +219,40 @@ Not covered by this decision, and intentionally out of scope here (consistent wi
 The `om` MCP server registration in user-level Claude Code (`~/.claude.json`) and Codex (`~/.codex/config.toml`) configuration — global, not bindle-specific — was deregistered on the machine as part of closing this experiment out of active development use generally, since no repository's project-scoped MCP config depended on it. The underlying vault and its tooling at the user's private Obsidian path were left untouched: user-owned data and scripts, plausibly reusable, never Bindle's to delete (D015).
 
 D016 and D019 remain unchanged and continue to govern preservation and promotion generally. D022 (projectmem) is unaffected.
+
+D029: No canonical discovery/planning/review workflow — the slice sequence is no longer a default
+
+AGENTS.md and docs/TOOLCHAIN.md previously named repo-orientation → brainstorming → slice-plan → implementation → slice-review → slice-retro → next-best-slice as, in turn, "the default flow" and then "Recommended flow." A 2026-08-22 session-history audit of this machine's retained Claude Code transcripts for this repository (~3 weeks, 42 sessions) found the flow essentially unexercised: `brainstorming` had fired once; `repo-orientation`, `slice-plan`, `slice-review`, `slice-retro`, and `next-best-slice` had zero observed invocations. Availability and a documented recommendation had not translated into use.
+
+This decision removes the sequence's canonical/default status. The individual skills are unaffected — they remain installed and may still be invoked ad hoc when one genuinely fits a task — but AGENTS.md and docs/TOOLCHAIN.md no longer describe them as the workflow this repository defaults to.
+
+This does not adopt a replacement. Discovery, specification, technical planning, task decomposition, parallel-execution organization, and next-change selection are intentionally unassigned stages in this repository's workflow map, not gaps to be silently filled by whichever skill happens to be installed. Candidate tooling for these stages (for example Spec Kit, PlanDB, LangGraph, LangSmith) was surveyed the same day this decision was made but is explicitly not adopted, installed, or configured by it — see PLAN.md for that survey's status. A future default workflow, if any, requires its own deliberate decision under the same evidence bar D020/D021 already set for tool adoption: demonstrated use, not availability.
+
+D002 (repository tooling precedence) and D008 (availability does not imply adoption) remain the governing general policy this decision applies to planning workflow specifically.
+
+D030: Spec Kit and PlanDB adopted as specification/execution-graph providers; LangGraph adopted for project-scoped agent runtimes; LangSmith not adopted
+
+This decision fills part of the gap D029 left open, for the stages where a concrete choice is now warranted. It does not claim the whole gap is closed: discovery, epic/roadmap prioritization, and next-bounded-change selection remain intentionally unassigned (see below).
+
+Adopted, effective immediately:
+
+* Spec Kit (`specify`, installed user-wide, v1.0.1 at adoption) owns shared specification and technical planning for a bounded change substantial enough to warrant formal, reviewable artifacts. This repository's adopted stopping point is specify → clarify (as needed) → plan. Spec Kit's own tasks/implement stages exist upstream but are not part of Bindle's adopted execution model — PlanDB or direct implementation take over after the technical plan. Spec Kit does not replace docs/DECISIONS.md as the durable-decision store, and Bindle does not invent a parallel specification format.
+* PlanDB (`plandb`, installed user-wide, v0.2.1 at adoption) owns the optional local operational execution graph — task decomposition, dependencies, ready/blocked/active/completed state, and atomic agent claiming — when execution genuinely benefits from a dependency-aware graph: several independent implementation branches, multiple coding agents, atomic claiming, execution spanning sessions, or in-flight replanning as implementation discovers new work. It is not required for a small or naturally sequential plan, which may be implemented directly. `.plandb.db` is local operational state, already covered by this repository's generic `*.db` ignore rule, and is never shared or canonical repository truth. PlanDB does not own product scope, requirements, accepted contracts, or architectural truth, and its context/notes facility does not replace projectmem or tracked project documentation.
+* LangGraph is adopted as a project-scoped agent-runtime recommendation (docs/TOOLCHAIN.md) for applications that genuinely need explicit stateful agent orchestration — branching/loops, checkpointing and resumption, human-in-the-loop transitions, multiple cooperating agents, explicit orchestration topology. It is not part of Bindle's own execution harness — D001 is unchanged, Bindle still does not implement a generic agent loop — and it is not required for ordinary model calls or non-agentic application code. LangChain is not a prerequisite for using it.
+* LangSmith is explicitly not adopted, installed, or configured by this decision. Agent observability and evals remain an open question, to be considered separately later.
+
+Operational feedback discipline, so execution state cannot become hidden product or design authority:
+
+* Operational discoveries — a needed subtask, a found dependency, replanning within an already-agreed plan — may mutate PlanDB freely.
+* Contract or technical-design discoveries must flow back into the relevant Spec Kit spec/plan artifact, not stay embedded only in PlanDB task notes.
+* Scope, priority, or larger-dependency discoveries must flow back to the epic/roadmap or human decision layer, never be silently absorbed as execution tasks.
+
+Parallelism: the workflow expresses only real dependency constraints and lets independent work become ready concurrently; it does not prescribe a manually ordered sequence of slices. Ready work is executed by Claude Code's and Codex's native agent mechanisms, not a Bindle-built orchestration layer — AGENTS.md's five-subagent delegation ceiling is unchanged and governs regardless of how many tasks PlanDB reports ready.
+
+Explicitly unassigned by this decision, consistent with D029: discovery/product thinking, epic and roadmap prioritization, and selecting which bounded change comes next remain without an assigned owner. The personal slice-*/next-best-* skills are not reassigned to fill this gap (AGENTS.md, "Planning"). If Spec Kit's own roadmap or spec-of-specs mechanism turns out to cover part of this gap in practice, that should be documented as observed use later, not assumed here.
+
+Known seam, accepted as manual for now: a Spec Kit technical plan (Markdown) does not flow automatically into a PlanDB execution graph. No adapter is built by this decision — AGENTS.md's tooling precedence extends or builds only after repeated observed friction, not speculatively. If repeated use later shows the manual handoff is a real bottleneck, a thin adapter may be justified then.
+
+This decision documents adopted policy, not a repository initialization: no Spec Kit project (`specify init`) and no PlanDB database were created in Bindle's own repository by it, and both CLIs were already installed user-wide beforehand and were not reinstalled.
+
+D002 (repository tooling precedence) and D008 (availability does not imply adoption) remain the governing general policy this decision applies to workflow tooling specifically. This decision is reflected in AGENTS.md ("Planning"), docs/TOOLCHAIN.md ("Planning" and the new agent-runtime tooling entry — Spec Kit and PlanDB are CLIs, not MCP servers, so no MCP/skill manifest changes follow from it), docs/DATA-OWNERSHIP.md's ownership and routing tables, docs/WORKTREES.md, and PLAN.md's current-status note.
