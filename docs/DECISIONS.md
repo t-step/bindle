@@ -175,7 +175,7 @@ This decision operationalizes D016 by defining when the preservation question sh
 
 The code-review-graph trial concluded without adoption.
 
-A session audit on 2026-08-12 examined actual tool invocations rather than textual mentions of the tool. Across the Valence and cover-story session history available for the audit, the provider had been available broadly but had no real tool invocations and no evidence that agents sought it out.
+A session audit on 2026-08-12 examined actual tool invocations rather than textual mentions of the tool. Across the Valence and cover-story session history available for the audit, the provider had been available broadly but had no real tool invocations and no evidence that agents sought it out. <!-- private-ok: Bindle's own repo/decision names, not personal info -->
 
 The initial search had produced a misleading positive signal because tool availability appeared in transcripts even when the tool was never used. The corrected audit parsed actual `tool_use` activity.
 
