@@ -58,8 +58,10 @@ check_file "cog.toml" "Cocogitto configuration"
 check_file "docs/TOOLCHAIN.md" "Toolchain documentation"
 check_file "docs/SCOPE.md" "Scope documentation"
 check_file "docs/DECISIONS.md" "Decision log"
-check_file "config/skills.yaml" "Skill manifest"
-check_file "config/mcp-profiles.yaml" "MCP profile manifest"
+check_file "docs/PRIVACY.md" "Privacy documentation"
+check_file "bin/check-private-info.sh" "Personal-disclosure guard"
+check_file ".mcp.json" "Claude Code MCP defaults"
+check_file ".codex/config.toml" "Codex MCP defaults"
 
 printf '\nNotes\n'
 printf '%s\n' '-----'

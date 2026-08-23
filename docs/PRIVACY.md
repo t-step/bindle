@@ -40,11 +40,22 @@ Repository commit-time enforcement is a backstop, not permission to generate uns
 
 ## Personal-disclosure guard
 
-bin/check-private-info.sh is the repository’s canonical personal-disclosure guard. Its self-tests live in bin/test-check-private-info.sh.
+bin/check-private-info.sh is the repository’s canonical personal-disclosure guard. Its self-tests live in bin/test-check-private-info.sh. Both are tracked in this repository and run offline.
 
-The guard runs offline and is enforced at the repository boundary through the pre-commit hook. Publish or release mechanisms that can expose repository content must apply the same guard.
+The guard is intended to run at the repository boundary as a pre-commit check, scanning the staged (index) content a commit would actually write — not the working tree, which can differ from what gets committed. Git hooks are not tracked by Git, so a fresh checkout has no enforcement until the hook is installed locally. `.git` is a plain file (not a directory) in a linked worktree, so writing directly to `.git/hooks/pre-commit` breaks there; resolve the hook path through Git instead, which works from both a primary checkout and a linked worktree:
 
-Claude Code, Codex, and humans at the terminal should inherit the same enforcement. Do not create separate harness-specific implementations of the same privacy policy.
+```
+hook="$(git rev-parse --git-path hooks/pre-commit)"
+cat > "$hook" <<'HOOK'
+#!/usr/bin/env bash
+exec bin/check-private-info.sh --staged
+HOOK
+chmod +x "$hook"
+```
+
+Until that step is done, the guard exists and can be run manually (`bash bin/check-private-info.sh --staged`, or `bash bin/check-private-info.sh` for the full tree) but is not enforced automatically. Do not describe the guard as "enforced by the repository" in a context where the reader cannot reproduce that enforcement from a fresh checkout — say instead that the guard is present and must be installed. Publish or release mechanisms that can expose repository content must apply the same guard.
+
+Claude Code, Codex, and humans at the terminal should inherit the same enforcement once the hook is installed. Do not create separate harness-specific implementations of the same privacy policy.
 
 ### Guard invariants
 
@@ -67,6 +78,8 @@ Maintain one canonical implementation of the disclosure guard. Extend that imple
 ## Private configuration
 
 The personal denylist lives outside every repository and must never be committed.
+
+Path convention: `$BINDLE_DENYLIST` when set, otherwise `<notes home>/private-denylist.txt`, where the notes home is `$BINDLE_NOTES_DIR` when set, else `~/.bindle`. One term per line, case-insensitive, `#` comments. A term belongs on the list only if it has zero *unvouched* tracked occurrences, forever — a specific legitimate occurrence may carry a narrow `private-ok` vouch (the same mechanism the normal scan honors), but an unvouched occurrence means the term isn't ready to rely on. `bin/check-private-info.sh --audit-denylist` proves that against the current tree before a term starts flagging every commit.
 
 Public Bindle code may reference the denylist’s path convention, but must never:
 
