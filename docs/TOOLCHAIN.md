@@ -108,7 +108,7 @@ Use the smallest relevant skill set and do not infer adoption from installation 
 
 ### Planning and review
 
-The current Bindle planning flow uses:
+No discovery/planning/review sequence is canonical or default (docs/DECISIONS.md D029).
 
 * repo-orientation
 * brainstorming
@@ -117,9 +117,7 @@ The current Bindle planning flow uses:
 * slice-retro
 * next-best-slice
 
-The expected workflow and conditions for using it are defined in AGENTS.md.
-
-Do not use the full sequence for obvious, mechanical, or already-approved work.
+These remain installed and available on demand; none of them defines this workflow's canonical stages. See AGENTS.md, "Planning" for current guidance and what remains intentionally unassigned.
 
 ### Frontend and product
 
@@ -209,7 +207,6 @@ Current recommendations include:
 | browser automation | Playwright | Adopted, task-specific |
 | Hugging Face interaction | Hugging Face MCP | Project-scoped |
 | project working memory | projectmem | Adopted |
-| durable knowledge/work-record experiment | om | Trial |
 
 GitHub interaction uses the gh CLI directly. A dedicated GitHub MCP server is not currently adopted.
 
@@ -236,7 +233,7 @@ Bindle does not own user memory, working reasoning, transcripts, or durable know
 
 | Role | Current provider | State | Ownership |
 | repository-local working memory | projectmem | Adopted | provider-owned, machine-local |
-| durable knowledge and work records | Obsidian / om | Trial | knowledge-surface owned |
+| durable knowledge and work records | no standing provider | Closed (D028) | none — deliberate, human/skill-driven when a concrete need emerges |
 | live sessions and transcripts | Claude Code / Codex | Native | harness-owned |
 | deterministic code-state evidence | Git + Bindle evidence blocks | Bindle capability | emitted into provider-owned records |
 
@@ -252,7 +249,7 @@ Its detailed operating rules live in AGENTS.md.
 
 Durable lessons and work records belong to an approved knowledge surface rather than Bindle itself.
 
-The current Obsidian/om integration is a trial, not a permanent architectural dependency. Provider-specific limitations and trial outcomes belong in the relevant decision or trial records.
+The Obsidian Mind (om) trial closed without adoption (docs/DECISIONS.md D028). No standing durable-knowledge or cross-project memory provider is currently adopted. Cross-project synthesis is deliberate and human-driven, or performed by a narrow, purpose-built skill when a concrete need emerges, rather than a continuously installed memory system. Historical trial evidence is preserved in `plans/archive/`.
 
 ### Evidence
 

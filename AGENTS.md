@@ -107,11 +107,9 @@ Prefer local Markdown planning.
 * Publish work to GitHub when collaboration, review, notification, or external tracking makes it useful.
 * Prefer reviewable outcomes over tiny task fragments.
 
-For substantial product work, the default flow is:
+No discovery/planning/review workflow is canonical or default (D029). repo-orientation, brainstorming, slice-plan, slice-review, slice-retro, and next-best-slice remain installed and may be invoked ad hoc when one genuinely fits the task at hand; none of them defines this repository's required workflow stages.
 
-repo-orientation → brainstorming → slice-plan → implementation → slice-review → slice-retro → next-best-slice
-
-Do not use the full flow for obvious, mechanical, or already-approved work.
+Discovery, specification, technical planning, task decomposition, and next-change selection are intentionally unassigned. Do not silently fill this gap with a personal skill, framework, or tool merely because it is installed or available.
 
 Skills
 
@@ -272,15 +270,13 @@ as the stable installed release.
 
 Do not reinstall or replace the stable CLI unless explicitly requested.
 
-Obsidian Mind trial
+Cross-project synthesis
 
-om remains an optional, demoted trial (D025), not repository authority.
+The Obsidian Mind (om) trial is closed (D028); it is not repository authority and is not registered or used by this repository.
 
-When available, use it only for checkpoint-based cross-project capture under docs/DATA-OWNERSHIP.md. Do not capture routinely merely because the tool is available.
+No standing cross-project memory system replaces it. Cross-project synthesis is deliberate and human-driven, or performed by a narrow, purpose-built skill when a concrete need actually emerges — never routine capture merely because a tool is available.
 
-Accepted decisions still belong in tracked repository documentation.
-
-Do not silently work around known provider-identity limitations. See D019, D025, and docs/TOOLCHAIN.md for trial details.
+Accepted decisions belong in tracked repository documentation (docs/DECISIONS.md), never only in a memory or knowledge-vault tool.
 
 Showcase
 

@@ -261,6 +261,8 @@ Dependencies that affect build, test, or runtime determinism should still be pin
 
 ## D025: Obsidian Mind returned to trial
 
+**Superseded by D028.**
+
 D023's promotion is reversed.
 
 Obsidian Mind (`om`) returns to **Trial** status.
@@ -312,3 +314,40 @@ The marker hook and corresponding lookup logic were removed.
 The statusline now derives TURN directly from the active transcript.
 
 D026 remains in force for tracking the statusline itself; D027 supersedes only the removed SessionEnd marker mechanism.
+
+## D028: Obsidian Mind trial closed — om removed from Bindle
+
+The Obsidian Mind (`om`) trial that D023 accepted and D025 demoted back to trial is closed. **Supersedes D025.**
+
+This is a workflow-cost decision, not a finding that om failed technically. The interoperability audit and five-session checkpoint that motivated D023's original promotion are unchanged and remain valid historical evidence, preserved (not deleted) in `plans/archive/`. The reversal is: the incremental value om supplied did not justify the dependency, operational, and evaluation overhead of running the experiment itself. Measuring and maintaining the trial — checkpoints, the gap register, routing-quality tallies, working around the Codex anonymous-caller gap — was competing with, not supporting, actual project progression.
+
+Replacement operating model, effective immediately:
+
+* projectmem (D022) remains the accepted repository-local operational memory layer; nothing about it changes here. It already covers enough project-local memory for this workflow.
+* No standing cross-project memory system replaces om. Cross-project synthesis — the role om's `remember`/`recall` played — is deliberate and human-driven, or can be performed by a narrow, purpose-built skill when a concrete cross-project need actually emerges, rather than by a continuously installed memory system.
+* No standing durable-knowledge vault dependency is adopted in its place. Cross-project aggregation does not currently require a continuously installed extra memory system. If a concrete future need appears, it should be solved from that need, not by reviving om speculatively.
+
+Removed from this repository by this decision:
+
+* The "Obsidian Mind trial" section of `AGENTS.md`.
+* om-specific documentation in `docs/TOOLCHAIN.md` and `docs/DATA-OWNERSHIP.md`.
+
+`.om-project` (the routing-label marker om used for per-worktree identity) was never committed to this repository's `main` and is not recreated by, or as a consequence of, this decision.
+
+`plans/archive/2026-08-02-obsidian-mind-interop-audit.md`, `2026-08-02-om-trial-observation-plan.md`, and `2026-08-02-om-trial-runbook.md` are promoted into this repository's `plans/archive/` by this decision, content otherwise unchanged, preserving the historical audit/observation/runbook record so the sequence (trial → promotion consideration → D025 demotion → D028 closure) stays reconstructable.
+
+Not covered by this decision, and intentionally out of scope here (consistent with D023/D025's own precedent that Bindle does not modify sibling repositories): other repositories' own instructions may still carry Obsidian Mind capture sections propagated under D017. Those repositories need their own equivalent update, tracked separately in each repository.
+
+Any `om` MCP server registration in user-level Claude Code or Codex configuration, and the underlying vault and its tooling at the user's private Obsidian path, are outside this decision's scope (D015) — global configuration and user-owned data are not modified by this repository decision.
+
+D016 and D019 remain unchanged and continue to govern preservation and promotion generally. D022 (projectmem) is unaffected.
+
+## D029: No canonical discovery/planning/review workflow — the slice sequence is no longer a default
+
+AGENTS.md and docs/TOOLCHAIN.md previously named repo-orientation → brainstorming → slice-plan → implementation → slice-review → slice-retro → next-best-slice as the default flow for substantial product work. A session-history audit of this machine's retained Claude Code transcripts for this repository found the flow essentially unexercised: it had close to zero observed invocations in retained usage history. Availability and a documented recommendation had not translated into actual use.
+
+This decision removes the sequence's canonical/default status. The individual skills are unaffected — they remain installed and may still be invoked ad hoc when one genuinely fits a task — but AGENTS.md and docs/TOOLCHAIN.md no longer describe them as the workflow this repository defaults to.
+
+This does not adopt a replacement. Discovery, specification, technical planning, task decomposition, parallel-execution organization, and next-change selection are intentionally unassigned stages in this repository's workflow map, not gaps to be silently filled by whichever skill, framework, or tool happens to be available. A future default workflow, if any, requires its own deliberate decision under the same evidence bar D020/D021 already set for tool adoption: demonstrated use, not availability.
+
+D002 (repository tooling precedence) and D008 (availability does not imply adoption) remain the governing general policy this decision applies to planning workflow specifically.
