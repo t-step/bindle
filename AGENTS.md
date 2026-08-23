@@ -48,8 +48,8 @@ Scope and safety
 * Preserve existing uncommitted changes.
 * Do not discard, reset, or overwrite user work.
 * Use established repository verification commands.
-* Run relevant checks locally before claiming completion or opening a PR.
-* Do not use GitHub CI as the first execution of a check.
+* `bash scripts/check.sh` is the canonical repository verification gate. Run it locally before opening a PR, and rerun it before declaring an updated PR ready for review whenever relevant repository changes were made.
+* Do not use GitHub CI as the first execution of a check. GitHub Actions (.github/workflows/ci.yml) reruns `scripts/check.sh` independently on each PR revision as a backstop, not as the first execution of these checks.
 * Do not commit unless explicitly requested.
 * Do not bypass repository hooks.
 

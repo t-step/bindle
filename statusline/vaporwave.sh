@@ -133,7 +133,7 @@ if b=$(git -C "$cwd" symbolic-ref --short HEAD 2>/dev/null || git -C "$cwd" rev-
     branch_suffix="${branch_suffix} ✱${n}"
     git_color="$C_HIGH"
   fi
-  ab=$(git -C "$cwd" rev-list --left-right --count @{u}...HEAD 2>/dev/null)
+  ab=$(git -C "$cwd" rev-list --left-right --count "@{u}...HEAD" 2>/dev/null)
   if [ -n "$ab" ]; then
     behind=$(printf '%s' "$ab" | awk '{print $1}')
     ahead=$(printf '%s' "$ab" | awk '{print $2}')
@@ -173,7 +173,7 @@ fi
 # lookup (via gh) would be more precise but requires a network call; the
 # statusline hook has no tight execution timeout, so that stays out of this
 # synchronous path for now.
-delta_base=$(git -C "$cwd" rev-parse --symbolic-full-name @{u} 2>/dev/null)
+delta_base=$(git -C "$cwd" rev-parse --symbolic-full-name "@{u}" 2>/dev/null)
 [ -z "$delta_base" ] && delta_base=$(git -C "$cwd" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null)
 delta_mb=""
 [ -n "$delta_base" ] && delta_mb=$(git -C "$cwd" merge-base "$delta_base" HEAD 2>/dev/null)
@@ -372,14 +372,14 @@ cmp_seg=$(seg_cmp)
 row_render() {
   local n=${#RP_TEXT[@]} i p add_len running=0 first=1
   SURVIVED=()
-  for ((i=0; i<n; i++)); do SURVIVED[$i]=0; done
+  for ((i=0; i<n; i++)); do SURVIVED[i]=0; done
   for ((i=0; i<n; i++)); do
     p="${RP_TEXT[$i]}"
     [ -z "$p" ] && continue
     add_len=${#p}
     [ "$first" -eq 0 ] && add_len=$((add_len+2))
     if [ "$((running+add_len))" -le "$INNER" ]; then
-      SURVIVED[$i]=1
+      SURVIVED[i]=1
       running=$((running+add_len))
       first=0
     fi
