@@ -29,7 +29,7 @@ When a durable session summary or handoff is worth writing, Claude Code and Code
 | Program structure | LSPs, code graphs | derived | none |
 | Toolchain desired state | `docs/TOOLCHAIN.md` (policy/recommendations); `.mcp.json` and `.codex/config.toml` (unconditional MCP config, natively consumed) | durable | owned |
 | Bounded-change specification and technical plan | Spec Kit artifacts (tracked repo files) | durable | none — adopted default provider (D030), Bindle does not parse or duplicate its format |
-| Local operational execution graph / task state | PlanDB (`.plandb.db`) | local, non-canonical | none — optional recommended provider (D030), gitignored, never required |
+| Local operational execution graph / task state | PlanDB (`.plandb.db`) | local, non-canonical; not ordinary disposable state while an execution is active (see "Durable versus derived") | none — optional recommended provider (D030), gitignored, never required |
 | Deterministic git evidence blocks | Bindle emits the format; owning records embed the block | derived from git at capture time | owned format — never an owned store |
 | Bindle runtime state | `BINDLE_HOME` | configuration, disposable cache, explicit export only | owned |
 
@@ -55,6 +55,8 @@ When a durable session summary or handoff is worth writing, Claude Code and Code
 Durable: version-controlled repository files, vault notes, git history, explicit Bindle exports.
 
 Derived and disposable: regenerated summaries, semantic indexes, dashboards, graph projections, caches, anything under Bindle's cache. Everything derived must be rebuildable from a durable source; deleting it loses nothing.
+
+Local, non-canonical, but not disposable while active: PlanDB's `.plandb.db` (docs/DECISIONS.md D030) is not durable project truth, but it is not the derived/disposable kind above either. While a bounded change is actively executing, it holds operational state — task status, claims, newly discovered subtasks, dependency changes, execution-time replanning — that is not always reconstructable from the Spec Kit plan alone. Deleting an active `.plandb.db` can lose operational continuity and resumability even though it never loses accepted product or design truth, which stays in Spec Kit artifacts and `docs/DECISIONS.md`. Treat it as local operational state to preserve for the lifetime of the execution it coordinates. Once that execution completes and any durable outcomes are routed to their canonical stores (see the routing table above), the local graph may be discarded — do not promote it into Git or another shared/canonical store to solve this instead.
 
 Trust boundary worth stating plainly: projectmem is branch-blind (events carry only a HEAD SHA — no branch, no worktree, no rewrite handling), so a note recorded on a later-abandoned branch survives as unqualified project memory. Treat its contents as leads, not conclusions; confirm material claims against git, the decision log, or source.
 

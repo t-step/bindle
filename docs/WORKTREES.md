@@ -43,6 +43,14 @@ Codex:
 
 * Thread records natively carry cwd, git SHA, branch, and origin URL (observed in local state).
 
+PlanDB v0.2.1 (at adoption, docs/DECISIONS.md D030):
+
+* `.plandb.db` defaults to the current working directory, so it is worktree-local like the other entries in the table above: linked worktrees do not share it automatically.
+* A PlanDB execution graph belongs to the worktree executing the bounded change it coordinates. Agents being coordinated by that graph must operate against that same `.plandb.db` — in practice, run from that worktree.
+* Do not assume atomic claiming, ready/blocked state, or dependency updates coordinate agents that are operating against separate, independent PlanDB databases in separate worktrees.
+* Net effect: the normal model for a PlanDB-coordinated bounded change is one executing worktree with multiple native Claude Code / Codex agents operating against its graph — not a graph spanning worktrees. This is consistent with, not a change to, the one-worktree-per-active-slice rule (AGENTS.md, "Development isolation").
+* If future usage demonstrates a real need to coordinate PlanDB execution across separate worktrees, treat that as a concrete seam to solve then (AGENTS.md, "Repository tooling precedence"). No synchronization mechanism or adapter is built by this note.
+
 ## Operating rules for now
 
 * Worktrees are supported but not yet deeply integrated.
