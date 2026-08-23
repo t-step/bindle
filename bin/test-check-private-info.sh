@@ -37,9 +37,9 @@ check() { # check "description" command...
   fi
 }
 
-# shellcheck disable=SC2329 # invoked indirectly, by name, via check
+# shellcheck disable=SC2317,SC2329 # invoked indirectly, by name, via check
 contains() { grep -qF -- "$1" <<<"$2"; } # contains NEEDLE HAYSTACK
-# shellcheck disable=SC2329 # invoked indirectly, by name, via check
+# shellcheck disable=SC2317,SC2329 # invoked indirectly, by name, via check
 not_contains() { ! grep -qF -- "$1" <<<"$2"; } # not_contains NEEDLE HAYSTACK
 
 TMP="$(mktemp -d)"
