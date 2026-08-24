@@ -354,7 +354,7 @@ D002 (repository tooling precedence) and D008 (availability does not imply adopt
 
 ## D031: Local guardrail layer — protected main + hardened secrets, installed into user-owned configuration
 
-Two already-adopted policies — `main` is the canonical clean integration branch that routine workflows must not mutate directly, and AGENTS.md's secret/credential-file policy (D012) — existed only as prose with no mechanical backing. This decision adopts a small, portable, user-owned enforcement layer for both, installed by `bin/install-guardrails.sh` and implemented in `bin/git-hook-dispatch.sh`, `bin/claude-protected-main-guard.sh`, and `bin/allow-main-write.sh`. Full design rationale and empirical evidence: `plans/active/2026-08-23-local-guardrail-layer.md`.
+Two already-adopted policies — `main` is the canonical clean integration branch that routine workflows must not mutate directly, and AGENTS.md's secret/credential-file policy (D012) — existed only as prose with no mechanical backing. This decision adopts a small, portable, user-owned enforcement layer for both, installed by `bin/install-guardrails.sh` and implemented in `bin/git-hook-dispatch.sh`, `bin/claude-protected-main-guard.sh`, and `bin/allow-main-write.sh`. Full design rationale and empirical evidence: `plans/archive/2026-08-23-local-guardrail-layer.md`.
 
 Architecture-level decisions, not implementation trivia:
 
