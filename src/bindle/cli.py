@@ -2,13 +2,15 @@
 
 Establishes the command surface for Bindle's repository and global
 lifecycle commands (see AGENTS.md and docs/SCOPE.md). `--version`,
-`repo info`, `init`, `remove`, and `migrate-legacy-global` have real
-behavior today; `init`/`remove`/`migrate-legacy-global` manage only the
+`repo info`, `branch`, `init`, `remove`, and `migrate-legacy-global` have
+real behavior today; `init`/`remove`/`migrate-legacy-global` manage only the
 guardrail layer (Git hook dispatch + Claude Code PreToolUse guard) via
 install-guardrails.sh — they do not yet manage any other Bindle-owned
-component. `list`, `status`, `update`, `upgrade`, and `doctor` remain
-interface-only placeholders until their underlying components are
-implemented in a later slice.
+component. `branch` creates an isolated worktree and feature branch off
+freshly-fetched origin/main (AGENTS.md, "Development isolation"). `list`,
+`status`, `update`, `upgrade`, and `doctor` remain interface-only
+placeholders until their underlying components are implemented in a later
+slice.
 """
 
 from __future__ import annotations
@@ -185,6 +187,83 @@ def _cmd_migrate_legacy_global(args: argparse.Namespace) -> int:
     return result.returncode
 
 
+# The branch this repository's routine work always branches from (see
+# AGENTS.md, "Development isolation": "Start new work from an up-to-date
+# main.").
+_BRANCH_BASE = "main"
+
+
+def _cmd_branch(args: argparse.Namespace) -> int:
+    try:
+        info = get_repo_info()
+    except NotAGitRepositoryError as exc:
+        print(f"bindle branch: {exc}", file=sys.stderr)
+        return 1
+
+    name = args.name
+    if not name.strip() or name != name.strip():
+        print("bindle branch: branch name must not be empty or contain leading/trailing whitespace", file=sys.stderr)
+        return 1
+
+    exists = subprocess.run(
+        ["git", "-C", info.repo_root, "rev-parse", "--verify", "--quiet", f"refs/heads/{name}"],
+        capture_output=True,
+        text=True,
+    )
+    if exists.returncode == 0:
+        print(f"bindle branch: branch '{name}' already exists", file=sys.stderr)
+        return 1
+
+    # Fetch the base branch explicitly rather than trusting the local
+    # tracking branch — a stale local `main` is exactly how a prior branch
+    # in this repo (`feat/local-orchestration`) ended up forked before a
+    # policy change had landed. Refuse rather than silently branching off
+    # whatever happens to be on disk if the fetch itself fails.
+    fetch = subprocess.run(
+        ["git", "-C", info.repo_root, "fetch", "origin", _BRANCH_BASE],
+        capture_output=True,
+        text=True,
+    )
+    if fetch.returncode != 0:
+        print(
+            f"bindle branch: failed to fetch origin/{_BRANCH_BASE} — refusing to branch off "
+            f"potentially stale history:\n{fetch.stderr.strip()}",
+            file=sys.stderr,
+        )
+        return 1
+
+    parent_dir = os.path.dirname(info.repo_root)
+    repo_name = os.path.basename(info.repo_root)
+    slug = name.replace("/", "-")
+    target = os.path.join(parent_dir, f"{repo_name}-{slug}")
+
+    if os.path.exists(target):
+        print(f"bindle branch: target worktree path already exists: {target}", file=sys.stderr)
+        return 1
+
+    add = subprocess.run(
+        [
+            "git",
+            "-C",
+            info.repo_root,
+            "worktree",
+            "add",
+            "-b",
+            name,
+            target,
+            f"origin/{_BRANCH_BASE}",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if add.returncode != 0:
+        print(f"bindle branch: {add.stderr.strip()}", file=sys.stderr)
+        return 1
+
+    print(target)
+    return 0
+
+
 def _cmd_repo_info(args: argparse.Namespace) -> int:
     try:
         info = get_repo_info()
@@ -221,6 +300,20 @@ def build_parser() -> argparse.ArgumentParser:
     info_parser = repo_subparsers.add_parser("info", help="Show repository identity")
     info_parser.add_argument("--json", action="store_true", help="Emit JSON")
 
+    branch_parser = subparsers.add_parser(
+        "branch",
+        help="Create a new worktree and branch off up-to-date origin/main.",
+        description=(
+            "Create an isolated Git worktree and feature branch for one product "
+            f"slice, branched directly off freshly-fetched origin/{_BRANCH_BASE} so "
+            "it can never inherit local drift. Refuses to fall back to a stale "
+            "local branch if the fetch fails, and refuses to reuse an existing "
+            "branch name or worktree path. Prints the new worktree's absolute "
+            "path on success."
+        ),
+    )
+    branch_parser.add_argument("name", help="Name for the new branch")
+
     return parser
 
 
@@ -245,6 +338,9 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_repo_info(args)
         parser.parse_args(["repo", "--help"])
         return 1
+
+    if args.command == "branch":
+        return _cmd_branch(args)
 
     parser.print_help()
     return 1
