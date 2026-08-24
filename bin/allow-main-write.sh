@@ -10,7 +10,7 @@
 # Edit/Write/MultiEdit/NotebookEdit are tool calls, not shell invocations,
 # so they cannot receive a command-scoped environment variable the way a
 # Bash-issued `git commit` can. See
-# plans/active/2026-08-23-local-guardrail-layer.md, Decisions #2.
+# plans/archive/2026-08-23-local-guardrail-layer.md, Decisions #2.
 #
 # The token is bound to repository identity, exact worktree, and a TTL as a
 # stale-token backstop. The guard consumes it on the very next attempted
@@ -19,7 +19,7 @@
 # Not session-bound: CLAUDE_CODE_SESSION_ID is observed in the Bash tool's
 # subprocess environment on this machine, but no documented source
 # establishes it carries the same value as PreToolUse's session_id field —
-# see plans/active/2026-08-23-local-guardrail-layer.md, Evidence. Binding to
+# see plans/archive/2026-08-23-local-guardrail-layer.md, Evidence. Binding to
 # an unverified identifier would be a best-effort property presented as a
 # guarantee, so the supported invariant is repo + worktree + TTL + single-use
 # only.
