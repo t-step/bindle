@@ -2,35 +2,40 @@
 
 Establishes the command surface for Bindle's repository and global
 lifecycle commands (see AGENTS.md and docs/SCOPE.md). `--version`,
-`repo info`, `branch`, `init`, `remove`, and `migrate-legacy-global` have
-real behavior today; `init`/`remove`/`migrate-legacy-global` manage only the
-guardrail layer (Git hook dispatch + Claude Code PreToolUse guard) via
-install-guardrails.sh — they do not yet manage any other Bindle-owned
-component. `branch` creates an isolated worktree and feature branch off
-freshly-fetched origin/main (AGENTS.md, "Development isolation"). `list`,
-`status`, `update`, `upgrade`, and `doctor` remain interface-only
-placeholders until their underlying components are implemented in a later
-slice.
+`repo info`, `branch`, `init`, `remove`, `status`, and `migrate-legacy-global`
+have real behavior today; `init`/`remove`/`status` cover only the guardrail
+layer (Git hook dispatch + Claude Code PreToolUse guard) via
+install-guardrails.sh — they do not yet manage or report on any other
+Bindle-owned component. `status` is read-only (see guardrails.py). `branch`
+creates an isolated worktree and feature branch off freshly-fetched
+origin/main (AGENTS.md, "Development isolation"). `list`, `update`,
+`upgrade`, and `doctor` remain interface-only placeholders until their
+underlying components are implemented in a later slice.
 """
 
 from __future__ import annotations
 
 import argparse
 import dataclasses
-import importlib.resources
 import json
 import os
 import subprocess
 import sys
-from pathlib import Path
 
 from . import __version__
+from .guardrails import (
+    GuardrailDetectionError,
+    detect_claude_guardrails,
+    detect_git_guardrails,
+    installer_env,
+    installer_path,
+)
 from .repo import NotAGitRepositoryError, get_repo_info
 
 # Lifecycle commands with an established name and short/long --help text.
-# `init`, `remove`, and `migrate-legacy-global` have real behavior (see
-# _cmd_init/_cmd_remove/_cmd_migrate_legacy_global below); the rest remain
-# interface-only placeholders (_cmd_not_implemented).
+# `init`, `remove`, `status`, and `migrate-legacy-global` have real behavior
+# (see _cmd_init/_cmd_remove/_cmd_status/_cmd_migrate_legacy_global below);
+# the rest remain interface-only placeholders (_cmd_not_implemented).
 #
 # The repository is the primary unit of Bindle management: `init` is the
 # explicit per-repository opt-in boundary, and `remove`, `status`,
@@ -112,23 +117,15 @@ def _cmd_not_implemented(name: str) -> int:
     return 1
 
 
-def _installer_path() -> Path:
-    # Package-owned runtime asset (src/bindle/_bin/), included in every
-    # wheel/sdist build and resolved through the installed package's own
-    # location — not relative to cwd or a Bindle source checkout, so this
-    # works identically for `uv run bindle` (editable/dev) and a normally
-    # installed `bindle` release alike.
-    return Path(str(importlib.resources.files("bindle") / "_bin" / "install-guardrails.sh"))
-
-
-def _installer_env() -> dict[str, str]:
-    # The installer's Claude-layer settings.local.json merge needs generic
-    # JSON structural operations (settings_json.py, package-owned) but no
-    # external tool: BINDLE_PYTHON tells it to reuse the exact interpreter
-    # already running `bindle` itself, so this works identically whether
-    # `bindle` is invoked via `uv run` or from a normally installed
-    # package, with no new runtime prerequisite beyond Python itself.
-    return {**os.environ, "BINDLE_PYTHON": sys.executable}
+# Aliases (not re-declarations) of guardrails.py's installer_path/
+# installer_env — this module's own single point of contact with the
+# installer, so `_run_guardrail_installer`/`_cmd_migrate_legacy_global`
+# below and existing tests that patch `bindle.cli._installer_path` keep
+# working unchanged, while detect_git_guardrails/detect_claude_guardrails
+# (guardrails.py) share the exact same underlying functions rather than a
+# separately-drifting copy.
+_installer_path = installer_path
+_installer_env = installer_env
 
 
 def _run_guardrail_installer(command: str, mode: str) -> int:
@@ -185,6 +182,27 @@ def _cmd_migrate_legacy_global(args: argparse.Namespace) -> int:
         env=_installer_env(),
     )
     return result.returncode
+
+
+def _cmd_status(args: argparse.Namespace) -> int:
+    try:
+        info = get_repo_info()
+    except NotAGitRepositoryError as exc:
+        print(f"bindle status: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        git_status = detect_git_guardrails(info)
+        claude_status = detect_claude_guardrails(info)
+    except GuardrailDetectionError as exc:
+        print(f"bindle status: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Repository: {os.path.basename(info.repo_root)}")
+    print("Guardrails")
+    print(f"  {'Git':<10}{git_status}")
+    print(f"  {'Claude':<10}{claude_status}")
+    return 0
 
 
 # The branch this repository's routine work always branches from (see
@@ -329,6 +347,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "migrate-legacy-global":
         return _cmd_migrate_legacy_global(args)
+
+    if args.command == "status":
+        return _cmd_status(args)
 
     if args.command in _LIFECYCLE_COMMANDS:
         return _cmd_not_implemented(args.command)
