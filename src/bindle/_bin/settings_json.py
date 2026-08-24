@@ -202,6 +202,24 @@ def cmd_merge_deny(args):
     return 0
 
 
+def cmd_deny_subset(args):
+    """Exit 0 iff every entry in SUBSET_JSON is already present in the
+    document's permissions.deny — used by `bindle status` to check whether
+    Bindle's previously-recorded owned deny entries are all still intact,
+    without ever writing anything."""
+    path, subset_json = args
+    try:
+        doc = _load(path)
+        if not isinstance(doc, dict):
+            return 1
+        subset = json.loads(subset_json)
+        existing = doc.get("permissions", {}).get("deny") or []
+        missing = [x for x in subset if x not in existing]
+    except (OSError, ValueError):
+        return 1
+    return 0 if not missing else 1
+
+
 def cmd_array_union(args):
     a_json, b_json = args
     try:
@@ -279,6 +297,7 @@ _VERBS = {
     "remove-deny": cmd_remove_deny,
     "deny-diff": cmd_deny_diff,
     "merge-deny": cmd_merge_deny,
+    "deny-subset": cmd_deny_subset,
     "array-union": cmd_array_union,
     "write-json": cmd_write_json,
     "length": cmd_length,
