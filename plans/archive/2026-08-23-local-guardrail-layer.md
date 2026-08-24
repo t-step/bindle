@@ -1,6 +1,6 @@
 # Local development guardrail layer: protected main + hardened secrets policy
 
-Date: 2026-08-23. Status: **active — implementation in progress.**
+Date: 2026-08-23. Status: **complete — merged to `main` via PR #10, 2026-08-24.**
 
 ## Outcome
 
@@ -177,7 +177,7 @@ implementation confirms nothing material changed.
    PATH or that `uv` is available, but POSIX `sh` + `git` always are.
 
 7. **`permissions.deny` uninstall ownership is tracked as a delta, not re-derived from the generated
-   manifest (PR review, 2026-08-25).** The original `--uninstall` computed "what to remove" as the same
+   manifest (PR #10 review).** The original `--uninstall` computed "what to remove" as the same
    `DENY_MANIFEST` `--apply` generates, using a plain array-difference — which would delete a
    user-added (or otherwise pre-existing) entry that happened to be byte-identical to one of Bindle's
    own rules, since a flat string array has no per-entry provenance. Fixed with the smallest mechanism
@@ -187,8 +187,8 @@ implementation confirms nothing material changed.
    clears the record afterward. A regression fixture (`bin/test-install-guardrails.sh`) seeds a
    settings.json with `Read(.env)` already present, installs, uninstalls, and asserts it survives.
 
-8. **One-shot token write is atomic; consumption is fail-closed against any malformed shape (PR review,
-   2026-08-25).** `bin/allow-main-write.sh` now writes to a same-directory temp file and `mv`s it into
+8. **One-shot token write is atomic; consumption is fail-closed against any malformed shape (PR #10
+   review).** `bin/allow-main-write.sh` now writes to a same-directory temp file and `mv`s it into
    place, so the guard can never observe a partially-written token. `bin/claude-protected-main-guard.sh`
    validates the claimed token's structure (object, non-empty `common_dir`/`worktree` strings, a whole-
    number `expires_at`) before extracting any field, and reads via `cat` (suppressible) rather than a
@@ -201,14 +201,14 @@ implementation confirms nothing material changed.
    wrong top-level type, non-numeric/fractional `expires_at`, missing field) plus an unreadable file —
    all now deny cleanly (exit 0, valid deny JSON), never crash.
 
-9. **Single-consumer claim verified under genuine concurrency, not just sequential reuse (PR review,
-   2026-08-25).** The `mv`-based atomic claim was already covered by a "same token, second sequential
+9. **Single-consumer claim verified under genuine concurrency, not just sequential reuse (PR #10
+   review).** The `mv`-based atomic claim was already covered by a "same token, second sequential
    use is denied" test; a new regression backgrounds two real OS processes racing the same token and
    asserts exactly one is allowed and the other denied (not silently dropped) — stable across repeated
    runs, since the guarantee comes from the `rename(2)` syscall's atomicity, not from test timing.
 
 10. **Installer failure handling: never claim success after a failed settings.json/ownership-record
-    read or write (PR review, 2026-08-25).** Every mutating `jq` call in `bin/install-guardrails.sh` was
+    read or write (PR #10 review).** Every mutating `jq` call in `bin/install-guardrails.sh` was
     a bare `jq ... >tmp && mv tmp DEST` followed by an *unconditional* `did "..."` — a failure (malformed
     input, a failed temp-file write, a failed rename) silently printed a success marker and left `fail`
     at 0. Fixed with a shared `jq_atomic_write` helper (same-directory temp file, same atomicity property
@@ -226,7 +226,7 @@ implementation confirms nothing material changed.
     still needs removing survives for a retry.
 
 11. **Installer activation gating: never activate a layer whose required artifacts didn't fully install
-    (PR review, 2026-08-25).** Decision #10 above closed the settings.json/ownership-record gap but
+    (PR #10 review).** Decision #10 above closed the settings.json/ownership-record gap but
     explicitly left the `mkdir`/`install`/`ln`/`rm`/`git config` calls that place the guard/helper
     *scripts* and set `core.hooksPath` unchecked — a failed `mkdir -p` there could be followed by a
     doomed `install`/`ln` that still printed `did "installed ..."`, and nothing stopped `core.hooksPath`
@@ -247,8 +247,8 @@ implementation confirms nothing material changed.
     that scenario's own sandbox; fixed by resetting it explicitly around the new tests that check its
     value.
 
-12. **Claude-layer uninstall detaches config before removing the files it references (PR review,
-    2026-08-25).** `--uninstall` previously removed `bindle-protected-main-guard` and
+12. **Claude-layer uninstall detaches config before removing the files it references (PR #10
+    review).** `--uninstall` previously removed `bindle-protected-main-guard` and
     `allow-main-write.sh` *before* attempting to remove the `settings.json` `PreToolUse` entry naming
     them — if that removal then failed, or `settings.json` turned out to be malformed (refused outright
     per Decision #10), the registration stayed active while the files it pointed at were already gone.
@@ -260,7 +260,8 @@ implementation confirms nothing material changed.
     removed), plus a new check that the helper script is preserved too.
 
 13. **Git-layer first install stages off to the side before going live; re-apply mutates only the
-    dispatcher FILE, never the directory (PR review, 2026-08-25, revised same day).** `--apply` used to
+    dispatcher FILE, never the directory (PR #10 review, revised in a later pass of the same
+    review).** `--apply` used to
     run `mkdir -p`/`install`/`ln` straight into `$HOOKS_DIR` for both first install and re-apply. For a
     first install this is safe (`core.hooksPath` isn't set until afterward, so nothing is watching the
     path yet); for a re-apply, Git reads `core.hooksPath`'s target live for the entire duration, so a
@@ -307,8 +308,8 @@ implementation confirms nothing material changed.
     recreate the missing symlink.
 
 14. **`bin/test-install-guardrails.sh` used `stat -f %i` (BSD/macOS-only) to prove inode identity for
-    the Decision #13 regressions — first CI failure on GitHub Actions' `ubuntu-24.04` runner (PR review,
-    2026-08-25).** A test-only portability bug, not an installer defect: GNU `stat` (Linux) uses `-c`,
+    the Decision #13 regressions — first CI failure on GitHub Actions' `ubuntu-24.04` runner (PR #10
+    review).** A test-only portability bug, not an installer defect: GNU `stat` (Linux) uses `-c`,
     not `-f`, and the failure mode was silent rather than loud — both the "before" and "after" `stat`
     calls failed identically, so equality checks comparing two empty strings passed by accident, and only
     the one inequality check ("the dispatcher's inode DID change") caught it. Fixed with a small
@@ -328,10 +329,11 @@ implementation confirms nothing material changed.
 - [x] `bin/install-guardrails.sh` — preview-by-default installer/uninstaller for both the git layer
       (global `core.hooksPath` + symlink farm under `~/.local/share/bindle/git-hooks/`) and the Claude
       layer (structural `jq` merge into `~/.claude/settings.json`'s `hooks.PreToolUse` and
-      `permissions.deny`). `--apply` writes; `--uninstall` removes only entries it installed (matched
-      against a manifest embedded in the installer, not fuzzy pattern-matching against unrelated user
-      config). Idempotent either direction. Refuses to overwrite a pre-existing, different global
-      `core.hooksPath`.
+      `permissions.deny`). `--apply` writes; `--uninstall` removes only the `permissions.deny` entries
+      recorded as genuinely Bindle-added in `OWNED_DENY_FILE` (an ownership delta, not the full
+      generated manifest — see Decision #7), so a pre-existing user rule that happens to be
+      byte-identical to one of Bindle's own survives. Idempotent either direction. Refuses to overwrite
+      a pre-existing, different global `core.hooksPath`.
 - [x] `bin/claude-protected-main-guard.sh` template (checked in, copied not symlinked at install time)
       — `PreToolUse` handler for `Edit|Write|MultiEdit|NotebookEdit`, mirroring
       `subagent-limit-guard`'s stdin-JSON / structured-decision shape.
@@ -383,5 +385,34 @@ the answer.
 
 ## Showcase evidence
 
-To be filled in on completion: files changed, installed user-level artifacts, `scripts/check.sh` /
-`git diff --check` / `cog check` output, and the full report structure the user requested (13 points).
+Merged via PR #10, `feat(guardrails): local protected-main + secrets enforcement`, merge commit
+`d6b8adf9af46ad7c44486a529785e31f89f708f3` (2026-08-24). Files added/changed:
+
+- `bin/git-hook-dispatch.sh` (new)
+- `bin/install-guardrails.sh` (new)
+- `bin/claude-protected-main-guard.sh` (new)
+- `bin/allow-main-write.sh` (new)
+- `bin/test-git-hook-dispatch.sh`, `bin/test-claude-protected-main-guard.sh`,
+  `bin/test-install-guardrails.sh` (new)
+- `scripts/check.sh` (modified — wires the three new test suites in)
+- `docs/DECISIONS.md` (modified — adds D031)
+
+Full local gate, re-run on `main` at `d6b8adf` as part of this housekeeping pass:
+
+```
+bash scripts/check.sh   → all checks passed, including:
+  git-hook-dispatch:            22/22 checks passed
+  claude-protected-main-guard:  26/26 checks passed
+  install-guardrails:           67/67 checks passed
+  decision-reference consistency: all D-number citations resolve
+  python3 -m unittest (bindle CLI): 9 passed
+git diff --check        → clean (exit 0)
+cog check                → No errored commits (exit 0)
+```
+
+User-level installation targets (per the design, not exercised live against this machine's real
+`~/.claude/settings.json` or global `core.hooksPath` — verified only against isolated sandboxes in the
+test suites above): a global Git hook dispatcher symlinked under every standard client-side hook name
+via `core.hooksPath`, plus a `PreToolUse` guard and `permissions.deny` hardening merged into
+`~/.claude/settings.json`, both installed only through `bin/install-guardrails.sh --apply` on explicit
+user action.
