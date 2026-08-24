@@ -16,7 +16,7 @@ set -uo pipefail
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-INSTALLER="$REPO_ROOT/bin/install-guardrails.sh"
+INSTALLER="$REPO_ROOT/src/bindle/_bin/install-guardrails.sh"
 
 pass=0 fail=0
 check() { # check "description" command...
@@ -51,14 +51,37 @@ new_fixture() {
   echo one >"$FIX/f.txt"
   git -C "$FIX" add f.txt
   git -C "$FIX" commit -q -m init
+  "$INSTALLER" --apply --git-only --repo "$FIX" >/dev/null
 }
 
 # ===========================================================================
 echo "install:"
-check "install --apply exits clean" "$INSTALLER" --apply >/dev/null
-check "install --apply is idempotent" "$INSTALLER" --apply >/dev/null
-
 new_fixture
+check "install --apply --git-only --repo installs repo-locally" bash -c \
+  "[ \"\$(git -C '$FIX' config --local --get core.hooksPath)\" = \"\$(git -C '$FIX' rev-parse --path-format=absolute --git-common-dir)/bindle-hooks\" ]"
+check "install --apply is idempotent" "$INSTALLER" --apply --git-only --repo "$FIX" >/dev/null
+check "the global core.hooksPath was never touched" bash -c \
+  '! git config --global --get core.hooksPath >/dev/null 2>&1'
+
+# ===========================================================================
+echo "opt-in boundary: a repository that never ran the installer is unaffected:"
+
+UNOPTED="$TMP/unopted-repo"
+git init -q --initial-branch=main "$UNOPTED"
+git -C "$UNOPTED" config user.email test@example.com
+git -C "$UNOPTED" config user.name Test
+echo one >"$UNOPTED/f.txt"
+git -C "$UNOPTED" add f.txt
+check "the very first commit on the never-opted-in repo succeeds" \
+  git -C "$UNOPTED" commit -q -m init
+check "a direct commit on 'main' in the never-opted-in repo is NOT blocked" bash -c "
+  cd '$UNOPTED' &&
+  echo x >second.txt &&
+  git add second.txt &&
+  git commit -q -m 'second, still on main'
+"
+check "the never-opted-in repo has no local core.hooksPath" bash -c \
+  "! git -C '$UNOPTED' config --local --get core.hooksPath >/dev/null 2>&1"
 
 # ===========================================================================
 echo "protected-main boundaries:"
@@ -175,7 +198,7 @@ git -C "$NEWREPO" add f.txt
 check "the very first commit on a fresh 'main' is allowed" git -C "$NEWREPO" commit -q -m init
 
 # ===========================================================================
-echo "composition: repository-local hooks still fire through Bindle's global layer:"
+echo "composition: repository-local hooks still fire through Bindle's repo-local layer:"
 
 COMPOSE_LOG="$TMP/native-hooks-fired.log"
 install_native_logger() {
@@ -197,11 +220,11 @@ echo x >"$FIX/compose.txt"
 git -C "$FIX" add compose.txt
 git -C "$FIX" commit -q -m "compose test"
 
-check "repository's own commit-msg still fires through the global layer" \
+check "repository's own commit-msg still fires through the repo-local layer" \
   grep -q "^FIRED:commit-msg" "$COMPOSE_LOG"
-check "repository's own post-commit still fires through the global layer" \
+check "repository's own post-commit still fires through the repo-local layer" \
   grep -q "^FIRED:post-commit" "$COMPOSE_LOG"
-check "repository's own pre-commit still fires through the global layer" \
+check "repository's own pre-commit still fires through the repo-local layer" \
   grep -q "^FIRED:pre-commit" "$COMPOSE_LOG"
 
 # Exit-code preservation: a rejecting native hook must still block the commit.
@@ -223,21 +246,46 @@ rm -f "$FIX/.git/hooks/pre-commit" "$FIX/.git/hooks/commit-msg" "$FIX/.git/hooks
 # ===========================================================================
 echo "installer safety:"
 
-git config --global core.hooksPath /some/other/hook/manager
+git -C "$FIX" config --local core.hooksPath /some/other/hook/manager
 # shellcheck disable=SC2317,SC2329
-apply_refuses_conflict() { ! "$INSTALLER" --apply >/dev/null 2>&1; }
-check "installer refuses to replace a pre-existing, different core.hooksPath" apply_refuses_conflict
-check "the conflicting core.hooksPath is left untouched" bash -c \
-  "[ \"\$(git config --global --get core.hooksPath)\" = /some/other/hook/manager ]"
-git config --global --unset core.hooksPath
-"$INSTALLER" --apply >/dev/null
+apply_refuses_conflict() { ! "$INSTALLER" --apply --git-only --repo "$FIX" >/dev/null 2>&1; }
+check "installer refuses to replace a pre-existing, different repo-local core.hooksPath" apply_refuses_conflict
+check "the conflicting repo-local core.hooksPath is left untouched" bash -c \
+  "[ \"\$(git -C '$FIX' config --local --get core.hooksPath)\" = /some/other/hook/manager ]"
+git -C "$FIX" config --local --unset core.hooksPath
+"$INSTALLER" --apply --git-only --repo "$FIX" >/dev/null
 
-"$INSTALLER" --uninstall >/dev/null
-check "uninstall clears the global core.hooksPath" bash -c \
+# ===========================================================================
+echo "linked worktree: repo-local config is shared through the common directory:"
+
+git -C "$FIX" switch -q -c side-branch main
+WT="$TMP/fixture-repo-worktree"
+git -C "$FIX" worktree add -q "$WT" main
+check "the linked worktree inherits the SAME repo-local core.hooksPath (shared common-dir config)" bash -c \
+  "[ \"\$(git -C '$WT' config --local --get core.hooksPath)\" = \"\$(git -C '$FIX' config --local --get core.hooksPath)\" ]"
+# shellcheck disable=SC2317,SC2329
+wt_commit_blocked() (
+  cd "$WT" || exit 1
+  echo x >wt-blocked.txt
+  git add wt-blocked.txt
+  ! git commit -q -m "attempt from worktree" >/dev/null 2>&1
+)
+check "a direct commit on 'main' from the linked worktree is blocked, without a separate install" wt_commit_blocked
+git -C "$FIX" worktree remove -f "$WT"
+git -C "$FIX" switch -q main
+git -C "$FIX" branch -D side-branch >/dev/null
+
+# ===========================================================================
+echo "uninstall:"
+
+"$INSTALLER" --uninstall --git-only --repo "$FIX" >/dev/null
+check "uninstall clears the repo-local core.hooksPath" bash -c \
+  "! git -C '$FIX' config --local --get core.hooksPath >/dev/null 2>&1"
+check "uninstall removes the installed bindle-hooks directory" bash -c \
+  "[ ! -d '$FIX/.git/bindle-hooks' ]"
+check "uninstall never touched the global core.hooksPath" bash -c \
   '! git config --global --get core.hooksPath >/dev/null 2>&1'
-check "uninstall removes the installed git-hooks directory" bash -c \
-  "[ ! -d '$BINDLE_GUARD_HOME/git-hooks' ]"
-"$INSTALLER" --apply >/dev/null
+"$INSTALLER" --apply --git-only --repo "$FIX" >/dev/null
 
 # ===========================================================================
 printf '\n  git-hook-dispatch: %d/%d checks passed\n' "$pass" "$((pass + fail))"

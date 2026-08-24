@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -166,9 +167,16 @@ class TestGlobalVsRepositoryContract(unittest.TestCase):
         self.assertIn("bindle init", text)
 
 
+_STILL_UNIMPLEMENTED = [
+    name
+    for name in _LIFECYCLE_COMMANDS
+    if name not in ("init", "remove", "migrate-legacy-global")
+]
+
+
 class TestUnimplementedLifecycleCommands(unittest.TestCase):
     def test_direct_invocation_fails_clearly(self):
-        for name in _LIFECYCLE_COMMANDS:
+        for name in _STILL_UNIMPLEMENTED:
             with self.subTest(command=name):
                 out, err = io.StringIO(), io.StringIO()
                 with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -182,12 +190,206 @@ class TestUnimplementedLifecycleCommands(unittest.TestCase):
         # script or installer (e.g. scripts/doctor.sh) on its way to
         # reporting "not implemented yet".
         with mock.patch("subprocess.run", side_effect=AssertionError("must not shell out")):
-            for name in _LIFECYCLE_COMMANDS:
+            for name in _STILL_UNIMPLEMENTED:
                 with self.subTest(command=name):
                     err = io.StringIO()
                     with contextlib.redirect_stderr(err):
                         code = main([name])
                     self.assertEqual(code, 1)
+
+
+_REAL_SUBPROCESS_RUN = subprocess.run
+
+
+def _intercept_installer_call(on_installer_call):
+    # get_repo_info() legitimately shells out to `git` on the way to
+    # resolving init/remove's target repository — only the installer
+    # invocation itself (`["bash", ".../install-guardrails.sh", ...]`)
+    # should be faked or forbidden, so real `git` calls always pass
+    # through unmodified.
+    def fake_run(cmd, **kwargs):
+        if cmd and cmd[0] == "bash":
+            return on_installer_call(cmd)
+        return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+
+    return mock.patch("subprocess.run", side_effect=fake_run)
+
+
+class TestGuardrailLifecycleCommands(unittest.TestCase):
+    # `init`/`remove` are the one real lifecycle behavior so far: driving
+    # bin/install-guardrails.sh's Git layer, scoped to the current
+    # repository, via --git-only --repo <worktree root>.
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = os.path.join(self.tmp.name, "repo")
+        _init_repo(self.repo)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_init_invokes_the_installer_for_this_repository_both_layers(self):
+        captured = {}
+
+        def on_installer_call(cmd):
+            captured["cmd"] = cmd
+            return subprocess.CompletedProcess(cmd, 0)
+
+        with _chdir(self.repo), _intercept_installer_call(on_installer_call):
+            code = main(["init"])
+
+        self.assertEqual(code, 0)
+        cmd = captured["cmd"]
+        self.assertEqual(cmd[0], "bash")
+        self.assertTrue(cmd[1].endswith("_bin/install-guardrails.sh"))
+        self.assertEqual(cmd[2], "--apply")
+        # Both layers are repo-scoped now, so init/remove no longer need
+        # --git-only to avoid also toggling a separately-scoped global
+        # Claude layer — that layer doesn't exist anymore.
+        self.assertNotIn("--git-only", cmd)
+        self.assertNotIn("--claude-only", cmd)
+        self.assertIn("--repo", cmd)
+        self.assertEqual(cmd[cmd.index("--repo") + 1], os.path.realpath(self.repo))
+
+    def test_remove_invokes_uninstall(self):
+        captured = {}
+
+        def on_installer_call(cmd):
+            captured["cmd"] = cmd
+            return subprocess.CompletedProcess(cmd, 0)
+
+        with _chdir(self.repo), _intercept_installer_call(on_installer_call):
+            code = main(["remove"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(captured["cmd"][2], "--uninstall")
+
+    def test_init_propagates_the_installer_exit_code(self):
+        with _chdir(self.repo), _intercept_installer_call(
+            lambda cmd: subprocess.CompletedProcess(cmd, 3)
+        ):
+            code = main(["init"])
+        self.assertEqual(code, 3)
+
+    def test_init_outside_a_git_repository_fails_clearly_without_shelling_out(self):
+        outside = tempfile.mkdtemp()
+        err = io.StringIO()
+
+        def on_installer_call(cmd):
+            raise AssertionError("must not shell out")
+
+        try:
+            with _intercept_installer_call(on_installer_call):
+                with _chdir(outside), contextlib.redirect_stderr(err):
+                    code = main(["init"])
+            self.assertEqual(code, 1)
+            self.assertIn("not a Git repository", err.getvalue())
+        finally:
+            os.rmdir(outside)
+
+    def test_init_passes_bindle_python_env_for_the_installer(self):
+        # settings_json.py (the Claude-layer JSON helper) must run under
+        # the exact interpreter already running `bindle` itself — no
+        # external JSON tool (jq) is required. See _installer_env().
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            if cmd and cmd[0] == "bash":
+                captured["env"] = kwargs.get("env")
+                return subprocess.CompletedProcess(cmd, 0)
+            return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+
+        with _chdir(self.repo), mock.patch("subprocess.run", side_effect=fake_run):
+            code = main(["init"])
+
+        self.assertEqual(code, 0)
+        self.assertIsNotNone(captured.get("env"))
+        self.assertEqual(captured["env"].get("BINDLE_PYTHON"), sys.executable)
+
+    def test_init_reports_clearly_when_the_installer_script_is_missing(self):
+        err = io.StringIO()
+
+        def on_installer_call(cmd):
+            raise AssertionError("must not shell out")
+
+        with _chdir(self.repo), mock.patch(
+            "bindle.cli._installer_path",
+            return_value=Path("/nonexistent/install-guardrails.sh"),
+        ), _intercept_installer_call(on_installer_call), contextlib.redirect_stderr(err):
+            code = main(["init"])
+        self.assertEqual(code, 1)
+        self.assertIn("guardrail installer not found", err.getvalue())
+
+
+class TestMigrateLegacyGlobalCommand(unittest.TestCase):
+    # `migrate-legacy-global` is global/machine-level: unlike init/remove,
+    # it does not resolve a current repository and passes no --repo.
+    def test_invokes_the_installer_with_remove_legacy_global(self):
+        captured = {}
+
+        def on_installer_call(cmd):
+            captured["cmd"] = cmd
+            return subprocess.CompletedProcess(cmd, 0)
+
+        with _intercept_installer_call(on_installer_call):
+            code = main(["migrate-legacy-global"])
+
+        self.assertEqual(code, 0)
+        cmd = captured["cmd"]
+        self.assertEqual(cmd[0], "bash")
+        self.assertTrue(cmd[1].endswith("_bin/install-guardrails.sh"))
+        self.assertEqual(cmd[2], "--remove-legacy-global")
+        self.assertNotIn("--repo", cmd)
+
+    def test_does_not_require_a_git_repository(self):
+        outside = tempfile.mkdtemp()
+        captured = {}
+
+        def on_installer_call(cmd):
+            captured["cmd"] = cmd
+            return subprocess.CompletedProcess(cmd, 0)
+
+        try:
+            with _chdir(outside), _intercept_installer_call(on_installer_call):
+                code = main(["migrate-legacy-global"])
+            self.assertEqual(code, 0)
+            self.assertIn("cmd", captured)
+        finally:
+            os.rmdir(outside)
+
+    def test_propagates_the_installer_exit_code(self):
+        with _intercept_installer_call(lambda cmd: subprocess.CompletedProcess(cmd, 2)):
+            code = main(["migrate-legacy-global"])
+        self.assertEqual(code, 2)
+
+    def test_passes_bindle_python_env_for_the_installer(self):
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            if cmd and cmd[0] == "bash":
+                captured["env"] = kwargs.get("env")
+                return subprocess.CompletedProcess(cmd, 0)
+            return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+
+        with mock.patch("subprocess.run", side_effect=fake_run):
+            code = main(["migrate-legacy-global"])
+
+        self.assertEqual(code, 0)
+        self.assertIsNotNone(captured.get("env"))
+        self.assertEqual(captured["env"].get("BINDLE_PYTHON"), sys.executable)
+
+    def test_reports_clearly_when_the_installer_script_is_missing(self):
+        err = io.StringIO()
+
+        def on_installer_call(cmd):
+            raise AssertionError("must not shell out")
+
+        with mock.patch(
+            "bindle.cli._installer_path",
+            return_value=Path("/nonexistent/install-guardrails.sh"),
+        ), _intercept_installer_call(on_installer_call), contextlib.redirect_stderr(err):
+            code = main(["migrate-legacy-global"])
+        self.assertEqual(code, 1)
+        self.assertIn("guardrail installer not found", err.getvalue())
 
 
 if __name__ == "__main__":
