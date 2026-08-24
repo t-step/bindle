@@ -78,6 +78,16 @@ bin/check-private-info.sh || fail=1
 section "bin/check-private-info.sh --audit-denylist"
 bin/check-private-info.sh --audit-denylist || fail=1
 
+# --- guardrail layer (docs/DECISIONS.md D031) --------------------------------
+section "bin/test-git-hook-dispatch.sh"
+bin/test-git-hook-dispatch.sh || fail=1
+
+section "bin/test-claude-protected-main-guard.sh"
+bin/test-claude-protected-main-guard.sh || fail=1
+
+section "bin/test-install-guardrails.sh"
+bin/test-install-guardrails.sh || fail=1
+
 # --- 7. decision-reference consistency ---------------------------------------
 # docs/DECISIONS.md defines decisions as "## D001: <title>" headings. Collect
 # the defined IDs, then fail if any tracked Markdown file cites a D### token
