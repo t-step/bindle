@@ -25,6 +25,14 @@
 #   install-guardrails.sh --apply --repo PATH  # target a specific repository
 #   install-guardrails.sh --apply --git-only      # Git layer only
 #   install-guardrails.sh --apply --claude-only   # Claude layer only
+#   install-guardrails.sh --status             # read-only: report each
+#                                               # layer's state (installed /
+#                                               # not-installed / partial /
+#                                               # conflict / invalid) for
+#                                               # `bindle status` to parse.
+#                                               # Never mutates, never
+#                                               # gates/reports on legacy-
+#                                               # global state.
 #   install-guardrails.sh --remove-legacy-global
 #                                               # remove a pre-rework GLOBAL
 #                                               # Bindle install (Git and/or
@@ -154,7 +162,7 @@ LEGACY_REMOVE=0
 REPO_TARGET="$PWD"
 
 usage() {
-  echo "usage: $0 [--apply|--uninstall] [--git-only|--claude-only] [--repo PATH]" >&2
+  echo "usage: $0 [--apply|--uninstall|--status] [--git-only|--claude-only] [--repo PATH]" >&2
   echo "       $0 --remove-legacy-global" >&2
   exit 2
 }
@@ -163,6 +171,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
   --apply) MODE="apply" ;;
   --uninstall) MODE="uninstall" ;;
+  --status) MODE="status" ;;
   --remove-legacy-global) LEGACY_REMOVE=1 ;;
   --git-only) GIT_ONLY=1 ;;
   --claude-only) CLAUDE_ONLY=1 ;;
@@ -584,6 +593,190 @@ remove_owned_exclude_entry() {
 # "default ~/... shorthand" left to print — every install is repository-
 # specific by construction.
 PRETOOLUSE_COMMAND="$CLAUDE_GUARD_INSTALLED $ALLOW_MAIN_WRITE_INSTALLED"
+
+# =============================================================================
+# --status (read-only, drives `bindle status`): reports one of five states
+# per layer — installed / not-installed / partial / conflict / invalid —
+# using exactly the same ownership/intactness predicates the Preflight and
+# apply/uninstall logic below already rely on (hooks_dir_is_intact,
+# pretooluse_entry_present, valid-json, read_owned_json, the tracked-file
+# check). This is deliberately the SAME functions, not a parallel
+# reimplementation, so `bindle status` can never drift from what `bindle
+# init`/`bindle remove` actually enforce.
+#
+# Never runs Preflight, never gates on or reports legacy-global state
+# (status is scoped to THIS repository's own configuration, not a
+# machine-wide migration concern), and never mutates anything — not even
+# the narrow live repairs --apply is allowed to make.
+# =============================================================================
+
+# detect_git_status — Git layer: core.hooksPath is a single-value
+# integration point, so its state collapses cleanly onto four of the five
+# states. There is no separately-detectable "invalid": hooks_dir_is_intact
+# only checks the dispatcher's executable bit and each hook symlink's
+# target name, never the dispatcher's actual script content, so a
+# structurally "intact" but content-corrupted dispatcher is
+# indistinguishable from a genuinely good one, and anything that fails the
+# shape check already falls out as "partial" below — there is no remaining
+# evidence that would let this function tell "malformed" apart from
+# "incomplete" for this layer.
+detect_git_status() {
+  local hookspath dir_exists=0 dir_intact=0
+  hookspath="$(git -C "$REPO_TARGET" config --local --get core.hooksPath 2>/dev/null || true)"
+  [ -e "$HOOKS_DIR" ] && dir_exists=1
+  hooks_dir_is_intact "$HOOKS_DIR" && dir_intact=1
+
+  if [ -n "$hookspath" ] && [ "$hookspath" != "$HOOKS_DIR" ]; then
+    # A foreign core.hooksPath (another hook manager) occupies the one
+    # integration point Git allows — the same condition apply's own
+    # preflight refuses to override.
+    echo "conflict"
+  elif [ -z "$hookspath" ] && [ "$dir_exists" -eq 0 ]; then
+    echo "not-installed"
+  elif [ "$hookspath" = "$HOOKS_DIR" ] && [ "$dir_intact" -eq 1 ]; then
+    echo "installed"
+  else
+    # Recognizable Bindle ownership (hookspath points at $HOOKS_DIR, or
+    # $HOOKS_DIR exists at Bindle's own reserved path) but the two halves
+    # don't both fully agree — e.g. the dispatcher/symlink set is missing
+    # or broken, or the directory exists but isn't wired into
+    # core.hooksPath yet.
+    echo "partial"
+  fi
+}
+
+# detect_claude_status — Claude layer: unlike core.hooksPath, Claude Code's
+# hooks.PreToolUse array is additive/multi-owner, so "another tool already
+# has this exact matcher" isn't a meaningful conflict the way a foreign
+# core.hooksPath is. The one real single-owner integration point Bindle
+# actually claims exclusively here is the settings.local.json FILE itself
+# (whether Bindle may modify it at all) — install-guardrails.sh already
+# refuses to touch a tracked, team-owned copy of it, which is exactly
+# "occupied by something not Bindle-owned".
+#
+# "Bindle evidence" below is deliberately restricted to paths/markers that
+# are exclusively Bindle's own (the guard/helper scripts under
+# bindle-claude/, the owned-deny bookkeeping file, and the info/exclude
+# ownership marker) plus a PreToolUse entry whose command string names
+# those exclusive paths — never mere existence of settings.local.json
+# itself, which is Claude Code's own native, non-Bindle-exclusive file and
+# may legitimately hold unrelated content. Without that restriction, any
+# repo using Claude Code's local settings for something else entirely
+# would misreport as a Bindle "partial" install.
+#
+# "installed" requires OWNED_DENY_FILE unconditionally: bindle remove
+# reads it to know which deny entries it may safely remove, and its
+# absence loses that information regardless of anything else — the
+# installation is no longer complete/intact even if every other artifact
+# looks fine. CLAUDE_EXCLUDE_OWNED_FILE is conditional, not required in
+# the same unconditional sense: it exists at all only when Bindle itself
+# is the one that claimed the info/exclude ignore line (see
+# ensure_repo_settings_ignored below), so its ABSENCE is a normal,
+# complete install whenever Bindle never needed to claim that line — never
+# by itself something "installed" should be blocked on. Once it DOES
+# exist, though, it creates its own integrity requirement: it asserts
+# bindle remove may safely remove that ignore line, so "installed" also
+# requires the line it names still actually being present in
+# info/exclude. ensure_repo_settings_ignored() deliberately never creates
+# the marker when the repository already ignored
+# settings.local.json before Bindle ever touched it (its own .gitignore,
+# or a pre-existing info/exclude line) — that is a normal, complete
+# install, just one where Bindle never needed to claim an ignore rule.
+detect_claude_status() {
+  if git -C "$repo_root" ls-files --error-unmatch -- "$CLAUDE_SETTINGS_RELATIVE" >/dev/null 2>&1; then
+    echo "conflict"
+    return
+  fi
+
+  local guard_exists=0 helper_exists=0 owned_deny_exists=0 exclude_owned_exists=0
+  [ -x "$CLAUDE_GUARD_INSTALLED" ] && guard_exists=1
+  [ -x "$ALLOW_MAIN_WRITE_INSTALLED" ] && helper_exists=1
+  [ -f "$OWNED_DENY_FILE" ] && owned_deny_exists=1
+  [ -f "$CLAUDE_EXCLUDE_OWNED_FILE" ] && exclude_owned_exists=1
+
+  local owned_deny_json="" owned_deny_valid=1
+  if [ "$owned_deny_exists" -eq 1 ] && ! owned_deny_json="$(read_owned_json "$OWNED_DENY_FILE")"; then
+    owned_deny_valid=0
+  fi
+
+  # exclude_ok — true unless CLAUDE_EXCLUDE_OWNED_FILE claims ownership of
+  # an info/exclude ignore line that is no longer actually there (the
+  # same "still owns it, still matches" question remove_owned_exclude_entry
+  # itself asks before touching that line). Vacuously true when the
+  # marker doesn't exist — there's nothing to be inconsistent about.
+  local exclude_ok=1
+  if [ "$exclude_owned_exists" -eq 1 ]; then
+    local exclude_file="$repo_common_dir/info/exclude"
+    if [ -f "$exclude_file" ] && grep -qxF "$CLAUDE_SETTINGS_RELATIVE" "$exclude_file" 2>/dev/null; then
+      exclude_ok=1
+    else
+      exclude_ok=0
+    fi
+  fi
+
+  local settings_exists=0 settings_valid=1
+  [ -f "$CLAUDE_SETTINGS" ] && settings_exists=1
+  if [ "$settings_exists" -eq 1 ] && ! json_op valid-json "$CLAUDE_SETTINGS"; then
+    settings_valid=0
+  fi
+
+  local pretooluse_ok=0
+  if [ "$settings_exists" -eq 1 ] && [ "$settings_valid" -eq 1 ]; then
+    pretooluse_entry_present "$CLAUDE_SETTINGS" "$PRETOOLUSE_COMMAND" && pretooluse_ok=1
+  fi
+
+  local bindle_evidence=0
+  { [ "$guard_exists" -eq 1 ] || [ "$helper_exists" -eq 1 ] || [ "$owned_deny_exists" -eq 1 ] ||
+    [ "$exclude_owned_exists" -eq 1 ] || [ "$pretooluse_ok" -eq 1 ]; } && bindle_evidence=1
+
+  # A broken owned-deny bookkeeping file is always Bindle's own artifact —
+  # its mere presence, valid or not, IS the ownership evidence.
+  if [ "$owned_deny_exists" -eq 1 ] && [ "$owned_deny_valid" -eq 0 ]; then
+    echo "invalid"
+    return
+  fi
+  # An unreadable settings.local.json only counts as Bindle's own
+  # "invalid" state when some other exclusively-Bindle artifact already
+  # proves Bindle was involved here — otherwise it's simply not
+  # (yet/ever) Bindle's problem to report on.
+  if [ "$settings_exists" -eq 1 ] && [ "$settings_valid" -eq 0 ] && [ "$bindle_evidence" -eq 1 ]; then
+    echo "invalid"
+    return
+  fi
+
+  if [ "$bindle_evidence" -eq 0 ]; then
+    echo "not-installed"
+    return
+  fi
+
+  local deny_intact=1
+  if [ "$owned_deny_exists" -eq 1 ] && [ "$owned_deny_valid" -eq 1 ] && [ "$settings_exists" -eq 1 ] &&
+    [ "$settings_valid" -eq 1 ] && [ "$owned_deny_json" != "[]" ]; then
+    json_op deny-subset "$CLAUDE_SETTINGS" "$owned_deny_json" || deny_intact=0
+  fi
+
+  if [ "$settings_valid" -eq 1 ] && [ "$pretooluse_ok" -eq 1 ] && [ "$guard_exists" -eq 1 ] &&
+    [ "$helper_exists" -eq 1 ] && [ "$owned_deny_exists" -eq 1 ] && [ "$deny_intact" -eq 1 ] &&
+    [ "$exclude_ok" -eq 1 ]; then
+    echo "installed"
+  else
+    echo "partial"
+  fi
+}
+
+if [ "$MODE" = "status" ]; then
+  if [ "$REPO_APPLICABLE" -ne 1 ]; then
+    problem "'$REPO_TARGET' is not inside a Git repository — nothing to report"
+    exit 1
+  fi
+  if [ "$CLAUDE_ONLY" -eq 0 ]; then
+    printf 'GIT_STATUS=%s\n' "$(detect_git_status)"
+  fi
+  if [ "$GIT_ONLY" -eq 0 ]; then
+    printf 'CLAUDE_STATUS=%s\n' "$(detect_claude_status)"
+  fi
+  exit 0
+fi
 
 # =============================================================================
 # Preflight (--apply/--uninstall only): validate BOTH requested layers
