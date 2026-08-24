@@ -71,7 +71,7 @@ worktree="$(git -C "$target_dir" rev-parse --show-toplevel)"
 git_dir="$(git -C "$target_dir" rev-parse --absolute-git-dir)"
 token_path="$git_dir/bindle-allow-main-write.json"
 
-deny_message="bindle guardrail: '$PROTECTED_BRANCH' is protected — this edit was blocked. Branch first (git switch -c <name>), or — only after the user has explicitly authorized a one-off edit to '$PROTECTED_BRANCH' in this conversation — run '$ALLOW_MAIN_WRITE_HELPER' in $worktree, then retry."
+deny_message="bindle guardrail: '$PROTECTED_BRANCH' is protected — this edit was blocked. Branch first (bindle branch <name>), or — only after the user has explicitly authorized a one-off edit to '$PROTECTED_BRANCH' in this conversation — run '$ALLOW_MAIN_WRITE_HELPER' in $worktree, then retry."
 
 if [ ! -e "$token_path" ]; then
   deny "$deny_message"

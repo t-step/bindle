@@ -88,7 +88,7 @@ check_protected_branch() {
 bindle guardrail: '$PROTECTED_BRANCH' is protected — blocked '$hook_name'.
 $dirty_note
 Create a branch from '$PROTECTED_BRANCH' first:
-  git switch -c <branch-name>
+  bindle branch <branch-name>
 
 If this write to '$PROTECTED_BRANCH' is genuinely intentional, scope the
 override to this one command (it does not persist to the next command):
