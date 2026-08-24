@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from bindle import __version__
 from bindle.cli import _LIFECYCLE_COMMANDS, main
 
-TOP_LEVEL_COMMANDS = [*_LIFECYCLE_COMMANDS, "repo"]
+TOP_LEVEL_COMMANDS = [*_LIFECYCLE_COMMANDS, "repo", "branch"]
 
 
 def _run(args, cwd):
@@ -122,6 +122,7 @@ class TestTopLevelHelpSurface(unittest.TestCase):
         for help_text, _description in _LIFECYCLE_COMMANDS.values():
             self.assertIn(help_text, text)
         self.assertIn("Repository information.", text)
+        self.assertIn("Create a new worktree and branch off up-to-date origin/main.", text)
 
     def test_each_lifecycle_command_has_working_help(self):
         for name, (_help_text, description) in _LIFECYCLE_COMMANDS.items():
@@ -390,6 +391,118 @@ class TestMigrateLegacyGlobalCommand(unittest.TestCase):
             code = main(["migrate-legacy-global"])
         self.assertEqual(code, 1)
         self.assertIn("guardrail installer not found", err.getvalue())
+
+
+class TestBranchCommand(unittest.TestCase):
+    # `bindle branch <name>` closes the "forking gap": a single command
+    # that creates an isolated worktree + branch off freshly-fetched
+    # origin/main, rather than a raw multi-step git dance that can silently
+    # branch off stale local main (see docs/DECISIONS.md, the forking-gap
+    # design discussion this implements).
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.remote = os.path.join(self.tmp.name, "remote")
+        self.repo = os.path.join(self.tmp.name, "repo")
+        _init_repo(self.remote)
+        _run(["git", "clone", self.remote, self.repo], self.tmp.name)
+        _run(["git", "config", "user.email", "test@example.com"], self.repo)
+        _run(["git", "config", "user.name", "Test"], self.repo)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _head_sha(self, path):
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=path, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+    def _current_branch(self, path):
+        return subprocess.run(
+            ["git", "symbolic-ref", "-q", "--short", "HEAD"],
+            cwd=path,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    def test_creates_worktree_off_fresh_origin_main_not_stale_local_main(self):
+        # Advance the remote's main without ever updating the local clone's
+        # own main, so a naive "branch off local main" would silently pick
+        # up stale history.
+        with open(os.path.join(self.remote, "NEW.md"), "w") as f:
+            f.write("advance\n")
+        _run(["git", "add", "NEW.md"], self.remote)
+        _run(["git", "commit", "-m", "feat: advance remote main"], self.remote)
+        remote_head = self._head_sha(self.remote)
+
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["branch", "feature-x"])
+
+        self.assertEqual(code, 0)
+        target = out.getvalue().strip()
+        self.assertTrue(os.path.isdir(target))
+        self.assertEqual(self._head_sha(target), remote_head)
+        self.assertEqual(self._current_branch(target), "feature-x")
+
+    def test_slugifies_slash_in_branch_name_for_the_directory(self):
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["branch", "feat/thing"])
+
+        self.assertEqual(code, 0)
+        target = out.getvalue().strip()
+        self.assertTrue(target.endswith("repo-feat-thing"))
+        self.assertEqual(self._current_branch(target), "feat/thing")
+
+    def test_refuses_when_branch_already_exists(self):
+        _run(["git", "branch", "feature-x"], self.repo)
+
+        err = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stderr(err):
+            code = main(["branch", "feature-x"])
+
+        self.assertEqual(code, 1)
+        self.assertIn("already exists", err.getvalue())
+
+    def test_refuses_when_target_worktree_path_already_exists(self):
+        target = os.path.join(self.tmp.name, "repo-feature-x")
+        os.makedirs(target)
+
+        err = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stderr(err):
+            code = main(["branch", "feature-x"])
+
+        self.assertEqual(code, 1)
+        self.assertIn("already exists", err.getvalue())
+
+    def test_refuses_and_does_not_fall_back_to_stale_local_main_when_fetch_fails(self):
+        _run(["git", "remote", "set-url", "origin", "/nonexistent/path"], self.repo)
+
+        err = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stderr(err):
+            code = main(["branch", "feature-x"])
+
+        self.assertEqual(code, 1)
+        self.assertIn("failed to fetch", err.getvalue())
+
+    def test_rejects_whitespace_only_branch_name(self):
+        err = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stderr(err):
+            code = main(["branch", "  "])
+
+        self.assertEqual(code, 1)
+
+    def test_outside_git_repository_fails_clearly(self):
+        outside = tempfile.mkdtemp()
+        err = io.StringIO()
+        try:
+            with _chdir(outside), contextlib.redirect_stderr(err):
+                code = main(["branch", "feature-x"])
+            self.assertEqual(code, 1)
+            self.assertIn("not a Git repository", err.getvalue())
+        finally:
+            os.rmdir(outside)
 
 
 if __name__ == "__main__":
