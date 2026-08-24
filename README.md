@@ -40,22 +40,39 @@ uv run bindle repo info --json
 
 The CLI stays intentionally small; it is infrastructure for future narrow capabilities, not a work-DAG or orchestration layer (see AGENTS.md, docs/SCOPE.md).
 
-### Lifecycle commands (placeholders)
+### Lifecycle commands
 
-`bindle --help` also advertises the intended lifecycle command surface —
-`init`, `remove`, `list`, `status`, `update`, `upgrade`, and `doctor`. Each
-of these has stable `--help` text but **no implementation yet**; running
-one directly prints `bindle <command>: not implemented yet` and exits
-non-zero. They exist to establish the interface ahead of implementing the
-underlying components (Projectmem, Symphony, skill packs, installation
-state, upgrades, diagnostics) in later slices.
+`bindle --help` advertises the intended lifecycle command surface —
+`init`, `remove`, `migrate-legacy-global`, `list`, `status`, `update`,
+`upgrade`, and `doctor`. Some of these are real today; the rest are
+interface-only placeholders ahead of later slices:
 
-The repository is the primary unit of Bindle management. `bindle init` is
-the explicit opt-in boundary — a repository becomes Bindle-managed by
-running it there — and most other lifecycle commands target the current
-repository rather than the whole machine:
+* **Real today**: `bindle --version`, `bindle repo info`, `bindle init`,
+  `bindle remove`, `bindle migrate-legacy-global`.
+* **Still interface-only** (stable `--help` text, but running one directly
+  prints `bindle <command>: not implemented yet` and exits non-zero):
+  `bindle list`, `bindle status`, `bindle update`, `bindle upgrade`,
+  `bindle doctor`.
 
-* Global/machine-level: `bindle list` (inventory of repositories that have opted into Bindle) and `bindle update` (refresh Bindle's own component/catalog knowledge — never mutates a managed repository).
+`bindle init`/`bindle remove` currently manage only the repo-local
+guardrail capability — a Git hook layer (protected `main`, hook
+composition, installed via repo-local `core.hooksPath`) and a Claude Code
+PreToolUse guard plus `permissions.deny` hardening (installed into the
+target repository's own `.claude/settings.local.json`). They are not yet
+general Projectmem/Symphony/skill-pack composition commands; that's future
+work. `bindle init` is the explicit opt-in boundary — a repository becomes
+Bindle-managed by running it there — and `bindle remove` reverses it,
+scoped to that one repository only. Both refuse to run (rather than
+silently migrating or removing it) if a recognized legacy,
+pre-repo-local, **machine-global** Bindle guardrail install is still
+present; `bindle migrate-legacy-global` is the explicit, repo-independent
+command that clears that legacy state, and only that.
+
+The repository is the primary unit of Bindle management, and most
+lifecycle commands target the current repository rather than the whole
+machine:
+
+* Global/machine-level: `bindle list` (inventory of repositories that have opted into Bindle), `bindle update` (refresh Bindle's own component/catalog knowledge — never mutates a managed repository), and `bindle migrate-legacy-global` (remove a recognized legacy machine-global guardrail install — never touches an unrelated global value).
 * Repository-targeted (current repository by default): `bindle init`, `bindle remove`, `bindle status`, `bindle upgrade` (upgrade this repository's installed components), `bindle doctor`, and `bindle repo info`.
 
 ## Current workshop

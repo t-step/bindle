@@ -78,7 +78,7 @@ bin/check-private-info.sh || fail=1
 section "bin/check-private-info.sh --audit-denylist"
 bin/check-private-info.sh --audit-denylist || fail=1
 
-# --- guardrail layer (docs/DECISIONS.md D031) --------------------------------
+# --- guardrail layer (docs/DECISIONS.md D031/D032) ---------------------------
 section "bin/test-git-hook-dispatch.sh"
 bin/test-git-hook-dispatch.sh || fail=1
 
@@ -87,6 +87,12 @@ bin/test-claude-protected-main-guard.sh || fail=1
 
 section "bin/test-install-guardrails.sh"
 bin/test-install-guardrails.sh || fail=1
+
+section "bin/test-guardrail-ownership.sh"
+bin/test-guardrail-ownership.sh || fail=1
+
+section "bin/test-packaged-install.sh"
+bin/test-packaged-install.sh || fail=1
 
 # --- 7. decision-reference consistency ---------------------------------------
 # docs/DECISIONS.md defines decisions as "## D001: <title>" headings. Collect
