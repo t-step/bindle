@@ -86,6 +86,18 @@ echo "sweep discloses its own scope (#347):"
 # scope_repo DIR — a throwaway git repo holding a copy of the scanner, so the
 # sweep runs against fixture content only. The scanner derives its repo root
 # from its own location, hence bin/.
+#
+# Fixtures commit on branch "main" (see git symbolic-ref below), which is
+# also the exact branch name a developer's globally installed Bindle
+# guardrail (core.hooksPath, docs/DECISIONS.md D031) protects on EVERY
+# repository on the machine, this throwaway one included. Left inherited,
+# that guard silently blocks every commit here after the first (a repo's
+# very first commit is exempt as unborn-HEAD), so a fixture's later
+# assertions would observe whatever commit history the developer happens to
+# have installed rather than the deterministic history the test wrote. Point
+# core.hooksPath at an empty, repo-local directory so this fixture's git
+# history depends only on this test, never on the invoking machine's global
+# hook configuration — same isolation goal as scrubbing GIT_DIR et al above.
 scope_repo() {
   local r="$1"
   mkdir -p "$r/bin"
@@ -93,8 +105,34 @@ scope_repo() {
   chmod +x "$r/bin/check-private-info.sh"
   printf 'clean content\n' >"$r/tracked.md"
   (cd "$r" && git init -q && git symbolic-ref HEAD refs/heads/main &&
+    mkdir -p .git/hooks-empty && git config core.hooksPath "$r/.git/hooks-empty" &&
     git add -A && git -c user.email=test@example.com -c user.name=test commit -q -m init)
 }
+
+# ===========================================================================
+echo "fixture repos are isolated from the invoking machine's global Git hooks:"
+
+# Direct proof of the scope_repo isolation above: a SECOND commit on the
+# fixture's "main" branch (HEAD already exists, so the unborn-branch
+# exemption no longer applies) must succeed and print nothing about a
+# guardrail, regardless of what the developer running this suite has
+# installed globally. Before core.hooksPath was pinned in scope_repo, this
+# was silently blocked on any machine with Bindle's guardrail installed
+# (docs/DECISIONS.md D031) — it just went unnoticed by most fixtures because
+# `git add -A` still puts the content in the index they scan; only a fixture
+# that reads real commit history (the rename-detection check further below)
+# ever surfaced the blocked commit as a failure.
+D="$TMP/scope-hook-isolation"
+scope_repo "$D"
+printf 'second commit\n' >"$D/second.md"
+(cd "$D" && git add second.md)
+commit_out="$(cd "$D" && git -c user.email=test@example.com -c user.name=test commit -q -m second 2>&1)"
+commit_rc=$?
+
+check "a second commit on the fixture's main branch succeeds regardless of any globally installed guardrail" \
+  [ "$commit_rc" -eq 0 ]
+check "the second commit produced no guardrail-block output" \
+  not_contains "guardrail" "$commit_out"
 
 D="$TMP/scope-untracked"
 scope_repo "$D"
