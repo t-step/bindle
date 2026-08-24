@@ -6,7 +6,7 @@
 # this same file runs for every hook Git invokes, whichever name it was
 # invoked as ($0's basename tells it).
 #
-# Rationale (plans/active/2026-08-23-local-guardrail-layer.md, "Decisions"
+# Rationale (plans/archive/2026-08-23-local-guardrail-layer.md, "Decisions"
 # #1): setting core.hooksPath globally redirects Git's hook lookup for
 # EVERY hook name, not only the ones Bindle has policy for. A dispatcher
 # that only existed for pre-commit/pre-merge-commit/pre-rebase would

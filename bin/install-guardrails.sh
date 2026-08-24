@@ -5,7 +5,7 @@
 # 'main' branch across every repository on this machine without disabling
 # any repository's own hooks, a matching user-level Claude Code PreToolUse
 # guard, and permissions.deny hardening for AGENTS.md's existing secret-file
-# policy (D012). See plans/active/2026-08-23-local-guardrail-layer.md.
+# policy (D012). See plans/archive/2026-08-23-local-guardrail-layer.md.
 #
 # Usage:
 #   bin/install-guardrails.sh              # preview only (default, no writes)

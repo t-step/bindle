@@ -9,7 +9,7 @@
 # (bin/git-hook-dispatch.sh) enforces underneath it: blocks tracked-file
 # mutation while the target repository's current branch is 'main', with a
 # one-shot escape hatch minted by bin/allow-main-write.sh — see
-# plans/active/2026-08-23-local-guardrail-layer.md, Decisions #2, for why
+# plans/archive/2026-08-23-local-guardrail-layer.md, Decisions #2, for why
 # this can't just reuse the Git layer's ALLOW_MAIN_WRITE=1 env var.
 #
 # Reads the same stdin-JSON / structured-decision shape as the existing
@@ -21,7 +21,7 @@
 # Bash subprocess can observe is the same identifier PreToolUse hooks receive
 # on stdin, and a best-effort binding here would be a security property
 # masquerading as a guaranteed one. See
-# plans/active/2026-08-23-local-guardrail-layer.md, Evidence.
+# plans/archive/2026-08-23-local-guardrail-layer.md, Evidence.
 #
 set -euo pipefail
 
