@@ -228,6 +228,12 @@ Do not implement features directly in the primary bindle checkout.
 * Do not modify sibling worktrees.
 * Do not use worktrees to bypass delegation limits.
 * Keep main releasable.
+* Start new work from an up-to-date main. Routine implementation and
+  maintenance work must branch from main before modifying tracked files.
+  main is canonical and read-only for routine work otherwise.
+* development is retained only as historical/incubation material. Do not
+  branch new work from development and do not merge it wholesale into main,
+  unless the user explicitly directs otherwise.
 
 See docs/WORKTREES.md for the identity model and operating details.
 
