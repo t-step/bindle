@@ -40,6 +40,24 @@ uv run bindle repo info --json
 
 The CLI stays intentionally small; it is infrastructure for future narrow capabilities, not a work-DAG or orchestration layer (see AGENTS.md, docs/SCOPE.md).
 
+### Lifecycle commands (placeholders)
+
+`bindle --help` also advertises the intended lifecycle command surface —
+`init`, `remove`, `list`, `status`, `update`, `upgrade`, and `doctor`. Each
+of these has stable `--help` text but **no implementation yet**; running
+one directly prints `bindle <command>: not implemented yet` and exits
+non-zero. They exist to establish the interface ahead of implementing the
+underlying components (Projectmem, Symphony, skill packs, installation
+state, upgrades, diagnostics) in later slices.
+
+The repository is the primary unit of Bindle management. `bindle init` is
+the explicit opt-in boundary — a repository becomes Bindle-managed by
+running it there — and most other lifecycle commands target the current
+repository rather than the whole machine:
+
+* Global/machine-level: `bindle list` (inventory of repositories that have opted into Bindle) and `bindle update` (refresh Bindle's own component/catalog knowledge — never mutates a managed repository).
+* Repository-targeted (current repository by default): `bindle init`, `bindle remove`, `bindle status`, `bindle upgrade` (upgrade this repository's installed components), `bindle doctor`, and `bindle repo info`.
+
 ## Current workshop
 
 Today Bindle assumes a fairly standard engineering toolkit — coding harnesses, a knowledge vault, source control, and a handful of domain-specific tools spanning scientific computing and game development.
