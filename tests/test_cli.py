@@ -6,11 +6,14 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from bindle import __version__
-from bindle.cli import main
+from bindle.cli import _LIFECYCLE_COMMANDS, main
+
+TOP_LEVEL_COMMANDS = [*_LIFECYCLE_COMMANDS, "repo"]
 
 
 def _run(args, cwd):
@@ -36,6 +39,14 @@ def _chdir(path):
         yield
     finally:
         os.chdir(original)
+
+
+def _normalize_ws(text):
+    # argparse wraps description/help text to the terminal width, so a
+    # multi-sentence description can gain line breaks mid-phrase. Compare
+    # on whitespace-normalized text so wrapping never causes a spurious
+    # mismatch.
+    return " ".join(text.split())
 
 
 class TestVersion(unittest.TestCase):
@@ -89,6 +100,94 @@ class TestRepoInfoCommand(unittest.TestCase):
             self.assertIn("not a Git repository", err.getvalue())
         finally:
             os.rmdir(outside)
+
+
+class TestTopLevelHelpSurface(unittest.TestCase):
+    def _help_text(self, argv):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            with self.assertRaises(SystemExit) as cm:
+                main(argv)
+        self.assertEqual(cm.exception.code, 0)
+        return out.getvalue()
+
+    def test_all_target_commands_listed(self):
+        text = self._help_text(["--help"])
+        for name in TOP_LEVEL_COMMANDS:
+            self.assertIn(name, text)
+
+    def test_help_descriptions_reflect_intended_meaning(self):
+        text = _normalize_ws(self._help_text(["--help"]))
+        for help_text, _description in _LIFECYCLE_COMMANDS.values():
+            self.assertIn(help_text, text)
+        self.assertIn("Repository information.", text)
+
+    def test_each_lifecycle_command_has_working_help(self):
+        for name, (_help_text, description) in _LIFECYCLE_COMMANDS.items():
+            with self.subTest(command=name):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    with self.assertRaises(SystemExit) as cm:
+                        main([name, "--help"])
+                self.assertEqual(cm.exception.code, 0)
+                text = out.getvalue()
+                self.assertIn(f"usage: bindle {name}", text)
+                # The command's own --help must show its full description,
+                # not merely the usage line.
+                self.assertIn(_normalize_ws(description), _normalize_ws(text))
+
+
+class TestGlobalVsRepositoryContract(unittest.TestCase):
+    # Regression coverage for the documented split: `list`/`update` are
+    # global/machine-level, everything else (init/remove/status/upgrade/
+    # doctor/repo info) targets the current repository, with `upgrade`
+    # specifically repository-targeted by default (no fleet-wide mutation).
+    def _help_text(self, argv):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            with self.assertRaises(SystemExit):
+                main(argv)
+        return _normalize_ws(out.getvalue())
+
+    def test_update_is_global_and_does_not_mutate_repositories(self):
+        text = self._help_text(["update", "--help"])
+        self.assertIn("Global/machine-level", text)
+        self.assertIn("never mutates a managed repository", text)
+
+    def test_upgrade_is_repository_targeted_by_default(self):
+        text = self._help_text(["upgrade", "--help"])
+        self.assertIn("current repository", text)
+        self.assertIn("Repository-targeted by default", text)
+        self.assertNotIn("--all", text)
+
+    def test_list_is_global_inventory_of_opted_in_repositories(self):
+        text = self._help_text(["list", "--help"])
+        self.assertIn("Global/machine-level", text)
+        self.assertIn("bindle init", text)
+
+
+class TestUnimplementedLifecycleCommands(unittest.TestCase):
+    def test_direct_invocation_fails_clearly(self):
+        for name in _LIFECYCLE_COMMANDS:
+            with self.subTest(command=name):
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    code = main([name])
+                self.assertEqual(code, 1)
+                self.assertEqual(err.getvalue().strip(), f"bindle {name}: not implemented yet")
+                self.assertEqual(out.getvalue(), "")
+
+    def test_stubs_do_not_shell_out(self):
+        # Regression guard: an unimplemented command must not invoke any
+        # script or installer (e.g. scripts/doctor.sh) on its way to
+        # reporting "not implemented yet".
+        with mock.patch("subprocess.run", side_effect=AssertionError("must not shell out")):
+            for name in _LIFECYCLE_COMMANDS:
+                with self.subTest(command=name):
+                    err = io.StringIO()
+                    with contextlib.redirect_stderr(err):
+                        code = main([name])
+                    self.assertEqual(code, 1)
 
 
 if __name__ == "__main__":
