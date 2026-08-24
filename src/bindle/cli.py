@@ -3,14 +3,16 @@
 Establishes the command surface for Bindle's repository and global
 lifecycle commands (see AGENTS.md and docs/SCOPE.md). `--version`,
 `repo info`, `branch`, `init`, `remove`, `status`, and `migrate-legacy-global`
-have real behavior today; `init`/`remove`/`status` cover only the guardrail
-layer (Git hook dispatch + Claude Code PreToolUse guard) via
-install-guardrails.sh — they do not yet manage or report on any other
-Bindle-owned component. `status` is read-only (see guardrails.py). `branch`
-creates an isolated worktree and feature branch off freshly-fetched
-origin/main (AGENTS.md, "Development isolation"). `list`, `update`,
-`upgrade`, and `doctor` remain interface-only placeholders until their
-underlying components are implemented in a later slice.
+have real behavior today; `init`/`remove` cover only the guardrail layer
+(Git hook dispatch + Claude Code PreToolUse guard) via
+install-guardrails.sh — they do not yet manage any other Bindle-owned
+component. `status` additionally reports read-only Projectmem adoption
+state (see projectmem.py) alongside the guardrail layer, without installing,
+repairing, or otherwise mutating either. `branch` creates an isolated
+worktree and feature branch off freshly-fetched origin/main (AGENTS.md,
+"Development isolation"). `list`, `update`, `upgrade`, and `doctor` remain
+interface-only placeholders until their underlying components are
+implemented in a later slice.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from .guardrails import (
     installer_env,
     installer_path,
 )
+from .projectmem import detect_projectmem
 from .repo import NotAGitRepositoryError, get_repo_info
 
 # Lifecycle commands with an established name and short/long --help text.
@@ -198,10 +201,13 @@ def _cmd_status(args: argparse.Namespace) -> int:
         print(f"bindle status: {exc}", file=sys.stderr)
         return 1
 
+    projectmem_status = detect_projectmem(info)
+
     print(f"Repository: {os.path.basename(info.repo_root)}")
     print("Guardrails")
     print(f"  {'Git':<10}{git_status}")
     print(f"  {'Claude':<10}{claude_status}")
+    print(f"{'Projectmem':<10}  {projectmem_status}")
     return 0
 
 
