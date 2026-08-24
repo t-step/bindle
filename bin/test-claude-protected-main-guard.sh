@@ -14,8 +14,8 @@ set -uo pipefail
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-GUARD="$REPO_ROOT/bin/claude-protected-main-guard.sh"
-HELPER="$REPO_ROOT/bin/allow-main-write.sh"
+GUARD="$REPO_ROOT/src/bindle/_bin/claude-protected-main-guard.sh"
+HELPER="$REPO_ROOT/src/bindle/_bin/allow-main-write.sh"
 
 pass=0 fail=0
 check() { # check "description" command...
