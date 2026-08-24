@@ -171,7 +171,7 @@ class TestGlobalVsRepositoryContract(unittest.TestCase):
 _STILL_UNIMPLEMENTED = [
     name
     for name in _LIFECYCLE_COMMANDS
-    if name not in ("init", "remove", "migrate-legacy-global")
+    if name not in ("init", "remove", "status", "migrate-legacy-global")
 ]
 
 
@@ -391,6 +391,188 @@ class TestMigrateLegacyGlobalCommand(unittest.TestCase):
             code = main(["migrate-legacy-global"])
         self.assertEqual(code, 1)
         self.assertIn("guardrail installer not found", err.getvalue())
+
+
+def _intercept_installer_calls(on_installer_call):
+    # Like _intercept_installer_call, but for commands (status) that shell
+    # out to the installer more than once per invocation — collects every
+    # `["bash", ".../install-guardrails.sh", ...]` call in order.
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        if cmd and cmd[0] == "bash":
+            calls.append(cmd)
+            return on_installer_call(cmd)
+        return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+
+    return calls, mock.patch("subprocess.run", side_effect=fake_run)
+
+
+class TestStatusCommand(unittest.TestCase):
+    # `bindle status` (read-only) drives detect_git_guardrails/
+    # detect_claude_guardrails (guardrails.py), each a separate
+    # install-guardrails.sh --status invocation scoped to one layer via
+    # --git-only/--claude-only. See tests/test_guardrails.py for the
+    # detector functions' own real-fixture coverage, and
+    # bin/test-guardrail-status.sh for the full five-state matrix at the
+    # installer level — this class covers the CLI wiring and output
+    # formatting.
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = os.path.join(self.tmp.name, "repo")
+        _init_repo(self.repo)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _fake_status_output(self, git="installed", claude="installed"):
+        def on_installer_call(cmd):
+            if "--git-only" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, stdout=f"GIT_STATUS={git}\n")
+            if "--claude-only" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, stdout=f"CLAUDE_STATUS={claude}\n")
+            raise AssertionError(f"unexpected installer invocation: {cmd}")
+
+        return on_installer_call
+
+    def test_invokes_the_installer_read_only_once_per_layer(self):
+        calls, patch = _intercept_installer_calls(self._fake_status_output())
+        with _chdir(self.repo), patch:
+            code = main(["status"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(len(calls), 2)
+        flags = {tuple(c) for c in calls}
+        self.assertTrue(any("--git-only" in c for c in flags))
+        self.assertTrue(any("--claude-only" in c for c in flags))
+        for cmd in calls:
+            self.assertEqual(cmd[0], "bash")
+            self.assertTrue(cmd[1].endswith("_bin/install-guardrails.sh"))
+            self.assertIn("--status", cmd)
+            self.assertIn("--repo", cmd)
+            self.assertEqual(cmd[cmd.index("--repo") + 1], os.path.realpath(self.repo))
+            # Genuinely read-only: never any mutation/migration mode flag.
+            self.assertNotIn("--apply", cmd)
+            self.assertNotIn("--uninstall", cmd)
+            self.assertNotIn("--remove-legacy-global", cmd)
+
+    def test_output_format_matches_the_documented_shape(self):
+        _, patch = _intercept_installer_calls(self._fake_status_output(git="installed", claude="partial"))
+        out = io.StringIO()
+        with _chdir(self.repo), patch, contextlib.redirect_stdout(out):
+            code = main(["status"])
+
+        self.assertEqual(code, 0)
+        lines = out.getvalue().splitlines()
+        self.assertEqual(lines[0], f"Repository: {os.path.basename(os.path.realpath(self.repo))}")
+        self.assertEqual(lines[1], "Guardrails")
+        self.assertEqual(lines[2], "  Git       installed")
+        self.assertEqual(lines[3], "  Claude    partial")
+
+    def test_passes_bindle_python_env_for_the_installer(self):
+        captured_envs = []
+
+        def on_installer_call(cmd):
+            captured_envs.append(None)
+            if "--git-only" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, stdout="GIT_STATUS=not-installed\n")
+            return subprocess.CompletedProcess(cmd, 0, stdout="CLAUDE_STATUS=not-installed\n")
+
+        envs = []
+
+        def fake_run(cmd, **kwargs):
+            if cmd and cmd[0] == "bash":
+                envs.append(kwargs.get("env"))
+                return on_installer_call(cmd)
+            return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+
+        with _chdir(self.repo), mock.patch("subprocess.run", side_effect=fake_run):
+            code = main(["status"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(len(envs), 2)
+        for env in envs:
+            self.assertEqual(env.get("BINDLE_PYTHON"), sys.executable)
+
+    def test_outside_git_repository_fails_clearly_without_shelling_out(self):
+        outside = tempfile.mkdtemp()
+        err = io.StringIO()
+
+        def on_installer_call(cmd):
+            raise AssertionError("must not shell out")
+
+        try:
+            _, patch = _intercept_installer_calls(on_installer_call)
+            with patch, _chdir(outside), contextlib.redirect_stderr(err):
+                code = main(["status"])
+            self.assertEqual(code, 1)
+            self.assertIn("not a Git repository", err.getvalue())
+        finally:
+            os.rmdir(outside)
+
+    def test_reports_clearly_when_the_installer_script_is_missing(self):
+        err = io.StringIO()
+
+        def on_installer_call(cmd):
+            raise AssertionError("must not shell out")
+
+        _, patch = _intercept_installer_calls(on_installer_call)
+        with _chdir(self.repo), mock.patch(
+            "bindle.guardrails.installer_path",
+            return_value=Path("/nonexistent/install-guardrails.sh"),
+        ), patch, contextlib.redirect_stderr(err):
+            code = main(["status"])
+        self.assertEqual(code, 1)
+        self.assertIn("guardrail installer not found", err.getvalue())
+
+    def test_reports_clearly_when_the_installer_fails(self):
+        err = io.StringIO()
+
+        def on_installer_call(cmd):
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="something broke")
+
+        _, patch = _intercept_installer_calls(on_installer_call)
+        with _chdir(self.repo), patch, contextlib.redirect_stderr(err):
+            code = main(["status"])
+        self.assertEqual(code, 1)
+        self.assertIn("something broke", err.getvalue())
+
+    def test_real_end_to_end_reflects_init_and_remove_with_no_mutation(self):
+        # No mocking: proves the whole `bindle status` -> guardrails.py ->
+        # install-guardrails.sh --status chain against a real repository,
+        # and that status itself never changes what it reports.
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["status"])
+        self.assertEqual(code, 0)
+        self.assertIn("Git       not-installed", out.getvalue())
+        self.assertIn("Claude    not-installed", out.getvalue())
+
+        # Repeating it changes nothing (still not-installed).
+        out2 = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out2):
+            main(["status"])
+        self.assertEqual(out.getvalue(), out2.getvalue())
+
+        with _chdir(self.repo):
+            self.assertEqual(main(["init"]), 0)
+
+        out3 = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out3):
+            code = main(["status"])
+        self.assertEqual(code, 0)
+        self.assertIn("Git       installed", out3.getvalue())
+        self.assertIn("Claude    installed", out3.getvalue())
+
+        with _chdir(self.repo):
+            self.assertEqual(main(["remove"]), 0)
+
+        out4 = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out4):
+            code = main(["status"])
+        self.assertEqual(code, 0)
+        self.assertIn("Git       not-installed", out4.getvalue())
+        self.assertIn("Claude    not-installed", out4.getvalue())
 
 
 class TestBranchCommand(unittest.TestCase):
