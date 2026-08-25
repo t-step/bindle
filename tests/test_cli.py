@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -18,8 +19,9 @@ from bindle.cli import _LIFECYCLE_COMMANDS, main
 from bindle.guardrails import detect_claude_guardrails, detect_git_guardrails
 from bindle.projectmem import detect_projectmem
 from bindle.repo import get_repo_info
+from bindle.skills import KitInfo, KitOpOutcome, KitStatus
 
-TOP_LEVEL_COMMANDS = [*_LIFECYCLE_COMMANDS, "repo", "branch"]
+TOP_LEVEL_COMMANDS = [*_LIFECYCLE_COMMANDS, "repo", "branch", "skills"]
 
 _HAS_REAL_PJM = shutil.which("pjm") is not None
 
@@ -144,6 +146,66 @@ class TestTopLevelHelpSurface(unittest.TestCase):
                 # The command's own --help must show its full description,
                 # not merely the usage line.
                 self.assertIn(_normalize_ws(description), _normalize_ws(text))
+
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[")
+
+
+class TestHelpOutputIsPlainText(unittest.TestCase):
+    # Python 3.14 made argparse.ArgumentParser(color=True) the default —
+    # a styling policy Bindle never opted into (every other CLI surface
+    # is deterministic plain text). _BindleArgumentParser forces it off.
+    # PYTHON_COLORS=1 forces `_colorize.can_colorize()` to return True
+    # unconditionally (verified against the installed argparse/_colorize
+    # source this session), so this test cannot pass merely because
+    # stdout isn't attached to a terminal — only because `color` is
+    # actually False on every parser/subparser instance.
+    def _help_text_forced_color(self, argv):
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"PYTHON_COLORS": "1"}):
+            with contextlib.redirect_stdout(out):
+                with self.assertRaises(SystemExit) as cm:
+                    main(argv)
+        self.assertEqual(cm.exception.code, 0)
+        return out.getvalue()
+
+    def test_top_level_help_has_no_ansi_escapes(self):
+        text = self._help_text_forced_color(["--help"])
+        self.assertIsNone(_ANSI_ESCAPE_RE.search(text), text)
+
+    def test_every_lifecycle_command_help_has_no_ansi_escapes(self):
+        for name in _LIFECYCLE_COMMANDS:
+            with self.subTest(command=name):
+                text = self._help_text_forced_color([name, "--help"])
+                self.assertIsNone(_ANSI_ESCAPE_RE.search(text), text)
+
+    def test_nested_subparser_help_has_no_ansi_escapes(self):
+        # Two levels of nesting (skills -> add), the deepest subparser
+        # this CLI has — proves add_subparsers()'s parser_class
+        # propagation actually reaches nested subparsers, not just the
+        # top level.
+        for argv in (["repo", "info", "--help"], ["skills", "--help"], ["skills", "add", "--help"]):
+            with self.subTest(argv=argv):
+                text = self._help_text_forced_color(argv)
+                self.assertIsNone(_ANSI_ESCAPE_RE.search(text), text)
+
+    def test_subparser_instances_use_the_bindle_parser_class(self):
+        # A direct structural check, not just a behavioral one: every
+        # subparser argparse constructs must actually be
+        # _BindleArgumentParser, confirming add_subparsers()'s
+        # parser_class default (type(self)) is doing the propagation —
+        # not merely that color happens to end up False some other way.
+        from bindle.cli import _BindleArgumentParser, build_parser
+
+        parser = build_parser()
+        self.assertIsInstance(parser, _BindleArgumentParser)
+
+        subparsers_action = next(
+            action for action in parser._subparsers._group_actions if hasattr(action, "choices")
+        )
+        for name, subparser in subparsers_action.choices.items():
+            with self.subTest(subparser=name):
+                self.assertIsInstance(subparser, _BindleArgumentParser)
 
 
 class TestGlobalVsRepositoryContract(unittest.TestCase):
@@ -1431,6 +1493,167 @@ class TestInitProjectmemLinkedWorktree(unittest.TestCase):
         )
         self.assertNotEqual(blocked.returncode, 0)
         self.assertIn("protected", blocked.stderr)
+
+
+class _FakeKitModule:
+    """A stand-in for a real kit module (software_engineering.py,
+    spec_kit.py) used to test the `skills` CLI's own logic — argument
+    wiring, desired-state read/write, exit codes — without depending on
+    any real provider CLI or network access."""
+
+    def __init__(self):
+        self.status_calls = []
+        self.add_calls = []
+        self.remove_calls = []
+        self.status_result = KitStatus(claude="not-installed", codex="not-installed")
+        self.add_result = KitOpOutcome(ok=True, lines=["Claude    installed", "Codex     installed"])
+        self.remove_result = KitOpOutcome(ok=True, lines=["Claude    removed", "Codex     removed"])
+
+    def status(self, repo_info):
+        self.status_calls.append(repo_info)
+        return self.status_result
+
+    def add(self, repo_info):
+        self.add_calls.append(repo_info)
+        return self.add_result
+
+    def remove(self, repo_info):
+        self.remove_calls.append(repo_info)
+        return self.remove_result
+
+
+class TestSkillsCommand(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = os.path.join(self.tmp.name, "repo")
+        _init_repo(self.repo)
+        self.fake = _FakeKitModule()
+        self.fake_catalog = {
+            "fake-kit": KitInfo(
+                kit_id="fake-kit",
+                description="A fake kit for CLI testing.",
+                source="example/fake",
+                module=self.fake,
+            )
+        }
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_list_shows_the_real_catalog(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = main(["skills", "list"])
+        self.assertEqual(code, 0)
+        text = out.getvalue()
+        self.assertIn("software-engineering", text)
+        self.assertIn("spec-kit", text)
+        self.assertIn("t-step/skills", text)
+        self.assertIn("github/spec-kit", text)
+
+    def test_status_outside_a_git_repository_fails_clearly(self):
+        outside = tempfile.mkdtemp()
+        err = io.StringIO()
+        try:
+            with _chdir(outside), contextlib.redirect_stderr(err):
+                code = main(["skills", "status"])
+            self.assertEqual(code, 1)
+            self.assertIn("not a Git repository", err.getvalue())
+        finally:
+            os.rmdir(outside)
+
+    def test_add_unknown_kit_fails_clearly_without_touching_desired_state(self):
+        err = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stderr(err):
+            code = main(["skills", "add", "nonexistent-kit"])
+        self.assertEqual(code, 1)
+        self.assertIn("unknown kit 'nonexistent-kit'", err.getvalue())
+        self.assertIn("software-engineering", err.getvalue())
+        self.assertIn("spec-kit", err.getvalue())
+        self.assertFalse(os.path.exists(os.path.join(self.repo, "bindle.toml")))
+
+    def test_remove_unknown_kit_fails_clearly(self):
+        err = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stderr(err):
+            code = main(["skills", "remove", "nonexistent-kit"])
+        self.assertEqual(code, 1)
+        self.assertIn("unknown kit 'nonexistent-kit'", err.getvalue())
+
+    def test_add_records_desired_state_and_calls_the_kit_module(self):
+        out = io.StringIO()
+        with _chdir(self.repo), mock.patch.dict("bindle.skills.catalog.CATALOG", self.fake_catalog, clear=True), contextlib.redirect_stdout(
+            out
+        ):
+            code = main(["skills", "add", "fake-kit"])
+        self.assertEqual(code, 0)
+        self.assertEqual(len(self.fake.add_calls), 1)
+        with open(os.path.join(self.repo, "bindle.toml")) as f:
+            self.assertIn('kits = ["fake-kit"]', f.read())
+        self.assertIn("Claude    installed", out.getvalue())
+
+    def test_add_is_idempotent_in_desired_state(self):
+        with _chdir(self.repo), mock.patch.dict("bindle.skills.catalog.CATALOG", self.fake_catalog, clear=True):
+            main(["skills", "add", "fake-kit"])
+            code = main(["skills", "add", "fake-kit"])
+        self.assertEqual(code, 0)
+        with open(os.path.join(self.repo, "bindle.toml")) as f:
+            self.assertEqual(f.read().count("fake-kit"), 1)
+
+    def test_add_returns_nonzero_when_the_kit_module_reports_failure_but_still_records_desired_state(self):
+        self.fake.add_result = KitOpOutcome(ok=False, lines=["Claude    install failed: boom"])
+        with _chdir(self.repo), mock.patch.dict("bindle.skills.catalog.CATALOG", self.fake_catalog, clear=True):
+            code = main(["skills", "add", "fake-kit"])
+        self.assertEqual(code, 1)
+        with open(os.path.join(self.repo, "bindle.toml")) as f:
+            self.assertIn("fake-kit", f.read())
+
+    def test_remove_records_desired_state_and_calls_the_kit_module(self):
+        with _chdir(self.repo), mock.patch.dict("bindle.skills.catalog.CATALOG", self.fake_catalog, clear=True):
+            main(["skills", "add", "fake-kit"])
+            code = main(["skills", "remove", "fake-kit"])
+        self.assertEqual(code, 0)
+        self.assertEqual(len(self.fake.remove_calls), 1)
+        with open(os.path.join(self.repo, "bindle.toml")) as f:
+            self.assertIn("kits = []", f.read())
+
+    def test_remove_on_a_never_added_kit_is_a_clean_no_op(self):
+        # No bindle.toml exists yet, and the kit was never desired — remove
+        # must not fabricate a config file just to record an empty list.
+        with _chdir(self.repo), mock.patch.dict("bindle.skills.catalog.CATALOG", self.fake_catalog, clear=True):
+            code = main(["skills", "remove", "fake-kit"])
+        self.assertEqual(code, 0)
+        self.assertFalse(os.path.exists(os.path.join(self.repo, "bindle.toml")))
+
+    def test_remove_is_idempotent_once_a_kit_has_been_desired(self):
+        with _chdir(self.repo), mock.patch.dict("bindle.skills.catalog.CATALOG", self.fake_catalog, clear=True):
+            main(["skills", "add", "fake-kit"])
+            main(["skills", "remove", "fake-kit"])
+            code = main(["skills", "remove", "fake-kit"])
+        self.assertEqual(code, 0)
+        with open(os.path.join(self.repo, "bindle.toml")) as f:
+            self.assertIn("kits = []", f.read())
+
+    def test_status_reports_desired_flag_and_per_harness_state(self):
+        self.fake.status_result = KitStatus(claude="installed", codex="partial")
+        with _chdir(self.repo), mock.patch.dict("bindle.skills.catalog.CATALOG", self.fake_catalog, clear=True):
+            main(["skills", "add", "fake-kit"])
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = main(["skills", "status"])
+        self.assertEqual(code, 0)
+        text = out.getvalue()
+        self.assertIn("fake-kit", text)
+        self.assertIn("installed", text)
+        self.assertIn("partial", text)
+
+    def test_status_shows_not_desired_before_any_add(self):
+        out = io.StringIO()
+        with _chdir(self.repo), mock.patch.dict("bindle.skills.catalog.CATALOG", self.fake_catalog, clear=True), contextlib.redirect_stdout(
+            out
+        ):
+            code = main(["skills", "status"])
+        self.assertEqual(code, 0)
+        self.assertIn("no", out.getvalue())
 
 
 if __name__ == "__main__":
