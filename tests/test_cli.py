@@ -574,6 +574,59 @@ class TestStatusCommand(unittest.TestCase):
         self.assertIn("Git       not-installed", out4.getvalue())
         self.assertIn("Claude    not-installed", out4.getvalue())
 
+    def test_projectmem_row_not_installed_by_default(self):
+        # No mocking of the guardrail installer here: proves the real
+        # detect_projectmem wiring against a repository with no
+        # .projectmem/ directory at all.
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["status"])
+        self.assertEqual(code, 0)
+        lines = out.getvalue().splitlines()
+        self.assertEqual(lines[4], "Projectmem  not-installed")
+
+    def test_projectmem_row_reflects_real_projectmem_state(self):
+        mem_dir = os.path.join(self.repo, ".projectmem")
+        os.makedirs(mem_dir)
+        with open(os.path.join(mem_dir, "config.toml"), "w") as f:
+            f.write('summary_size_limit_kb = 20\nrecent_days = 30\nproject_description = ""\n')
+
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["status"])
+        self.assertEqual(code, 0)
+        self.assertIn("Projectmem  installed", out.getvalue())
+
+    def test_mixed_guardrail_and_projectmem_rendering(self):
+        # Guardrails partially installed, Projectmem not installed at all —
+        # each row renders its own independently observed state.
+        _, patch = _intercept_installer_calls(self._fake_status_output(git="installed", claude="partial"))
+        out = io.StringIO()
+        with _chdir(self.repo), patch, contextlib.redirect_stdout(out):
+            code = main(["status"])
+
+        self.assertEqual(code, 0)
+        lines = out.getvalue().splitlines()
+        self.assertEqual(lines[0], f"Repository: {os.path.basename(os.path.realpath(self.repo))}")
+        self.assertEqual(lines[1], "Guardrails")
+        self.assertEqual(lines[2], "  Git       installed")
+        self.assertEqual(lines[3], "  Claude    partial")
+        self.assertEqual(lines[4], "Projectmem  not-installed")
+
+    def test_repeated_status_calls_cause_no_projectmem_mutation(self):
+        mem_dir = os.path.join(self.repo, ".projectmem")
+        os.makedirs(mem_dir)
+        with open(os.path.join(mem_dir, "config.toml"), "w") as f:
+            f.write('summary_size_limit_kb = 20\n')
+        before = sorted(os.listdir(mem_dir))
+
+        with _chdir(self.repo):
+            self.assertEqual(main(["status"]), 0)
+            self.assertEqual(main(["status"]), 0)
+
+        after = sorted(os.listdir(mem_dir))
+        self.assertEqual(before, after)
+
 
 class TestBranchCommand(unittest.TestCase):
     # `bindle branch <name>` closes the "forking gap": a single command
