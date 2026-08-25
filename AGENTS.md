@@ -173,6 +173,39 @@ Durable architecture, product rules, decisions, and operating instructions belon
 
 See docs/TOOLCHAIN.md and D022 for details.
 
+Local retrieval (QMD)
+
+QMD is an optional, repository-scoped local search index over this
+repository's own durable Markdown (root-level *.md, docs/, plans/), not a
+source of truth and not a work-coordination system. Markdown files remain
+authoritative; the QMD index is derived and rebuildable.
+
+Opt in per repository, per worktree, with:
+
+bindle init --qmd
+
+This ensures a project-local QMD collection (`.qmd/`, untracked, never
+committed) exists and is indexed via QMD's own native CLI. `bindle status`
+reports read-only adoption state (`ready`, `not-initialized`,
+`unavailable`, `conflict`). `bindle remove` never touches `.qmd/`.
+
+When a repository has opted in:
+
+* Use QMD's own native CLI directly — `qmd search`/`qmd query`/`qmd get` —
+  rather than re-deriving retrieval through file reads or grep when the
+  question is "what does this repository's Markdown already say about X."
+* After adding or editing tracked Markdown, run `qmd update` yourself if
+  you need the index to reflect it immediately; nothing refreshes it
+  automatically.
+* Do not run `qmd embed`, `qmd pull`, or any command that downloads
+  embedding models unless the user explicitly asks for semantic/hybrid
+  search — BM25 (`qmd search`) requires no model download and is the
+  default mode.
+* Never register or invoke QMD's MCP server (`qmd mcp`) or its Claude Code
+  plugin as part of Bindle setup — not part of this integration's scope.
+
+See docs/TOOLCHAIN.md and D036 for details.
+
 Durable knowledge
 
 A session is evidence that work occurred, not automatically durable truth.
