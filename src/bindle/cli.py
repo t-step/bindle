@@ -3,16 +3,29 @@
 Establishes the command surface for Bindle's repository and global
 lifecycle commands (see AGENTS.md and docs/SCOPE.md). `--version`,
 `repo info`, `branch`, `init`, `remove`, `status`, and `migrate-legacy-global`
-have real behavior today; `init`/`remove` cover only the guardrail layer
+have real behavior today. `init`/`remove` always cover the guardrail layer
 (Git hook dispatch + Claude Code PreToolUse guard) via
-install-guardrails.sh — they do not yet manage any other Bindle-owned
-component. `status` additionally reports read-only Projectmem adoption
-state (see projectmem.py) alongside the guardrail layer, without installing,
-repairing, or otherwise mutating either. `branch` creates an isolated
-worktree and feature branch off freshly-fetched origin/main (AGENTS.md,
-"Development isolation"). `list`, `update`, `upgrade`, and `doctor` remain
-interface-only placeholders until their underlying components are
-implemented in a later slice.
+install-guardrails.sh; `init --projectmem` additionally ensures Projectmem
+is initialized for the repository via the native `pjm` CLI (see
+projectmem.py) — the explicit, opt-in provider-lifecycle seam this slice
+adds, still no general Bindle-owned component/provider registry.
+Projectmem storage is initialized worktree-local (`pjm init --no-hooks
+...`); its Git hooks are then installed separately, against the
+repository's shared Git common directory (`pjm hooks install`, `cwd`
+resolved to the main checkout) rather than a linked worktree's own `.git`
+(a file, not a directory there) — see D033. Known Projectmem preconditions
+(partial/conflicting `.projectmem/`, a missing `pjm` executable) are
+checked before guardrails mutate anything, so a refusal on the Projectmem
+side never leaves guardrails newly installed/reconciled behind it.
+`remove` never touches Projectmem's own state, since Bindle has no
+ownership record proving it may destroy it.
+`status` additionally reports read-only Projectmem adoption state
+alongside the guardrail layer, without installing, repairing, or
+otherwise mutating either. `branch` creates an
+isolated worktree and feature branch off freshly-fetched origin/main
+(AGENTS.md, "Development isolation"). `list`, `update`, `upgrade`, and
+`doctor` remain interface-only placeholders until their underlying
+components are implemented in a later slice.
 """
 
 from __future__ import annotations
@@ -32,7 +45,12 @@ from .guardrails import (
     installer_env,
     installer_path,
 )
-from .projectmem import detect_projectmem
+from .projectmem import (
+    PJM_HOOKS_INSTALL_ARGS,
+    PJM_INIT_ARGS,
+    detect_projectmem,
+    pjm_executable,
+)
 from .repo import NotAGitRepositoryError, get_repo_info
 
 # Lifecycle commands with an established name and short/long --help text.
@@ -60,7 +78,10 @@ _LIFECYCLE_COMMANDS: dict[str, tuple[str, str]] = {
         "Repository-scoped only: refuses to run (rather than silently "
         "migrating or removing it) if a recognized legacy machine-global "
         "Bindle guardrail install is still present; run "
-        "`bindle migrate-legacy-global` first.",
+        "`bindle migrate-legacy-global` first. Add --projectmem to also "
+        "ensure Projectmem is initialized for this repository via its "
+        "native `pjm init` CLI — optional, never implied by a bare "
+        "`bindle init`.",
     ),
     "remove": (
         "Remove Bindle-managed components from this repository.",
@@ -154,12 +175,161 @@ def _run_guardrail_installer(command: str, mode: str) -> int:
     return result.returncode
 
 
+def _projectmem_init_preflight(info) -> tuple[int | None, str, str | None]:
+    # Read-only precondition check for `bindle init --projectmem`, run
+    # BEFORE any mutation (guardrails or Projectmem) — a known Projectmem
+    # precondition failure must never leave guardrails newly
+    # installed/reconciled behind it. Detection is the exact same read-only
+    # detect_projectmem() `bindle status` already uses; detection does not
+    # imply ownership, so "installed" is a no-op success regardless of
+    # whether Bindle created it, and needs no `pjm` executable at all.
+    #
+    # Never lets native `pjm init` run against "partial"/"conflict" state:
+    # verified empirically this session that it does NOT refuse on either
+    # (a partial `.projectmem/` is silently completed; a conflicting file
+    # crashes with an unhandled traceback) — this check is what makes
+    # Bindle refuse cleanly instead.
+    #
+    # Returns (refusal_exit_code, state, pjm_path). refusal_exit_code is
+    # None when the precondition passed (proceed to guardrails); pjm_path
+    # is the resolved `pjm` binary to reuse for the later init call when
+    # state is "not-installed", else None (not needed for "installed").
+    mem_dir = os.path.join(info.worktree_root, ".projectmem")
+    state = detect_projectmem(info)
+
+    if state == "partial":
+        print(
+            f"bindle init --projectmem: {mem_dir} exists but is missing "
+            "config.toml — a recognizable but incomplete Projectmem state. "
+            "Refusing to finish initialization over ambiguous state "
+            "(native `pjm init` would silently complete it, which could "
+            "paper over a failed prior init or an unrelated directory of "
+            "the same name). Resolve it yourself, then retry — guardrails "
+            "were not touched.",
+            file=sys.stderr,
+        )
+        return 1, state, None
+
+    if state == "conflict":
+        print(
+            f"bindle init --projectmem: {mem_dir} exists but is not a "
+            "directory Projectmem can use (a file, or a dangling symlink). "
+            "Refusing to replace it. Remove or rename it yourself, then "
+            "retry — guardrails were not touched.",
+            file=sys.stderr,
+        )
+        return 1, state, None
+
+    if state == "installed":
+        return None, state, None
+
+    # not-installed: a `pjm` executable is required before anything else
+    # in this invocation mutates. Never falls back to constructing
+    # .projectmem/ state manually — see projectmem.py.
+    pjm = pjm_executable()
+    if pjm is None:
+        print(
+            "bindle init --projectmem: the `pjm` executable was not found "
+            "on PATH. Install Projectmem yourself (e.g. `uv tool install "
+            "projectmem`) and retry — Bindle does not fall back to "
+            "constructing .projectmem/ state manually, and guardrails were "
+            "not touched.",
+            file=sys.stderr,
+        )
+        return 1, state, None
+
+    return None, state, pjm
+
+
 def _cmd_init(args: argparse.Namespace) -> int:
-    return _run_guardrail_installer("init", "--apply")
+    if not args.projectmem:
+        return _run_guardrail_installer("init", "--apply")
+
+    try:
+        info = get_repo_info()
+    except NotAGitRepositoryError as exc:
+        print(f"bindle init: {exc}", file=sys.stderr)
+        return 1
+
+    refusal, state, pjm = _projectmem_init_preflight(info)
+    if refusal is not None:
+        return refusal
+
+    # Preflight passed — now mutate. Guardrails first (unchanged bare
+    # `bindle init` behavior), Projectmem second. These are two
+    # independent operations, not a transaction: a guardrail failure here
+    # simply means Projectmem is never attempted this invocation (nothing
+    # was mutated on the Projectmem side by the preflight check above);
+    # re-running `bindle init --projectmem` after fixing the guardrail
+    # problem picks Projectmem up on its own next run.
+    guardrail_code = _run_guardrail_installer("init", "--apply")
+    if guardrail_code != 0:
+        return guardrail_code
+
+    if state == "installed":
+        # Accepting a healthy existing installation, not repairing one:
+        # this guarantees correct hook placement when Bindle itself
+        # initializes Projectmem, but it does not audit or repair the hook
+        # state of a pre-existing Projectmem installation (e.g. one set up
+        # by hand from a linked worktree before this fix existed). Doing
+        # that would turn `init --projectmem` into a general repair
+        # mechanism, which is out of scope for this slice.
+        print("Projectmem: already installed — left unchanged.")
+        return 0
+
+    # not-installed, guardrails now applied: initialize storage through
+    # Projectmem's own native CLI with the narrowed flag set (see
+    # PJM_INIT_ARGS) — --no-hooks included, since Projectmem's own hook
+    # installer resolves `<cwd>/.git/hooks` directly and would silently
+    # no-op against a linked worktree's `.git` (a file, not that
+    # directory). An unexpected runtime/filesystem failure here is
+    # reported as-is — guardrails already succeeded and remain installed;
+    # `.projectmem/` (whatever `pjm init` left behind) is never deleted to
+    # simulate an all-or-nothing rollback, since it is provider-owned
+    # state, not disposable staging.
+    init_result = subprocess.run([pjm, *PJM_INIT_ARGS], cwd=info.worktree_root)
+    if init_result.returncode != 0:
+        print(
+            f"bindle init --projectmem: `pjm init` failed (exit "
+            f"{init_result.returncode}).",
+            file=sys.stderr,
+        )
+        return init_result.returncode
+
+    # Storage is worktree-local; Projectmem's Git hooks are
+    # repository/common-Git state — install them separately, against the
+    # repository's main checkout (info.repo_root), which always has a
+    # real `.git/hooks` directory regardless of which linked worktree this
+    # command was run from. Still Projectmem's own native installer, never
+    # Bindle-authored hook content. A failure here is reported as-is and
+    # never rolls back the Projectmem storage or guardrails that already
+    # succeeded — this stays a sequence of independently owned operations,
+    # not a transaction.
+    hooks_result = subprocess.run([pjm, *PJM_HOOKS_INSTALL_ARGS], cwd=info.repo_root)
+    if hooks_result.returncode != 0:
+        print(
+            "bindle init --projectmem: Projectmem storage was initialized, "
+            f"but `pjm hooks install` failed (exit {hooks_result.returncode}) "
+            "— .projectmem/ and guardrails remain as they are.",
+            file=sys.stderr,
+        )
+    return hooks_result.returncode
 
 
 def _cmd_remove(args: argparse.Namespace) -> int:
-    return _run_guardrail_installer("remove", "--uninstall")
+    code = _run_guardrail_installer("remove", "--uninstall")
+    if code == 0:
+        # Projectmem is provider-owned working memory, not Bindle's to
+        # destroy: `bindle remove` never touches `.projectmem/`, regardless
+        # of whether Bindle created it. Report its survival when relevant
+        # (nothing to say when it was never installed in the first place).
+        try:
+            info = get_repo_info()
+            if detect_projectmem(info) == "installed":
+                print("Projectmem: left untouched (not removed by `bindle remove`).")
+        except NotAGitRepositoryError:
+            pass
+    return code
 
 
 def _cmd_migrate_legacy_global(args: argparse.Namespace) -> int:
@@ -317,7 +487,13 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
 
     for name, (help_text, description) in _LIFECYCLE_COMMANDS.items():
-        subparsers.add_parser(name, help=help_text, description=description)
+        command_parser = subparsers.add_parser(name, help=help_text, description=description)
+        if name == "init":
+            command_parser.add_argument(
+                "--projectmem",
+                action="store_true",
+                help="Also ensure Projectmem is initialized for this repository.",
+            )
 
     repo_parser = subparsers.add_parser("repo", help="Repository information.")
     repo_subparsers = repo_parser.add_subparsers(dest="repo_command")
