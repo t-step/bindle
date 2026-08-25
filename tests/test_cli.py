@@ -17,13 +17,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from bindle import __version__
 from bindle.cli import _LIFECYCLE_COMMANDS, main
 from bindle.guardrails import detect_claude_guardrails, detect_git_guardrails
+from bindle import qmd as qmd_mod
 from bindle.projectmem import detect_projectmem
+from bindle.qmd import COLLECTION_NAME, detect_qmd
 from bindle.repo import get_repo_info
 from bindle.skills import KitInfo, KitOpOutcome, KitStatus
 
 TOP_LEVEL_COMMANDS = [*_LIFECYCLE_COMMANDS, "repo", "branch", "skills"]
 
 _HAS_REAL_PJM = shutil.which("pjm") is not None
+_HAS_REAL_QMD = shutil.which("qmd") is not None
 
 
 def _run(args, cwd):
@@ -694,6 +697,55 @@ class TestStatusCommand(unittest.TestCase):
             self.assertEqual(main(["status"]), 0)
 
         after = sorted(os.listdir(mem_dir))
+        self.assertEqual(before, after)
+
+    def test_qmd_row_unavailable_when_qmd_not_on_path(self):
+        with _chdir(self.repo), mock.patch("bindle.qmd.qmd_executable", return_value=None):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = main(["status"])
+        self.assertEqual(code, 0)
+        self.assertIn("QMD         unavailable", out.getvalue())
+
+    def test_qmd_row_not_initialized_when_qmd_available_but_unused(self):
+        with _chdir(self.repo), mock.patch(
+            "bindle.qmd.qmd_executable", return_value="/usr/bin/fake-qmd"
+        ):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = main(["status"])
+        self.assertEqual(code, 0)
+        self.assertIn("QMD         not-initialized", out.getvalue())
+
+    def test_qmd_row_reflects_real_ready_state(self):
+        qmd_dir = os.path.join(self.repo, ".qmd")
+        os.makedirs(qmd_dir)
+        with open(os.path.join(qmd_dir, "index.yml"), "w") as f:
+            f.write(f"collections:\n  {COLLECTION_NAME}:\n    path: {os.path.realpath(self.repo)}\n")
+
+        with _chdir(self.repo), mock.patch(
+            "bindle.qmd.qmd_executable", return_value="/usr/bin/fake-qmd"
+        ):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = main(["status"])
+        self.assertEqual(code, 0)
+        self.assertIn("QMD         ready", out.getvalue())
+
+    def test_status_never_mutates_qmd_directory(self):
+        qmd_dir = os.path.join(self.repo, ".qmd")
+        os.makedirs(qmd_dir)
+        with open(os.path.join(qmd_dir, "index.yml"), "w") as f:
+            f.write(f"collections:\n  {COLLECTION_NAME}:\n    path: {os.path.realpath(self.repo)}\n")
+        before = sorted(os.listdir(qmd_dir))
+
+        with _chdir(self.repo), mock.patch(
+            "bindle.qmd.qmd_executable", return_value="/usr/bin/fake-qmd"
+        ):
+            self.assertEqual(main(["status"]), 0)
+            self.assertEqual(main(["status"]), 0)
+
+        after = sorted(os.listdir(qmd_dir))
         self.assertEqual(before, after)
 
 
@@ -1493,6 +1545,563 @@ class TestInitProjectmemLinkedWorktree(unittest.TestCase):
         )
         self.assertNotEqual(blocked.returncode, 0)
         self.assertIn("protected", blocked.stderr)
+
+
+class TestInitQmdFlag(unittest.TestCase):
+    # `bindle init --qmd` mirrors TestInitProjectmemFlag's shape: detection
+    # is the same read-only bindle.qmd.detect_qmd() `bindle status` already
+    # uses (see tests/test_qmd.py for its own real-fixture coverage), and
+    # initialization goes through QMD's native CLI — Bindle never
+    # constructs `.qmd/index.yml` itself. Every test here mocks
+    # `bindle.qmd.qmd_executable`/`subprocess.run`, so none require the
+    # real `qmd` CLI to be installed; see TestInitQmdRealCli below for real
+    # -CLI coverage.
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = os.path.join(self.tmp.name, "repo")
+        _init_repo(self.repo)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _qmd_dir(self):
+        return os.path.join(self.repo, ".qmd")
+
+    def _assert_guardrails_untouched(self):
+        info = get_repo_info(self.repo)
+        self.assertEqual(detect_git_guardrails(info), "not-installed")
+        self.assertEqual(detect_claude_guardrails(info), "not-installed")
+
+    def test_bare_init_never_touches_qmd(self):
+        with _chdir(self.repo), mock.patch(
+            "bindle.qmd.qmd_executable",
+            side_effect=AssertionError("bare `bindle init` must not check for qmd"),
+        ):
+            code = main(["init"])
+
+        self.assertEqual(code, 0)
+        self.assertFalse(os.path.exists(self._qmd_dir()))
+
+    def test_qmd_flag_is_noop_when_already_ready(self):
+        qmd_dir = self._qmd_dir()
+        os.makedirs(qmd_dir)
+        with open(os.path.join(qmd_dir, "index.yml"), "w") as f:
+            f.write(f"collections:\n  {COLLECTION_NAME}:\n    path: {os.path.realpath(self.repo)}\n")
+
+        out = io.StringIO()
+
+        def forbid_mutation(cmd, **kwargs):
+            if cmd and os.path.basename(cmd[0]) == "fake-qmd":
+                raise AssertionError("must not invoke qmd for an already-ready repo")
+            return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+
+        with _chdir(self.repo), mock.patch(
+            "bindle.qmd.qmd_executable", return_value="/usr/bin/fake-qmd"
+        ), mock.patch("subprocess.run", side_effect=forbid_mutation), contextlib.redirect_stdout(out):
+            code = main(["init", "--qmd"])
+
+        self.assertEqual(code, 0)
+        self.assertIn("already initialized", out.getvalue())
+        info = get_repo_info(self.repo)
+        self.assertEqual(detect_git_guardrails(info), "installed")
+        self.assertEqual(detect_claude_guardrails(info), "installed")
+
+    def test_qmd_flag_adds_qmd_to_info_exclude_after_fresh_init(self):
+        def fake_run(cmd, **kwargs):
+            if cmd and cmd[0] == "/usr/bin/fake-qmd" and cmd[1] == "init":
+                os.makedirs(self._qmd_dir(), exist_ok=True)
+                return subprocess.CompletedProcess(cmd, 0)
+            if cmd and cmd[0] == "/usr/bin/fake-qmd" and cmd[1] == "collection":
+                with open(os.path.join(self._qmd_dir(), "index.yml"), "w") as f:
+                    f.write(f"collections:\n  {COLLECTION_NAME}:\n    path: {os.path.realpath(self.repo)}\n")
+                return subprocess.CompletedProcess(cmd, 0)
+            return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+
+        with _chdir(self.repo), mock.patch(
+            "bindle.qmd.qmd_executable", return_value="/usr/bin/fake-qmd"
+        ), mock.patch("subprocess.run", side_effect=fake_run):
+            self.assertEqual(main(["init", "--qmd"]), 0)
+
+        info = get_repo_info(self.repo)
+        exclude_path = os.path.join(info.git_common_dir, "info", "exclude")
+        with open(exclude_path) as f:
+            self.assertIn(".qmd/", f.read().splitlines())
+
+        # git status must not show .qmd/ as untracked clutter.
+        status = subprocess.run(
+            ["git", "-C", self.repo, "status", "--porcelain"], capture_output=True, text=True
+        )
+        self.assertNotIn(".qmd", status.stdout)
+
+    def test_qmd_flag_adds_qmd_to_info_exclude_retroactively_when_already_ready(self):
+        qmd_dir = self._qmd_dir()
+        os.makedirs(qmd_dir)
+        with open(os.path.join(qmd_dir, "index.yml"), "w") as f:
+            f.write(f"collections:\n  {COLLECTION_NAME}:\n    path: {os.path.realpath(self.repo)}\n")
+
+        with _chdir(self.repo), mock.patch(
+            "bindle.qmd.qmd_executable", return_value="/usr/bin/fake-qmd"
+        ):
+            self.assertEqual(main(["init", "--qmd"]), 0)
+
+        info = get_repo_info(self.repo)
+        exclude_path = os.path.join(info.git_common_dir, "info", "exclude")
+        with open(exclude_path) as f:
+            self.assertIn(".qmd/", f.read().splitlines())
+
+    def test_qmd_flag_refuses_on_conflict_state_before_guardrail_mutation(self):
+        with open(self._qmd_dir(), "w") as f:
+            f.write("occupied")
+
+        def on_installer_call(cmd):
+            raise AssertionError("guardrails must not be touched when QMD preflight refuses")
+
+        # detect_qmd() always checks qmd availability first (unlike
+        # detect_projectmem, which never calls pjm_executable at all) — a
+        # fake resolved path is fine here since this test's point is that
+        # guardrails must never mutate, not that qmd resolution is skipped.
+        err = io.StringIO()
+        with _chdir(self.repo), mock.patch(
+            "bindle.qmd.qmd_executable", return_value="/usr/bin/fake-qmd"
+        ), _intercept_installer_call(on_installer_call), contextlib.redirect_stderr(err):
+            code = main(["init", "--qmd"])
+
+        self.assertEqual(code, 1)
+        self.assertIn("does not look like a Bindle-owned QMD index", err.getvalue())
+        self.assertTrue(os.path.isfile(self._qmd_dir()))
+        self._assert_guardrails_untouched()
+
+    def test_qmd_flag_fails_clearly_when_qmd_missing_before_guardrail_mutation(self):
+        def on_installer_call(cmd):
+            raise AssertionError("guardrails must not be touched when qmd is missing")
+
+        err = io.StringIO()
+        with _chdir(self.repo), mock.patch(
+            "bindle.qmd.qmd_executable", return_value=None
+        ), _intercept_installer_call(on_installer_call), contextlib.redirect_stderr(err):
+            code = main(["init", "--qmd"])
+
+        self.assertEqual(code, 1)
+        self.assertIn("qmd", err.getvalue())
+        self.assertIn("PATH", err.getvalue())
+        self.assertFalse(os.path.exists(self._qmd_dir()))
+        self._assert_guardrails_untouched()
+
+    def test_qmd_flag_runs_qmd_init_before_collection_add_always(self):
+        # The single most safety-critical ordering in this integration
+        # (see qmd.py's module docstring): `qmd collection add` run
+        # without a prior `qmd init` in the same directory falls back to
+        # the machine-global default index. This must never regress.
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            if cmd and cmd[0] == "/usr/bin/fake-qmd":
+                calls.append((cmd, kwargs.get("cwd")))
+                return subprocess.CompletedProcess(cmd, 0)
+            return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+
+        with _chdir(self.repo), mock.patch(
+            "bindle.qmd.qmd_executable", return_value="/usr/bin/fake-qmd"
+        ), mock.patch("subprocess.run", side_effect=fake_run):
+            code = main(["init", "--qmd"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(len(calls), 2)
+        init_cmd, init_cwd = calls[0]
+        self.assertEqual(init_cmd, ["/usr/bin/fake-qmd", "init"])
+        self.assertEqual(init_cwd, os.path.realpath(self.repo))
+
+        add_cmd, add_cwd = calls[1]
+        self.assertEqual(
+            add_cmd,
+            [
+                "/usr/bin/fake-qmd",
+                "collection",
+                "add",
+                os.path.realpath(self.repo),
+                "--name",
+                COLLECTION_NAME,
+                "--mask",
+                "{*.md,docs/**/*.md,plans/**/*.md}",
+            ],
+        )
+        self.assertEqual(add_cwd, os.path.realpath(self.repo))
+
+    def test_qmd_flag_runs_guardrails_then_qmd_init_then_collection_add_in_order(self):
+        order = []
+
+        def fake_run(cmd, **kwargs):
+            if cmd and cmd[0] == "bash":
+                order.append("guardrails")
+                return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+            if cmd and cmd[0] == "/usr/bin/fake-qmd" and cmd[1] == "init":
+                order.append("qmd-init")
+                return subprocess.CompletedProcess(cmd, 0)
+            if cmd and cmd[0] == "/usr/bin/fake-qmd" and cmd[1] == "collection":
+                order.append("qmd-collection-add")
+                return subprocess.CompletedProcess(cmd, 0)
+            return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+
+        with _chdir(self.repo), mock.patch(
+            "bindle.qmd.qmd_executable", return_value="/usr/bin/fake-qmd"
+        ), mock.patch("subprocess.run", side_effect=fake_run):
+            code = main(["init", "--qmd"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(order, ["guardrails", "qmd-init", "qmd-collection-add"])
+
+    def test_qmd_flag_propagates_init_failure_and_skips_collection_add(self):
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            if cmd and cmd[0] == "/usr/bin/fake-qmd":
+                calls.append(cmd)
+                return subprocess.CompletedProcess(cmd, 9)
+            return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+
+        with _chdir(self.repo), mock.patch(
+            "bindle.qmd.qmd_executable", return_value="/usr/bin/fake-qmd"
+        ), mock.patch("subprocess.run", side_effect=fake_run):
+            code = main(["init", "--qmd"])
+
+        self.assertEqual(code, 9)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1], "init")
+        info = get_repo_info(self.repo)
+        self.assertEqual(detect_git_guardrails(info), "installed")
+
+    def test_qmd_flag_propagates_collection_add_failure_and_preserves_state(self):
+        def fake_run(cmd, **kwargs):
+            if cmd and cmd[0] == "/usr/bin/fake-qmd" and cmd[1] == "init":
+                os.makedirs(self._qmd_dir(), exist_ok=True)
+                with open(os.path.join(self._qmd_dir(), "index.yml"), "w") as f:
+                    f.write("collections: {}\n")
+                return subprocess.CompletedProcess(cmd, 0)
+            if cmd and cmd[0] == "/usr/bin/fake-qmd" and cmd[1] == "collection":
+                return subprocess.CompletedProcess(cmd, 4)
+            return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+
+        err = io.StringIO()
+        with _chdir(self.repo), mock.patch(
+            "bindle.qmd.qmd_executable", return_value="/usr/bin/fake-qmd"
+        ), mock.patch("subprocess.run", side_effect=fake_run), contextlib.redirect_stderr(err):
+            code = main(["init", "--qmd"])
+
+        self.assertEqual(code, 4)
+        self.assertIn("collection add", err.getvalue())
+        self.assertTrue(os.path.isfile(os.path.join(self._qmd_dir(), "index.yml")))
+        info = get_repo_info(self.repo)
+        self.assertEqual(detect_git_guardrails(info), "installed")
+
+    def test_qmd_mutation_never_attempted_when_guardrails_fail(self):
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            if cmd and cmd[0] == "bash":
+                return subprocess.CompletedProcess(cmd, 3)
+            if cmd and cmd[0] == "/usr/bin/fake-qmd":
+                calls.append(cmd)
+                return subprocess.CompletedProcess(cmd, 0)
+            return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+
+        with _chdir(self.repo), mock.patch(
+            "bindle.qmd.qmd_executable", return_value="/usr/bin/fake-qmd"
+        ), mock.patch("subprocess.run", side_effect=fake_run):
+            code = main(["init", "--qmd"])
+
+        self.assertEqual(code, 3)
+        self.assertEqual(calls, [])
+        self.assertFalse(os.path.exists(self._qmd_dir()))
+
+    def test_remove_never_touches_qmd(self):
+        qmd_dir = self._qmd_dir()
+
+        def fake_run(cmd, **kwargs):
+            if cmd and cmd[0] == "/usr/bin/fake-qmd":
+                os.makedirs(qmd_dir, exist_ok=True)
+                with open(os.path.join(qmd_dir, "index.yml"), "w") as f:
+                    f.write(f"collections:\n  {COLLECTION_NAME}:\n    path: {os.path.realpath(self.repo)}\n")
+                return subprocess.CompletedProcess(cmd, 0)
+            return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+
+        with _chdir(self.repo), mock.patch(
+            "bindle.qmd.qmd_executable", return_value="/usr/bin/fake-qmd"
+        ), mock.patch("subprocess.run", side_effect=fake_run):
+            self.assertEqual(main(["init", "--qmd"]), 0)
+
+        out = io.StringIO()
+        with _chdir(self.repo), mock.patch(
+            "bindle.qmd.qmd_executable", return_value="/usr/bin/fake-qmd"
+        ), contextlib.redirect_stdout(out):
+            code = main(["remove"])
+
+        self.assertEqual(code, 0)
+        self.assertTrue(os.path.isfile(os.path.join(qmd_dir, "index.yml")))
+        self.assertIn("QMD: left untouched", out.getvalue())
+
+        # detect_qmd() itself resolves qmd_executable() (see qmd.py) — on a
+        # machine with no real `qmd` on PATH (CI) this would otherwise
+        # report "unavailable" regardless of the file state actually left
+        # behind, so this final check stays inside the same fake-qmd mock
+        # as the calls above rather than depending on a real PATH lookup.
+        info = get_repo_info(self.repo)
+        with mock.patch("bindle.qmd.qmd_executable", return_value="/usr/bin/fake-qmd"):
+            self.assertEqual(detect_qmd(info), "ready")
+
+    def test_remove_says_nothing_about_qmd_when_never_initialized(self):
+        with _chdir(self.repo):
+            self.assertEqual(main(["init"]), 0)
+
+        out = io.StringIO()
+        with _chdir(self.repo), mock.patch(
+            "bindle.qmd.qmd_executable", return_value="/usr/bin/fake-qmd"
+        ), contextlib.redirect_stdout(out):
+            code = main(["remove"])
+
+        self.assertEqual(code, 0)
+        self.assertNotIn("QMD", out.getvalue())
+
+    def test_projectmem_and_qmd_compose_guardrails_once_each_opt_in_once(self):
+        order = []
+
+        def fake_run(cmd, **kwargs):
+            if cmd and cmd[0] == "bash":
+                order.append("guardrails")
+                return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+            if cmd and cmd[0] == "/usr/bin/fake-pjm":
+                order.append(f"pjm-{cmd[1]}")
+                return subprocess.CompletedProcess(cmd, 0)
+            if cmd and cmd[0] == "/usr/bin/fake-qmd":
+                order.append(f"qmd-{cmd[1]}")
+                return subprocess.CompletedProcess(cmd, 0)
+            return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+
+        with _chdir(self.repo), mock.patch(
+            "bindle.cli.pjm_executable", return_value="/usr/bin/fake-pjm"
+        ), mock.patch(
+            "bindle.qmd.qmd_executable", return_value="/usr/bin/fake-qmd"
+        ), mock.patch("subprocess.run", side_effect=fake_run):
+            code = main(["init", "--projectmem", "--qmd"])
+
+        self.assertEqual(code, 0)
+        # Guardrails mutate exactly once, before either opt-in; Projectmem
+        # (init, hooks) runs before QMD (init, collection add) — a fixed,
+        # documented order, not a race.
+        self.assertEqual(
+            order,
+            ["guardrails", "pjm-init", "pjm-hooks", "qmd-init", "qmd-collection"],
+        )
+
+    def test_projectmem_refusal_leaves_qmd_preflight_unreached_and_guardrails_untouched(self):
+        # Projectmem preflight is checked first (fixed order) — a
+        # Projectmem-side refusal must never let QMD preflight run, let
+        # alone mutate anything.
+        with open(os.path.join(self.repo, ".projectmem"), "w") as f:
+            f.write("occupied")
+
+        def on_installer_call(cmd):
+            raise AssertionError("guardrails must not be touched when Projectmem preflight refuses")
+
+        err = io.StringIO()
+        with _chdir(self.repo), mock.patch(
+            "bindle.cli.pjm_executable",
+            side_effect=AssertionError("must not resolve pjm on conflicting state"),
+        ), mock.patch(
+            "bindle.qmd.qmd_executable",
+            side_effect=AssertionError("qmd preflight must not run when projectmem preflight already refused"),
+        ), _intercept_installer_call(on_installer_call), contextlib.redirect_stderr(err):
+            code = main(["init", "--projectmem", "--qmd"])
+
+        self.assertEqual(code, 1)
+        self._assert_guardrails_untouched()
+        self.assertFalse(os.path.exists(self._qmd_dir()))
+
+
+@unittest.skipUnless(_HAS_REAL_QMD, "requires the real `qmd` CLI on PATH")
+class TestInitQmdRealCli(unittest.TestCase):
+    # Exercises the actual native QMD CLI (not mocked) — skipped wherever
+    # `qmd` isn't installed, which includes CI: this repository declares no
+    # QMD dependency (AGENTS.md), and .github/workflows/ci.yml never
+    # installs it. Verified locally this session against the real
+    # `@tobilu/qmd` CLI (2.5.3 on PATH; 2.8.3 via a disposable local
+    # install used for the deeper upstream investigation).
+    #
+    # Isolation: QMD_CONFIG_DIR and XDG_CACHE_HOME are redirected to a
+    # disposable temp directory for every real invocation below, exactly
+    # mirroring TestInitProjectmemRealPjm's PROJECTMEM_HOME isolation
+    # (AGENTS.md "Runtime isolation"). This integration's whole design
+    # already keeps QMD state inside the repository's own `.qmd/` (see
+    # qmd.py's module docstring) rather than the machine-global registry —
+    # this env redirection is defense in depth, verified this session to
+    # also be where QMD's own trust bookkeeping
+    # (~/.config/qmd/trusted.json) lands, which is otherwise unconditional
+    # global state outside `.qmd/` itself.
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = os.path.join(self.tmp.name, "repo")
+        _init_repo(self.repo)
+
+        self.qmd_config_home = tempfile.TemporaryDirectory()
+        self.qmd_cache_home = tempfile.TemporaryDirectory()
+        self.env_patcher = mock.patch.dict(
+            os.environ,
+            {
+                "QMD_CONFIG_DIR": self.qmd_config_home.name,
+                "XDG_CACHE_HOME": self.qmd_cache_home.name,
+            },
+        )
+        self.env_patcher.start()
+
+    def tearDown(self):
+        self.env_patcher.stop()
+        self.qmd_config_home.cleanup()
+        self.qmd_cache_home.cleanup()
+        self.tmp.cleanup()
+
+    def _qmd_dir(self):
+        return os.path.join(self.repo, ".qmd")
+
+    def _write_doc(self, rel_path, text):
+        full = os.path.join(self.repo, rel_path)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w") as f:
+            f.write(text)
+
+    def test_real_qmd_init_results_in_ready_state_and_indexes_docs(self):
+        self._write_doc("docs/SCOPE.md", "# SCOPE\nunique-marker-alpha-9f2 lives here.\n")
+        self._write_doc("plans/active/README.md", "# Active\nunique-marker-beta-3c1 lives here.\n")
+        self._write_doc("src/notreally.md", "should NOT be indexed\n")
+
+        with _chdir(self.repo):
+            code = main(["init", "--qmd"])
+
+        self.assertEqual(code, 0)
+        self.assertTrue(os.path.isfile(os.path.join(self._qmd_dir(), "index.yml")))
+        info = get_repo_info(self.repo)
+
+        self.assertEqual(detect_qmd(info), "ready")
+
+        # The real disposable smoke test this slice's plan calls for: BM25
+        # full-text search (no embeddings needed) actually finds the
+        # indexed content, and the deliberately out-of-scope decoy doc is
+        # excluded by COLLECTION_MASK.
+        qmd_bin = shutil.which("qmd")
+        qmd_env = qmd_mod.subprocess_env(os.path.realpath(self.repo))
+        alpha = subprocess.run(
+            [qmd_bin, "search", "unique-marker-alpha-9f2", "--format", "files"],
+            cwd=self.repo,
+            env=qmd_env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(alpha.returncode, 0, alpha.stderr)
+        self.assertIn("docs/SCOPE.md", alpha.stdout)
+
+        beta = subprocess.run(
+            [qmd_bin, "search", "unique-marker-beta-3c1", "--format", "files"],
+            cwd=self.repo,
+            env=qmd_env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(beta.returncode, 0, beta.stderr)
+        self.assertIn("plans/active/README.md", beta.stdout)
+
+        decoy = subprocess.run(
+            [qmd_bin, "search", "notreally", "--format", "files"],
+            cwd=self.repo,
+            env=qmd_env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(decoy.returncode, 0, decoy.stderr)
+        self.assertNotIn("notreally.md", decoy.stdout)
+
+    def test_real_qmd_init_is_idempotent_and_does_not_duplicate_the_collection(self):
+        self._write_doc("docs/SCOPE.md", "# SCOPE\nhello\n")
+        with _chdir(self.repo):
+            self.assertEqual(main(["init", "--qmd"]), 0)
+
+        index_path = os.path.join(self._qmd_dir(), "index.yml")
+        before = os.path.getmtime(index_path)
+
+        # The second run must short-circuit on "ready" and never mutate
+        # qmd's state again — proven by making a real `qmd init`/
+        # `collection add` invocation impossible. detect_qmd() itself
+        # still legitimately resolves qmd_executable() as part of
+        # computing "ready" (see qmd.py), so only the mutating subcommands
+        # (init, collection) are forbidden here, not resolution itself.
+        def forbid_mutation(cmd, **kwargs):
+            if cmd and os.path.basename(cmd[0]) == "qmd" and cmd[1] in ("init", "collection"):
+                raise AssertionError(f"must not re-invoke qmd once already ready: {cmd}")
+            return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+
+        with _chdir(self.repo), mock.patch("subprocess.run", side_effect=forbid_mutation):
+            code = main(["init", "--qmd"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(os.path.getmtime(index_path), before)
+
+    def test_real_qmd_update_makes_newly_added_markdown_searchable(self):
+        # This slice's own "how does retrieval become fresh?" answer:
+        # QMD's native `qmd update`, run directly by the user/agent — never
+        # a Bindle-owned watcher or hook.
+        self._write_doc("docs/SCOPE.md", "# SCOPE\noriginal content\n")
+        with _chdir(self.repo):
+            self.assertEqual(main(["init", "--qmd"]), 0)
+
+        self._write_doc("docs/NEW.md", "# New\nunique-marker-gamma-77a appears fresh.\n")
+
+        qmd_bin = shutil.which("qmd")
+        qmd_env = qmd_mod.subprocess_env(os.path.realpath(self.repo))
+        before = subprocess.run(
+            [qmd_bin, "search", "unique-marker-gamma-77a", "--format", "files"],
+            cwd=self.repo,
+            env=qmd_env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(before.stdout.strip(), "")
+
+        update = subprocess.run(
+            [qmd_bin, "update"], cwd=self.repo, env=qmd_env, capture_output=True, text=True
+        )
+        self.assertEqual(update.returncode, 0, update.stderr)
+
+        after = subprocess.run(
+            [qmd_bin, "search", "unique-marker-gamma-77a", "--format", "files"],
+            cwd=self.repo,
+            env=qmd_env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(after.returncode, 0, after.stderr)
+        self.assertIn("docs/NEW.md", after.stdout)
+
+    def test_remove_preserves_real_qmd_collection_after_real_init(self):
+        self._write_doc("docs/SCOPE.md", "# SCOPE\nhello\n")
+        with _chdir(self.repo):
+            self.assertEqual(main(["init", "--qmd"]), 0)
+            self.assertEqual(main(["remove"]), 0)
+
+        info = get_repo_info(self.repo)
+
+        self.assertEqual(detect_qmd(info), "ready")
+        self.assertEqual(detect_git_guardrails(info), "not-installed")
+        self.assertEqual(detect_claude_guardrails(info), "not-installed")
+
+    def test_real_qmd_init_never_creates_the_global_default_index(self):
+        # Positive proof of this integration's central safety finding
+        # (qmd.py's module docstring): even against the real CLI, no
+        # global default index (`<config-dir>/index.yml`) is ever created
+        # — everything lands inside this worktree's own `.qmd/`.
+        self._write_doc("docs/SCOPE.md", "# SCOPE\nhello\n")
+        with _chdir(self.repo):
+            self.assertEqual(main(["init", "--qmd"]), 0)
+
+        self.assertFalse(
+            os.path.exists(os.path.join(self.qmd_config_home.name, "index.yml"))
+        )
 
 
 class _FakeKitModule:

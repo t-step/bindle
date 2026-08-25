@@ -19,7 +19,20 @@ checked before guardrails mutate anything, so a refusal on the Projectmem
 side never leaves guardrails newly installed/reconciled behind it.
 `remove` never touches Projectmem's own state, since Bindle has no
 ownership record proving it may destroy it.
-`status` additionally reports read-only Projectmem adoption state
+`init --qmd` additionally ensures a project-local QMD retrieval index
+exists for the repository's own durable Markdown, via the native `qmd`
+CLI (see qmd.py, and docs/DECISIONS.md D036) — a fourth provider-lifecycle
+seam, shaped like Projectmem's (native CLI only, filesystem-native
+detection) rather than the skill kits'. `--projectmem` and `--qmd` compose
+freely: every requested layer's read-only preflight runs first, guardrails
+mutate only once every requested preflight has passed, and each opt-in's
+own mutation runs after that in a fixed order (Projectmem, then QMD) —
+never a transaction, each step's failure is reported as-is without rolling
+back an earlier step that already succeeded. `remove` never touches
+`.qmd/` either, for the same "no ownership record proving it may destroy
+this" reason as Projectmem, even though the QMD index is itself derived,
+rebuildable state — see qmd.py.
+`status` additionally reports read-only Projectmem and QMD adoption state
 alongside the guardrail layer, without installing, repairing, or
 otherwise mutating either. `branch` creates an
 isolated worktree and feature branch off freshly-fetched origin/main
@@ -57,6 +70,7 @@ from .projectmem import (
     detect_projectmem,
     pjm_executable,
 )
+from . import qmd as qmd_mod
 from .repo import NotAGitRepositoryError, get_repo_info
 from .skills import CATALOG, UnknownKitError, add_desired_kit, read_desired_kits, remove_desired_kit, require_kit
 from .skills.config import SkillsConfigError
@@ -88,8 +102,10 @@ _LIFECYCLE_COMMANDS: dict[str, tuple[str, str]] = {
         "Bindle guardrail install is still present; run "
         "`bindle migrate-legacy-global` first. Add --projectmem to also "
         "ensure Projectmem is initialized for this repository via its "
-        "native `pjm init` CLI — optional, never implied by a bare "
-        "`bindle init`.",
+        "native `pjm init` CLI, or --qmd to also ensure a QMD retrieval "
+        "index exists for this repository's durable Markdown via the "
+        "native `qmd` CLI — both optional, never implied by a bare "
+        "`bindle init`, and safe to combine.",
     ),
     "remove": (
         "Remove Bindle-managed components from this repository.",
@@ -249,31 +265,7 @@ def _projectmem_init_preflight(info) -> tuple[int | None, str, str | None]:
     return None, state, pjm
 
 
-def _cmd_init(args: argparse.Namespace) -> int:
-    if not args.projectmem:
-        return _run_guardrail_installer("init", "--apply")
-
-    try:
-        info = get_repo_info()
-    except NotAGitRepositoryError as exc:
-        print(f"bindle init: {exc}", file=sys.stderr)
-        return 1
-
-    refusal, state, pjm = _projectmem_init_preflight(info)
-    if refusal is not None:
-        return refusal
-
-    # Preflight passed — now mutate. Guardrails first (unchanged bare
-    # `bindle init` behavior), Projectmem second. These are two
-    # independent operations, not a transaction: a guardrail failure here
-    # simply means Projectmem is never attempted this invocation (nothing
-    # was mutated on the Projectmem side by the preflight check above);
-    # re-running `bindle init --projectmem` after fixing the guardrail
-    # problem picks Projectmem up on its own next run.
-    guardrail_code = _run_guardrail_installer("init", "--apply")
-    if guardrail_code != 0:
-        return guardrail_code
-
+def _apply_projectmem(info, state: str, pjm: str | None) -> int:
     if state == "installed":
         # Accepting a healthy existing installation, not repairing one:
         # this guarantees correct hook placement when Bindle itself
@@ -324,6 +316,151 @@ def _cmd_init(args: argparse.Namespace) -> int:
     return hooks_result.returncode
 
 
+def _qmd_init_preflight(info) -> tuple[int | None, str]:
+    # Read-only precondition check for `bindle init --qmd`, mirroring
+    # _projectmem_init_preflight's shape: run BEFORE any mutation, so a
+    # QMD-side refusal never leaves guardrails (or Projectmem, if also
+    # requested) newly installed/reconciled behind it.
+    state = qmd_mod.detect_qmd(info)
+
+    if state == "unavailable":
+        print(
+            "bindle init --qmd: the `qmd` executable was not found on "
+            "PATH. Install QMD yourself (e.g. `npm install -g @tobilu/qmd` "
+            "or `bun install -g @tobilu/qmd`) and retry — Bindle does not "
+            "vendor or auto-install QMD, and guardrails were not touched.",
+            file=sys.stderr,
+        )
+        return 1, state
+
+    if state == "conflict":
+        qmd_dir = os.path.join(info.worktree_root, ".qmd")
+        print(
+            f"bindle init --qmd: {qmd_dir} exists but does not look like "
+            "a Bindle-owned QMD index for this repository — either the "
+            "path is occupied by something QMD can't use, its index.yml "
+            "doesn't match the expected shape, or its "
+            "'repo' collection (if any) points somewhere other than this "
+            "worktree. Refusing to touch it. Resolve it yourself, then "
+            "retry — guardrails were not touched.",
+            file=sys.stderr,
+        )
+        return 1, state
+
+    return None, state
+
+
+def _apply_qmd(info, state: str) -> int:
+    if state == "ready":
+        # Retroactively covers a repository that already had `.qmd/` from
+        # before this ignore-rule addition existed — re-running `bindle
+        # init --qmd` converges it, not just fresh initialization below.
+        qmd_mod.ensure_gitignored(info)
+        print("QMD: already initialized — left unchanged.")
+        return 0
+
+    # not-initialized, guardrails now applied: `qmd init` MUST run before
+    # `qmd collection add` on every path, unconditionally — verified
+    # empirically (see qmd.py's module docstring) that `collection add`
+    # run without a prior project-local `qmd init` in the same directory
+    # silently falls back to the machine-global default index instead of
+    # refusing. Running `qmd init` first is what keeps this integration
+    # entirely inside this worktree's own `.qmd/`, never the user's global
+    # QMD state. `qmd init` is itself idempotent (verified empirically:
+    # re-running it against an existing `.qmd/` with collections already
+    # registered leaves them untouched), so this is safe to run even when
+    # `.qmd/` already exists with unrelated collections in it (the
+    # `not-initialized` state also covers "index exists, but our
+    # collection doesn't yet").
+    qmd_bin = qmd_mod.qmd_executable()
+    qmd_env = qmd_mod.subprocess_env(info.worktree_root)
+    init_result = subprocess.run(
+        [qmd_bin, *qmd_mod.QMD_INIT_ARGS], cwd=info.worktree_root, env=qmd_env
+    )
+    if init_result.returncode != 0:
+        print(
+            f"bindle init --qmd: `qmd init` failed (exit "
+            f"{init_result.returncode}).",
+            file=sys.stderr,
+        )
+        return init_result.returncode
+
+    # Registers and immediately indexes this repository's own durable
+    # Markdown (see qmd.py's COLLECTION_NAME/COLLECTION_MASK) via QMD's
+    # own native command — Bindle never writes `.qmd/index.yml` itself.
+    # Any other collection already present in `.qmd/index.yml` (from the
+    # user, or another tool) is untouched by this call; `collection add`
+    # only ever creates the one collection it's given.
+    add_result = subprocess.run(
+        [qmd_bin, *qmd_mod.collection_add_args(info.worktree_root)],
+        cwd=info.worktree_root,
+        env=qmd_env,
+    )
+    if add_result.returncode != 0:
+        print(
+            "bindle init --qmd: the project-local index was created, but "
+            f"`qmd collection add` failed (exit {add_result.returncode}) "
+            "— .qmd/ and guardrails remain as they are.",
+            file=sys.stderr,
+        )
+        return add_result.returncode
+
+    qmd_mod.ensure_gitignored(info)
+    return 0
+
+
+def _cmd_init(args: argparse.Namespace) -> int:
+    if not args.projectmem and not args.qmd:
+        return _run_guardrail_installer("init", "--apply")
+
+    try:
+        info = get_repo_info()
+    except NotAGitRepositoryError as exc:
+        print(f"bindle init: {exc}", file=sys.stderr)
+        return 1
+
+    # Every requested layer's read-only preflight runs before ANY mutation
+    # — a refusal on one opt-in must never leave guardrails, or an
+    # already-preflighted other opt-in, newly mutated behind it (mirrors
+    # D032's "all requested layers preflight together" precedent, now
+    # generalized past just the two guardrail halves).
+    projectmem_state, projectmem_pjm = None, None
+    if args.projectmem:
+        refusal, projectmem_state, projectmem_pjm = _projectmem_init_preflight(info)
+        if refusal is not None:
+            return refusal
+
+    qmd_state = None
+    if args.qmd:
+        refusal, qmd_state = _qmd_init_preflight(info)
+        if refusal is not None:
+            return refusal
+
+    # Preflight passed for every requested layer — now mutate. Guardrails
+    # first (unchanged bare `bindle init` behavior), then each requested
+    # opt-in in a fixed order (Projectmem, then QMD). None of this is a
+    # transaction: a failure at any step is reported as-is and never rolls
+    # back a step that already succeeded — re-running `bindle init` with
+    # the same flags after fixing the problem picks up wherever it left
+    # off (both `_apply_projectmem` and `_apply_qmd` are themselves
+    # idempotent on their own "already done" state).
+    guardrail_code = _run_guardrail_installer("init", "--apply")
+    if guardrail_code != 0:
+        return guardrail_code
+
+    if args.projectmem:
+        code = _apply_projectmem(info, projectmem_state, projectmem_pjm)
+        if code != 0:
+            return code
+
+    if args.qmd:
+        code = _apply_qmd(info, qmd_state)
+        if code != 0:
+            return code
+
+    return 0
+
+
 def _cmd_remove(args: argparse.Namespace) -> int:
     code = _run_guardrail_installer("remove", "--uninstall")
     if code == 0:
@@ -331,10 +468,19 @@ def _cmd_remove(args: argparse.Namespace) -> int:
         # destroy: `bindle remove` never touches `.projectmem/`, regardless
         # of whether Bindle created it. Report its survival when relevant
         # (nothing to say when it was never installed in the first place).
+        #
+        # QMD's index is itself derived/rebuildable state, not durable
+        # knowledge — but Bindle still holds no ownership record proving
+        # this specific collection is safe to delete unattended (a user
+        # could have hand-edited `.qmd/index.yml`, or added other
+        # collections alongside it), so `bindle remove` leaves it alone
+        # too, for the same conservative reason as Projectmem. See qmd.py.
         try:
             info = get_repo_info()
             if detect_projectmem(info) == "installed":
                 print("Projectmem: left untouched (not removed by `bindle remove`).")
+            if qmd_mod.detect_qmd(info) == "ready":
+                print("QMD: left untouched (not removed by `bindle remove`).")
         except NotAGitRepositoryError:
             pass
     return code
@@ -380,12 +526,14 @@ def _cmd_status(args: argparse.Namespace) -> int:
         return 1
 
     projectmem_status = detect_projectmem(info)
+    qmd_status = qmd_mod.detect_qmd(info)
 
     print(f"Repository: {os.path.basename(info.repo_root)}")
     print("Guardrails")
     print(f"  {'Git':<10}{git_status}")
     print(f"  {'Claude':<10}{claude_status}")
     print(f"{'Projectmem':<10}  {projectmem_status}")
+    print(f"{'QMD':<10}  {qmd_status}")
     return 0
 
 
@@ -611,6 +759,11 @@ def build_parser() -> argparse.ArgumentParser:
                 "--projectmem",
                 action="store_true",
                 help="Also ensure Projectmem is initialized for this repository.",
+            )
+            command_parser.add_argument(
+                "--qmd",
+                action="store_true",
+                help="Also ensure a project-local QMD retrieval index exists for this repository.",
             )
 
     repo_parser = subparsers.add_parser("repo", help="Repository information.")
