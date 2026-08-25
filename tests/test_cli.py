@@ -2104,6 +2104,250 @@ class TestInitQmdRealCli(unittest.TestCase):
         )
 
 
+@unittest.skipUnless(
+    _HAS_REAL_PJM and _HAS_REAL_QMD, "requires the real `pjm` and `qmd` CLIs on PATH"
+)
+class TestAdditiveInitRealCli(unittest.TestCase):
+    # `bindle init`'s own docstring promises it is "safe to run repeatedly
+    # as more integrations are added later" — i.e. a repository already
+    # Bindle-managed (bare, or with one optional layer already installed)
+    # can pick up another optional layer via a LATER, separate `bindle
+    # init` invocation without disturbing anything already healthy. Every
+    # real-CLI test above (TestInitProjectmemRealPjm, TestInitQmdRealCli)
+    # exercises exactly one optional layer per fixture; the mocked
+    # composition tests in TestInitQmdFlag
+    # (test_projectmem_and_qmd_compose_guardrails_once_each_opt_in_once and
+    # its refusal-order sibling) only cover both flags in a SINGLE
+    # invocation. None re-invoke `bindle init` a second time, later, with a
+    # *different* flag, against real provider state — this class closes
+    # that gap. Isolation mirrors
+    # TestInitProjectmemRealPjm/TestInitQmdRealCli exactly (both providers'
+    # env redirected to disposable temp dirs; AGENTS.md "Runtime
+    # isolation").
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = os.path.join(self.tmp.name, "repo")
+        _init_repo(self.repo)
+
+        self.registry_home = tempfile.TemporaryDirectory()
+        self.qmd_config_home = tempfile.TemporaryDirectory()
+        self.qmd_cache_home = tempfile.TemporaryDirectory()
+        self.env_patcher = mock.patch.dict(
+            os.environ,
+            {
+                "PROJECTMEM_HOME": self.registry_home.name,
+                "QMD_CONFIG_DIR": self.qmd_config_home.name,
+                "XDG_CACHE_HOME": self.qmd_cache_home.name,
+            },
+        )
+        self.env_patcher.start()
+
+    def tearDown(self):
+        self.env_patcher.stop()
+        self.registry_home.cleanup()
+        self.qmd_config_home.cleanup()
+        self.qmd_cache_home.cleanup()
+        self.tmp.cleanup()
+
+    def _qmd_dir(self):
+        return os.path.join(self.repo, ".qmd")
+
+    def _mem_dir(self):
+        return os.path.join(self.repo, ".projectmem")
+
+    def _run_init(self, *flags):
+        with _chdir(self.repo):
+            return main(["init", *flags])
+
+    def _seed_markdown(self, rel_path, text):
+        full = os.path.join(self.repo, rel_path)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w") as f:
+            f.write(text)
+
+    def _assert_guardrails_installed(self):
+        info = get_repo_info(self.repo)
+        self.assertEqual(detect_git_guardrails(info), "installed")
+        self.assertEqual(detect_claude_guardrails(info), "installed")
+
+    def _assert_projectmem_installed(self):
+        info = get_repo_info(self.repo)
+        self.assertEqual(detect_projectmem(info), "installed")
+        self.assertTrue(os.path.isfile(os.path.join(self._mem_dir(), "config.toml")))
+
+    def _qmd_search(self, term):
+        qmd_bin = shutil.which("qmd")
+        env = qmd_mod.subprocess_env(os.path.realpath(self.repo))
+        return subprocess.run(
+            [qmd_bin, "search", term, "--format", "files"],
+            cwd=self.repo,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+    def _assert_qmd_ready_and_marker_indexed(self, marker):
+        info = get_repo_info(self.repo)
+        self.assertEqual(detect_qmd(info), "ready")
+        found = self._qmd_search(marker)
+        self.assertEqual(found.returncode, 0, found.stderr)
+        self.assertIn("docs/ADDITIVE.md", found.stdout)
+
+    def _exercise_additive_pair(self, first_flags, second_flags, marker):
+        # Seeded up front so QMD, whenever it becomes active, has
+        # something distinctive to index — the positive proof a later
+        # init doesn't blow away its collection rather than merely
+        # reporting "ready".
+        self._seed_markdown("docs/ADDITIVE.md", f"# Additive\n{marker} lives here.\n")
+
+        self.assertEqual(self._run_init(*first_flags), 0)
+        self._assert_guardrails_installed()
+
+        mem_config = os.path.join(self._mem_dir(), "config.toml")
+        qmd_index = os.path.join(self._qmd_dir(), "index.yml")
+        mem_before = os.path.getmtime(mem_config) if "--projectmem" in first_flags else None
+        qmd_before = os.path.getmtime(qmd_index) if "--qmd" in first_flags else None
+        if "--projectmem" in first_flags:
+            self._assert_projectmem_installed()
+        if "--qmd" in first_flags:
+            self._assert_qmd_ready_and_marker_indexed(marker)
+
+        self.assertEqual(self._run_init(*second_flags), 0)
+        self._assert_guardrails_installed()
+
+        # Whatever the first step installed must survive the second
+        # step's own mutation completely untouched, not merely "still
+        # reported healthy" — the mtime proves it wasn't recreated.
+        if mem_before is not None:
+            self._assert_projectmem_installed()
+            self.assertEqual(os.path.getmtime(mem_config), mem_before)
+        if qmd_before is not None:
+            self._assert_qmd_ready_and_marker_indexed(marker)
+            self.assertEqual(os.path.getmtime(qmd_index), qmd_before)
+
+        # And whatever the second step newly requested must now be active.
+        if "--projectmem" in second_flags:
+            self._assert_projectmem_installed()
+        if "--qmd" in second_flags:
+            self._assert_qmd_ready_and_marker_indexed(marker)
+
+        # No duplicate Bindle-owned bookkeeping from either step.
+        if "--qmd" in first_flags or "--qmd" in second_flags:
+            info = get_repo_info(self.repo)
+            exclude_path = os.path.join(info.git_common_dir, "info", "exclude")
+            with open(exclude_path) as f:
+                lines = f.read().splitlines()
+            self.assertEqual(lines.count(".qmd/"), 1)
+        if "--projectmem" in first_flags or "--projectmem" in second_flags:
+            registry = os.path.join(self.registry_home.name, "projects.json")
+            with open(registry) as f:
+                self.assertEqual(f.read().count(os.path.realpath(self.repo)), 1)
+
+    def test_bare_init_then_qmd_is_additive(self):
+        self._exercise_additive_pair([], ["--qmd"], "unique-marker-additive-a1")
+
+    def test_bare_init_then_projectmem_is_additive(self):
+        self._exercise_additive_pair([], ["--projectmem"], "unique-marker-additive-b2")
+
+    def test_qmd_first_then_projectmem_is_additive(self):
+        self._exercise_additive_pair(["--qmd"], ["--projectmem"], "unique-marker-additive-c3")
+
+    def test_projectmem_first_then_qmd_is_additive(self):
+        self._exercise_additive_pair(["--projectmem"], ["--qmd"], "unique-marker-additive-d4")
+
+    def test_bare_init_then_both_together_is_additive(self):
+        self._exercise_additive_pair([], ["--projectmem", "--qmd"], "unique-marker-additive-e5")
+
+    def test_repeated_additive_init_is_idempotent(self):
+        marker = "unique-marker-additive-f6"
+        self._seed_markdown("docs/ADDITIVE.md", f"# Additive\n{marker} lives here.\n")
+        self.assertEqual(self._run_init("--projectmem", "--qmd"), 0)
+        self._assert_guardrails_installed()
+        self._assert_projectmem_installed()
+        self._assert_qmd_ready_and_marker_indexed(marker)
+
+        mem_config = os.path.join(self._mem_dir(), "config.toml")
+        qmd_index = os.path.join(self._qmd_dir(), "index.yml")
+        mem_before = os.path.getmtime(mem_config)
+        qmd_before = os.path.getmtime(qmd_index)
+
+        info = get_repo_info(self.repo)
+        exclude_path = os.path.join(info.git_common_dir, "info", "exclude")
+        with open(exclude_path) as f:
+            exclude_before = f.read().splitlines()
+
+        pre_commit_hook = os.path.join(self.repo, ".git", "hooks", "pre-commit")
+        with open(pre_commit_hook) as f:
+            hook_before = f.read()
+
+        # Second, identical invocation: both requested flags a pure no-op
+        # end to end, not just individually.
+        self.assertEqual(self._run_init("--projectmem", "--qmd"), 0)
+
+        self._assert_guardrails_installed()
+        self._assert_projectmem_installed()
+        self._assert_qmd_ready_and_marker_indexed(marker)
+        self.assertEqual(os.path.getmtime(mem_config), mem_before)
+        self.assertEqual(os.path.getmtime(qmd_index), qmd_before)
+
+        with open(exclude_path) as f:
+            exclude_after = f.read().splitlines()
+        self.assertEqual(exclude_after, exclude_before)
+        self.assertEqual(exclude_after.count(".qmd/"), 1)
+
+        with open(pre_commit_hook) as f:
+            self.assertEqual(f.read(), hook_before)
+
+    def test_qmd_conflict_after_prior_projectmem_init_preserves_projectmem_and_guardrails(self):
+        # Failure-order sanity: a known preflight failure for a newly
+        # requested optional integration must refuse before touching
+        # anything already healthy from an earlier, separate `bindle
+        # init` invocation — not just before touching guardrails in the
+        # single-invocation case the existing mocked tests cover.
+        self.assertEqual(self._run_init("--projectmem"), 0)
+        self._assert_guardrails_installed()
+        self._assert_projectmem_installed()
+        mem_config = os.path.join(self._mem_dir(), "config.toml")
+        mem_before = os.path.getmtime(mem_config)
+
+        with open(self._qmd_dir(), "w") as f:
+            f.write("occupied")
+
+        err = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stderr(err):
+            code = main(["init", "--qmd"])
+
+        self.assertEqual(code, 1)
+        self.assertIn("does not look like a Bindle-owned QMD index", err.getvalue())
+        self._assert_guardrails_installed()
+        self._assert_projectmem_installed()
+        self.assertEqual(os.path.getmtime(mem_config), mem_before)
+        self.assertTrue(os.path.isfile(self._qmd_dir()))
+
+    def test_projectmem_conflict_after_prior_qmd_init_preserves_qmd_and_guardrails(self):
+        marker = "unique-marker-additive-g7"
+        self._seed_markdown("docs/ADDITIVE.md", f"# Additive\n{marker} lives here.\n")
+        self.assertEqual(self._run_init("--qmd"), 0)
+        self._assert_guardrails_installed()
+        self._assert_qmd_ready_and_marker_indexed(marker)
+        qmd_index = os.path.join(self._qmd_dir(), "index.yml")
+        qmd_before = os.path.getmtime(qmd_index)
+
+        with open(self._mem_dir(), "w") as f:
+            f.write("occupied")
+
+        err = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stderr(err):
+            code = main(["init", "--projectmem"])
+
+        self.assertEqual(code, 1)
+        self.assertIn("not a directory", err.getvalue())
+        self._assert_guardrails_installed()
+        self._assert_qmd_ready_and_marker_indexed(marker)
+        self.assertEqual(os.path.getmtime(qmd_index), qmd_before)
+        self.assertTrue(os.path.isfile(self._mem_dir()))
+
+
 class _FakeKitModule:
     """A stand-in for a real kit module (software_engineering.py,
     spec_kit.py) used to test the `skills` CLI's own logic — argument
