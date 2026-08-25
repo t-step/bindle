@@ -23,9 +23,15 @@ ownership record proving it may destroy it.
 alongside the guardrail layer, without installing, repairing, or
 otherwise mutating either. `branch` creates an
 isolated worktree and feature branch off freshly-fetched origin/main
-(AGENTS.md, "Development isolation"). `list`, `update`, `upgrade`, and
-`doctor` remain interface-only placeholders until their underlying
-components are implemented in a later slice.
+(AGENTS.md, "Development isolation"). `skills list`/`status`/`add`/
+`remove` manage skill kits — named collections of agent-facing skills
+Bindle makes available to Claude Code and Codex through each harness's
+own native mechanism (see the `skills` package and docs/DECISIONS.md
+D035) — a third, differently-shaped provider-lifecycle seam alongside
+guardrails and Projectmem. `list` (the global repository inventory,
+distinct from `skills list`), `update`, `upgrade`, and `doctor` remain
+interface-only placeholders until their underlying components are
+implemented in a later slice.
 """
 
 from __future__ import annotations
@@ -52,6 +58,8 @@ from .projectmem import (
     pjm_executable,
 )
 from .repo import NotAGitRepositoryError, get_repo_info
+from .skills import CATALOG, UnknownKitError, add_desired_kit, read_desired_kits, remove_desired_kit, require_kit
+from .skills.config import SkillsConfigError
 
 # Lifecycle commands with an established name and short/long --help text.
 # `init`, `remove`, `status`, and `migrate-legacy-global` have real behavior
@@ -478,8 +486,118 @@ def _cmd_repo_info(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_skills_list(args: argparse.Namespace) -> int:
+    print("Skill kits")
+    for kit_id, kit_info in CATALOG.items():
+        print(f"  {kit_id:<22}{kit_info.source} — {kit_info.description}")
+    return 0
+
+
+def _cmd_skills_status(args: argparse.Namespace) -> int:
+    try:
+        info = get_repo_info()
+    except NotAGitRepositoryError as exc:
+        print(f"bindle skills status: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        desired = read_desired_kits(info.worktree_root)
+    except SkillsConfigError as exc:
+        print(f"bindle skills status: {exc}", file=sys.stderr)
+        return 1
+
+    for kit_id, kit_info in CATALOG.items():
+        kit_status = kit_info.module.status(info)
+        print(kit_id)
+        print(f"  {'desired':<10}{'yes' if kit_id in desired else 'no'}")
+        print(f"  {'Claude':<10}{kit_status.claude}")
+        print(f"  {'Codex':<10}{kit_status.codex}")
+    return 0
+
+
+def _cmd_skills_add(args: argparse.Namespace) -> int:
+    try:
+        info = get_repo_info()
+    except NotAGitRepositoryError as exc:
+        print(f"bindle skills add: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        kit_info = require_kit(args.kit)
+    except UnknownKitError as exc:
+        print(f"bindle skills add: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        changed = add_desired_kit(info.worktree_root, kit_info.kit_id)
+    except SkillsConfigError as exc:
+        print(f"bindle skills add: {exc}", file=sys.stderr)
+        return 1
+
+    print(kit_info.kit_id)
+    print(f"  {'desired':<10}{'added' if changed else 'already desired'}")
+
+    outcome = kit_info.module.add(info)
+    for line in outcome.lines:
+        print(f"  {line}")
+
+    return 0 if outcome.ok else 1
+
+
+def _cmd_skills_remove(args: argparse.Namespace) -> int:
+    try:
+        info = get_repo_info()
+    except NotAGitRepositoryError as exc:
+        print(f"bindle skills remove: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        kit_info = require_kit(args.kit)
+    except UnknownKitError as exc:
+        print(f"bindle skills remove: {exc}", file=sys.stderr)
+        return 1
+
+    outcome = kit_info.module.remove(info)
+
+    try:
+        changed = remove_desired_kit(info.worktree_root, kit_info.kit_id)
+    except SkillsConfigError as exc:
+        print(f"bindle skills remove: {exc}", file=sys.stderr)
+        return 1
+
+    print(kit_info.kit_id)
+    for line in outcome.lines:
+        print(f"  {line}")
+    print(f"  {'desired':<10}{'removed' if changed else 'already not desired'}")
+
+    return 0 if outcome.ok else 1
+
+
+class _BindleArgumentParser(argparse.ArgumentParser):
+    """`ArgumentParser` with colorized help forced off.
+
+    Python 3.14 added `color=True` as argparse's own default (a
+    Bindle-wide styling policy this project has never opted into — CLI
+    output is deterministic plain text everywhere else). `color` doesn't
+    exist as a constructor argument or attribute on the Python versions
+    this project also supports (>=3.11), so it can't be passed directly;
+    `hasattr` guards the override so this is a no-op on 3.11-3.13.
+
+    `add_subparsers()` defaults its `parser_class` kwarg to `type(self)`
+    (confirmed against the installed argparse source, not assumed), so
+    every subparser and nested subparser created from a parser built with
+    this class also gets it — verified empirically in
+    tests/test_cli.py::TestHelpOutputIsPlainText.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if hasattr(self, "color"):
+            self.color = False
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="bindle")
+    parser = _BindleArgumentParser(prog="bindle")
     parser.add_argument(
         "--version", action="version", version=f"bindle {__version__}"
     )
@@ -514,6 +632,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     branch_parser.add_argument("name", help="Name for the new branch")
 
+    skills_parser = subparsers.add_parser(
+        "skills",
+        help="Manage repository skill kits.",
+        description=(
+            "Manage skill kits: named collections of agent-facing skills Bindle "
+            "makes available to Claude Code and Codex through each harness's own "
+            "native mechanism (docs/DECISIONS.md D035)."
+        ),
+    )
+    skills_subparsers = skills_parser.add_subparsers(dest="skills_command")
+    skills_subparsers.add_parser("list", help="List known skill kits.")
+    skills_subparsers.add_parser(
+        "status", help="Show skill-kit adoption status for this repository."
+    )
+    skills_add_parser = skills_subparsers.add_parser(
+        "add", help="Add a skill kit to this repository."
+    )
+    skills_add_parser.add_argument("kit", help="Kit ID (see `bindle skills list`)")
+    skills_remove_parser = skills_subparsers.add_parser(
+        "remove", help="Remove a skill kit from this repository."
+    )
+    skills_remove_parser.add_argument("kit", help="Kit ID (see `bindle skills list`)")
+
     return parser
 
 
@@ -544,6 +685,18 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "branch":
         return _cmd_branch(args)
+
+    if args.command == "skills":
+        if args.skills_command == "list":
+            return _cmd_skills_list(args)
+        if args.skills_command == "status":
+            return _cmd_skills_status(args)
+        if args.skills_command == "add":
+            return _cmd_skills_add(args)
+        if args.skills_command == "remove":
+            return _cmd_skills_remove(args)
+        parser.parse_args(["skills", "--help"])
+        return 1
 
     parser.print_help()
     return 1
