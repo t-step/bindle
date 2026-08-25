@@ -233,6 +233,7 @@ Bindle does not own user memory, working reasoning, transcripts, or durable know
 
 | Role | Current provider | State | Ownership |
 | repository-local working memory | projectmem | Adopted | provider-owned, machine-local |
+| local retrieval over durable Markdown | QMD | Project-scoped (D036) | provider-owned, worktree-local, derived/rebuildable |
 | durable knowledge and work records | no standing provider | Closed (D028) | none — deliberate, human/skill-driven when a concrete need emerges |
 | live sessions and transcripts | Claude Code / Codex | Native | harness-owned |
 | deterministic code-state evidence | Git + Bindle evidence blocks | Bindle capability | emitted into provider-owned records |
@@ -244,6 +245,14 @@ projectmem is operational working memory, not accepted project truth.
 It may reduce rediscovery and preserve useful local working context, but durable architecture, product rules, decisions, and operating instructions remain in tracked repository files.
 
 Its detailed operating rules live in AGENTS.md.
+
+### QMD
+
+QMD (`tobi/qmd`, published as `@tobilu/qmd`) is an optional, repository-scoped local search index over a repository's own durable Markdown — BM25 full-text search always available, vector/hybrid retrieval available once embedding models are pulled explicitly via QMD's own CLI.
+
+Opt in per repository via `bindle init --qmd`; `bindle status` reports read-only adoption state. The index is derived and rebuildable from the same Markdown files that already remain authoritative — deleting and rebuilding it never loses knowledge, and `bindle remove` never touches it (docs/DECISIONS.md D036).
+
+Not used for work coordination, agent-prompt retrieval, or Projectmem promotion in this slice — see D036 for the full scope boundary.
 
 ### Durable knowledge
 
