@@ -3,10 +3,16 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from bindle.projectmem import detect_projectmem
+from bindle.projectmem import (
+    PJM_HOOKS_INSTALL_ARGS,
+    PJM_INIT_ARGS,
+    detect_projectmem,
+    pjm_executable,
+)
 from bindle.repo import get_repo_info
 
 
@@ -122,6 +128,52 @@ class TestDetectProjectmemRealFixtures(unittest.TestCase):
         finally:
             os.remove(os.path.join(parent_mem_dir, "config.toml"))
             os.rmdir(parent_mem_dir)
+
+
+class TestPjmExecutable(unittest.TestCase):
+    # pjm_executable() is a thin shutil.which() wrapper — Bindle declares no
+    # Projectmem package dependency (AGENTS.md), so this is the only
+    # supported way it locates the native CLI.
+    def test_returns_none_when_pjm_is_not_on_path(self):
+        with mock.patch("shutil.which", return_value=None) as which:
+            self.assertIsNone(pjm_executable())
+        which.assert_called_once_with("pjm")
+
+    def test_returns_the_resolved_path_when_pjm_is_on_path(self):
+        with mock.patch("shutil.which", return_value="/usr/local/bin/pjm"):
+            self.assertEqual(pjm_executable(), "/usr/local/bin/pjm")
+
+
+class TestPjmInitArgs(unittest.TestCase):
+    # Narrowed to core repository-local storage setup only: every flag
+    # suppresses a native `pjm init` convenience that reaches outside that
+    # scope (docs/DECISIONS.md D033). --no-hooks IS included — Projectmem's
+    # own hook installer resolves `<cwd>/.git/hooks` directly, which
+    # silently no-ops in a linked worktree (`.git` is a file there, not
+    # that directory). Hooks are installed separately via
+    # PJM_HOOKS_INSTALL_ARGS, against the repository's shared Git common
+    # directory, so they still take effect and still compose with Bindle's
+    # dispatcher — see cli.py's `_cmd_init`.
+    def test_narrows_to_core_repo_local_setup_only(self):
+        self.assertEqual(
+            PJM_INIT_ARGS,
+            (
+                "init",
+                "--no-hooks",
+                "--no-global",
+                "--no-watch",
+                "--no-backfill",
+                "--no-claude-md",
+                "--no-mcp-config",
+                "--no-structure",
+                "--no-stack-detect",
+            ),
+        )
+
+
+class TestPjmHooksInstallArgs(unittest.TestCase):
+    def test_is_the_native_hooks_install_command(self):
+        self.assertEqual(PJM_HOOKS_INSTALL_ARGS, ("hooks", "install"))
 
 
 if __name__ == "__main__":

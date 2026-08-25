@@ -47,26 +47,45 @@ The CLI stays intentionally small; it is infrastructure for future narrow capabi
 `upgrade`, and `doctor`. Some of these are real today; the rest are
 interface-only placeholders ahead of later slices:
 
-* **Real today**: `bindle --version`, `bindle repo info`, `bindle init`,
-  `bindle remove`, `bindle migrate-legacy-global`.
+* **Real today**: `bindle --version`, `bindle repo info`, `bindle init`
+  (including `--projectmem`), `bindle remove`, `bindle status`, `bindle
+  migrate-legacy-global`.
 * **Still interface-only** (stable `--help` text, but running one directly
   prints `bindle <command>: not implemented yet` and exits non-zero):
-  `bindle list`, `bindle status`, `bindle update`, `bindle upgrade`,
-  `bindle doctor`.
+  `bindle list`, `bindle update`, `bindle upgrade`, `bindle doctor`.
 
-`bindle init`/`bindle remove` currently manage only the repo-local
-guardrail capability — a Git hook layer (protected `main`, hook
-composition, installed via repo-local `core.hooksPath`) and a Claude Code
-PreToolUse guard plus `permissions.deny` hardening (installed into the
-target repository's own `.claude/settings.local.json`). They are not yet
-general Projectmem/Symphony/skill-pack composition commands; that's future
-work. `bindle init` is the explicit opt-in boundary — a repository becomes
-Bindle-managed by running it there — and `bindle remove` reverses it,
-scoped to that one repository only. Both refuse to run (rather than
-silently migrating or removing it) if a recognized legacy,
-pre-repo-local, **machine-global** Bindle guardrail install is still
-present; `bindle migrate-legacy-global` is the explicit, repo-independent
-command that clears that legacy state, and only that.
+`bindle init`/`bindle remove` manage the repo-local guardrail capability —
+a Git hook layer (protected `main`, hook composition, installed via
+repo-local `core.hooksPath`) and a Claude Code PreToolUse guard plus
+`permissions.deny` hardening (installed into the target repository's own
+`.claude/settings.local.json`) — plus, with `bindle init --projectmem`,
+Projectmem: `--projectmem` ensures Projectmem is initialized for the
+repository through its own native `pjm init` CLI, narrowed to core
+repository-local working-memory setup while suppressing unrelated
+cross-project, daemon, provider-specific, history-backfill, MCP, and
+repository-analysis conveniences. Its normal capture hooks are then
+installed via Projectmem's own `pjm hooks install`, targeted at the
+repository's shared Git common directory rather than a linked worktree's
+own `.git` (a file there, not a directory) — so hooks land correctly and
+compose with Bindle's `core.hooksPath` dispatcher whether `bindle init
+--projectmem` runs from the main checkout or a linked worktree (never
+invoked for a repository where Projectmem is already installed, and
+refused outright — before guardrails mutate anything — over ambiguous
+partial/conflicting `.projectmem/` state or a missing `pjm` executable;
+docs/DECISIONS.md D033). `bindle remove` never touches `.projectmem/` —
+Projectmem is provider-owned working memory Bindle has no ownership record
+proving it may destroy, so it survives `bindle remove` regardless of how it
+got there. Bindle is not yet a general Symphony/skill-pack composition
+command; that's future work. `bindle init` is the explicit opt-in
+boundary — a repository becomes Bindle-managed by running it there — and
+`bindle remove` reverses the guardrail layer, scoped to that one repository
+only. Both refuse to run (rather than silently migrating or removing it) if
+a recognized legacy, pre-repo-local, **machine-global** Bindle guardrail
+install is still present; `bindle migrate-legacy-global` is the explicit,
+repo-independent command that clears that legacy state, and only that.
+`bindle status` reports read-only Git guardrail, Claude guardrail, and
+Projectmem adoption state for the current repository — it never installs,
+repairs, or otherwise mutates any of the three.
 
 The repository is the primary unit of Bindle management, and most
 lifecycle commands target the current repository rather than the whole

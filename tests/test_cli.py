@@ -2,9 +2,11 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -13,8 +15,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from bindle import __version__
 from bindle.cli import _LIFECYCLE_COMMANDS, main
+from bindle.guardrails import detect_claude_guardrails, detect_git_guardrails
+from bindle.projectmem import detect_projectmem
+from bindle.repo import get_repo_info
 
 TOP_LEVEL_COMMANDS = [*_LIFECYCLE_COMMANDS, "repo", "branch"]
+
+_HAS_REAL_PJM = shutil.which("pjm") is not None
 
 
 def _run(args, cwd):
@@ -738,6 +745,692 @@ class TestBranchCommand(unittest.TestCase):
             self.assertIn("not a Git repository", err.getvalue())
         finally:
             os.rmdir(outside)
+
+
+class TestInitProjectmemFlag(unittest.TestCase):
+    # `bindle init --projectmem` is a second, independent provider-lifecycle
+    # seam alongside the guardrail installer (TestGuardrailLifecycleCommands
+    # above): detection is the same read-only bindle.projectmem
+    # .detect_projectmem() `bindle status` already uses (see
+    # tests/test_projectmem.py for its own real-fixture coverage), and
+    # initialization goes through Projectmem's native `pjm init` CLI —
+    # Bindle never constructs `.projectmem/` state itself. Every test here
+    # mocks `bindle.cli.pjm_executable`/`subprocess.run`, so none of them
+    # require the real `pjm` CLI to be installed; see
+    # TestInitProjectmemRealPjm below for real-CLI coverage.
+    #
+    # Ordering under test throughout: known Projectmem preconditions
+    # (partial/conflicting `.projectmem/`, a missing `pjm` executable) are
+    # checked BEFORE guardrails mutate anything — a Projectmem-side refusal
+    # must never leave guardrails newly installed/reconciled behind it.
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = os.path.join(self.tmp.name, "repo")
+        _init_repo(self.repo)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _mem_dir(self):
+        return os.path.join(self.repo, ".projectmem")
+
+    def _assert_guardrails_untouched(self):
+        info = get_repo_info(self.repo)
+        self.assertEqual(detect_git_guardrails(info), "not-installed")
+        self.assertEqual(detect_claude_guardrails(info), "not-installed")
+
+    def test_bare_init_never_touches_projectmem(self):
+        with _chdir(self.repo), mock.patch(
+            "bindle.cli.pjm_executable",
+            side_effect=AssertionError("bare `bindle init` must not check for pjm"),
+        ):
+            code = main(["init"])
+
+        self.assertEqual(code, 0)
+        self.assertFalse(os.path.exists(self._mem_dir()))
+
+    def test_projectmem_flag_is_noop_when_already_installed(self):
+        # "installed" still requires no `pjm` executable at all, but
+        # guardrails ARE still applied — only the Projectmem mutation step
+        # is skipped.
+        os.makedirs(self._mem_dir())
+        with open(os.path.join(self._mem_dir(), "config.toml"), "w") as f:
+            f.write("")
+
+        out = io.StringIO()
+        with _chdir(self.repo), mock.patch(
+            "bindle.cli.pjm_executable",
+            side_effect=AssertionError("must not invoke pjm for an already-installed repo"),
+        ), contextlib.redirect_stdout(out):
+            code = main(["init", "--projectmem"])
+
+        self.assertEqual(code, 0)
+        self.assertIn("already installed", out.getvalue())
+
+        info = get_repo_info(self.repo)
+        self.assertEqual(detect_git_guardrails(info), "installed")
+        self.assertEqual(detect_claude_guardrails(info), "installed")
+
+    def test_projectmem_flag_refuses_on_partial_state_before_guardrail_mutation(self):
+        os.makedirs(self._mem_dir())
+        with open(os.path.join(self._mem_dir(), "events.jsonl"), "w"):
+            pass
+        before = sorted(os.listdir(self._mem_dir()))
+
+        def on_installer_call(cmd):
+            raise AssertionError("guardrails must not be touched when Projectmem preflight refuses")
+
+        err = io.StringIO()
+        with _chdir(self.repo), mock.patch(
+            "bindle.cli.pjm_executable",
+            side_effect=AssertionError("must not invoke pjm on partial state"),
+        ), _intercept_installer_call(on_installer_call), contextlib.redirect_stderr(err):
+            code = main(["init", "--projectmem"])
+
+        self.assertEqual(code, 1)
+        self.assertIn("incomplete", err.getvalue())
+        self.assertEqual(sorted(os.listdir(self._mem_dir())), before)
+        self._assert_guardrails_untouched()
+
+    def test_projectmem_flag_refuses_on_conflict_state_before_guardrail_mutation(self):
+        with open(self._mem_dir(), "w") as f:
+            f.write("occupied")
+
+        def on_installer_call(cmd):
+            raise AssertionError("guardrails must not be touched when Projectmem preflight refuses")
+
+        err = io.StringIO()
+        with _chdir(self.repo), mock.patch(
+            "bindle.cli.pjm_executable",
+            side_effect=AssertionError("must not invoke pjm on conflicting state"),
+        ), _intercept_installer_call(on_installer_call), contextlib.redirect_stderr(err):
+            code = main(["init", "--projectmem"])
+
+        self.assertEqual(code, 1)
+        self.assertIn("not a directory", err.getvalue())
+        self.assertTrue(os.path.isfile(self._mem_dir()))
+        self._assert_guardrails_untouched()
+
+    def test_projectmem_flag_fails_clearly_when_pjm_missing_before_guardrail_mutation(self):
+        def on_installer_call(cmd):
+            raise AssertionError("guardrails must not be touched when pjm is missing")
+
+        err = io.StringIO()
+        with _chdir(self.repo), mock.patch(
+            "bindle.cli.pjm_executable", return_value=None
+        ), _intercept_installer_call(on_installer_call), contextlib.redirect_stderr(err):
+            code = main(["init", "--projectmem"])
+
+        self.assertEqual(code, 1)
+        self.assertIn("pjm", err.getvalue())
+        self.assertIn("PATH", err.getvalue())
+        self.assertFalse(os.path.exists(self._mem_dir()))
+        self._assert_guardrails_untouched()
+
+    def test_projectmem_flag_succeeds_when_installed_even_with_pjm_missing(self):
+        # "installed" never requires a `pjm` executable — Bindle is
+        # accepting a healthy existing provider installation, not claiming
+        # ownership of it.
+        os.makedirs(self._mem_dir())
+        with open(os.path.join(self._mem_dir(), "config.toml"), "w") as f:
+            f.write("")
+
+        with _chdir(self.repo), mock.patch("bindle.cli.pjm_executable", return_value=None):
+            code = main(["init", "--projectmem"])
+
+        self.assertEqual(code, 0)
+        info = get_repo_info(self.repo)
+        self.assertEqual(detect_git_guardrails(info), "installed")
+
+    def test_projectmem_flag_invokes_pjm_init_with_the_narrowed_arg_set_and_worktree_cwd(self):
+        pjm_calls = []
+
+        def fake_run(cmd, **kwargs):
+            if cmd and cmd[0] == "/usr/bin/fake-pjm":
+                pjm_calls.append((cmd, kwargs.get("cwd")))
+                return subprocess.CompletedProcess(cmd, 0)
+            return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+
+        with _chdir(self.repo), mock.patch(
+            "bindle.cli.pjm_executable", return_value="/usr/bin/fake-pjm"
+        ), mock.patch("subprocess.run", side_effect=fake_run):
+            code = main(["init", "--projectmem"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(len(pjm_calls), 2)
+        init_cmd, init_cwd = pjm_calls[0]
+        self.assertEqual(
+            init_cmd,
+            [
+                "/usr/bin/fake-pjm",
+                "init",
+                "--no-hooks",
+                "--no-global",
+                "--no-watch",
+                "--no-backfill",
+                "--no-claude-md",
+                "--no-mcp-config",
+                "--no-structure",
+                "--no-stack-detect",
+            ],
+        )
+        self.assertEqual(init_cwd, os.path.realpath(self.repo))
+
+        info = get_repo_info(self.repo)
+        self.assertEqual(detect_git_guardrails(info), "installed")
+
+    def test_projectmem_flag_invokes_pjm_hooks_install_with_repo_root_cwd(self):
+        pjm_calls = []
+
+        def fake_run(cmd, **kwargs):
+            if cmd and cmd[0] == "/usr/bin/fake-pjm":
+                pjm_calls.append((cmd, kwargs.get("cwd")))
+                return subprocess.CompletedProcess(cmd, 0)
+            return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+
+        with _chdir(self.repo), mock.patch(
+            "bindle.cli.pjm_executable", return_value="/usr/bin/fake-pjm"
+        ), mock.patch("subprocess.run", side_effect=fake_run):
+            code = main(["init", "--projectmem"])
+
+        self.assertEqual(code, 0)
+        hooks_cmd, hooks_cwd = pjm_calls[1]
+        self.assertEqual(hooks_cmd, ["/usr/bin/fake-pjm", "hooks", "install"])
+        # In an ordinary (non-worktree) checkout, repo_root == worktree_root,
+        # so this doesn't by itself distinguish the two — the dedicated
+        # TestInitProjectmemLinkedWorktree class below proves the real
+        # divergence.
+        info = get_repo_info(self.repo)
+        self.assertEqual(hooks_cwd, info.repo_root)
+
+    def test_projectmem_flag_runs_guardrails_then_pjm_init_then_hooks_install_in_order(self):
+        order = []
+
+        def fake_run(cmd, **kwargs):
+            if cmd and cmd[0] == "bash":
+                order.append("guardrails")
+                return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+            if cmd and cmd[0] == "/usr/bin/fake-pjm" and cmd[1] == "init":
+                order.append("pjm-init")
+                return subprocess.CompletedProcess(cmd, 0)
+            if cmd and cmd[0] == "/usr/bin/fake-pjm" and cmd[1] == "hooks":
+                order.append("pjm-hooks")
+                return subprocess.CompletedProcess(cmd, 0)
+            return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+
+        with _chdir(self.repo), mock.patch(
+            "bindle.cli.pjm_executable", return_value="/usr/bin/fake-pjm"
+        ), mock.patch("subprocess.run", side_effect=fake_run):
+            code = main(["init", "--projectmem"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(order, ["guardrails", "pjm-init", "pjm-hooks"])
+
+    def test_projectmem_flag_propagates_pjm_init_exit_code_and_skips_hooks_install(self):
+        pjm_calls = []
+
+        def fake_run(cmd, **kwargs):
+            if cmd and cmd[0] == "/usr/bin/fake-pjm":
+                pjm_calls.append(cmd)
+                return subprocess.CompletedProcess(cmd, 7)
+            return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+
+        with _chdir(self.repo), mock.patch(
+            "bindle.cli.pjm_executable", return_value="/usr/bin/fake-pjm"
+        ), mock.patch("subprocess.run", side_effect=fake_run):
+            code = main(["init", "--projectmem"])
+
+        self.assertEqual(code, 7)
+        # `pjm init` failed — `pjm hooks install` must never be attempted.
+        self.assertEqual(len(pjm_calls), 1)
+        self.assertEqual(pjm_calls[0][1], "init")
+        # Guardrails already succeeded and are never rolled back merely
+        # because the later Projectmem step failed.
+        info = get_repo_info(self.repo)
+        self.assertEqual(detect_git_guardrails(info), "installed")
+
+    def test_projectmem_flag_propagates_hooks_install_failure_and_preserves_state(self):
+        def fake_run(cmd, **kwargs):
+            if cmd and cmd[0] == "/usr/bin/fake-pjm" and cmd[1] == "init":
+                # Real `pjm init` also creates .projectmem/ as a side
+                # effect — reproduce that so the "preserved on failure"
+                # assertion below is meaningful.
+                os.makedirs(self._mem_dir(), exist_ok=True)
+                with open(os.path.join(self._mem_dir(), "config.toml"), "w") as f:
+                    f.write("")
+                return subprocess.CompletedProcess(cmd, 0)
+            if cmd and cmd[0] == "/usr/bin/fake-pjm" and cmd[1] == "hooks":
+                return subprocess.CompletedProcess(cmd, 5)
+            return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+
+        err = io.StringIO()
+        with _chdir(self.repo), mock.patch(
+            "bindle.cli.pjm_executable", return_value="/usr/bin/fake-pjm"
+        ), mock.patch("subprocess.run", side_effect=fake_run), contextlib.redirect_stderr(err):
+            code = main(["init", "--projectmem"])
+
+        self.assertEqual(code, 5)
+        self.assertIn("hooks install", err.getvalue())
+        # Neither Projectmem storage nor guardrails are rolled back merely
+        # because hook installation failed.
+        self.assertTrue(os.path.isfile(os.path.join(self._mem_dir(), "config.toml")))
+        info = get_repo_info(self.repo)
+        self.assertEqual(detect_git_guardrails(info), "installed")
+
+    def test_projectmem_init_never_attempted_when_guardrails_fail(self):
+        # Preflight passes (pjm resolved) before guardrails ever run; a
+        # guardrail failure must still stop the invocation before `pjm
+        # init` (or `pjm hooks install`) is actually invoked.
+        pjm_calls = []
+
+        def fake_run(cmd, **kwargs):
+            if cmd and cmd[0] == "bash":
+                return subprocess.CompletedProcess(cmd, 3)
+            if cmd and cmd[0] == "/usr/bin/fake-pjm":
+                pjm_calls.append(cmd)
+                return subprocess.CompletedProcess(cmd, 0)
+            return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+
+        with _chdir(self.repo), mock.patch(
+            "bindle.cli.pjm_executable", return_value="/usr/bin/fake-pjm"
+        ), mock.patch("subprocess.run", side_effect=fake_run):
+            code = main(["init", "--projectmem"])
+
+        self.assertEqual(code, 3)
+        self.assertEqual(pjm_calls, [])
+        self.assertFalse(os.path.exists(self._mem_dir()))
+
+    def test_remove_never_touches_projectmem(self):
+        os.makedirs(self._mem_dir())
+        with open(os.path.join(self._mem_dir(), "config.toml"), "w") as f:
+            f.write("")
+
+        with _chdir(self.repo):
+            self.assertEqual(main(["init"]), 0)
+
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["remove"])
+
+        self.assertEqual(code, 0)
+        self.assertTrue(os.path.isfile(os.path.join(self._mem_dir(), "config.toml")))
+        self.assertIn("left untouched", out.getvalue())
+
+        info = get_repo_info(self.repo)
+        self.assertEqual(detect_projectmem(info), "installed")
+
+    def test_remove_says_nothing_about_projectmem_when_never_installed(self):
+        with _chdir(self.repo):
+            self.assertEqual(main(["init"]), 0)
+
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["remove"])
+
+        self.assertEqual(code, 0)
+        self.assertNotIn("Projectmem", out.getvalue())
+
+
+@unittest.skipUnless(_HAS_REAL_PJM, "requires the real `pjm` CLI on PATH")
+class TestInitProjectmemRealPjm(unittest.TestCase):
+    # Exercises the actual native Projectmem CLI (not mocked) — skipped
+    # wherever `pjm` isn't installed, which includes CI: this repository
+    # declares no Projectmem dependency (AGENTS.md), and .github/workflows
+    # /ci.yml never installs it. Verified locally this session against
+    # projectmem 0.2.0 (`uv tool install projectmem`).
+    #
+    # PROJECTMEM_HOME isolation: Projectmem 0.2.0's `initialize()`
+    # unconditionally calls `register_project()`, which appends this
+    # fixture's absolute path to a cross-project registry
+    # (`$PROJECTMEM_HOME/projects.json`, defaulting to
+    # `~/.projectmem/projects.json`) — this happens regardless of
+    # `--no-global` (that flag only skips *inheriting* global memory, a
+    # separate mechanism; see docs/DECISIONS.md D033). Every real `pjm`
+    # invocation below runs with `PROJECTMEM_HOME` redirected to a disposable
+    # temp directory so this never touches the developer's real global
+    # Projectmem state (AGENTS.md "Runtime isolation").
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = os.path.join(self.tmp.name, "repo")
+        _init_repo(self.repo)
+
+        self.registry_home = tempfile.TemporaryDirectory()
+        self.env_patcher = mock.patch.dict(
+            os.environ, {"PROJECTMEM_HOME": self.registry_home.name}
+        )
+        self.env_patcher.start()
+
+    def tearDown(self):
+        self.env_patcher.stop()
+        self.registry_home.cleanup()
+        self.tmp.cleanup()
+
+    def _mem_dir(self):
+        return os.path.join(self.repo, ".projectmem")
+
+    def test_real_pjm_init_results_in_installed_state(self):
+        with _chdir(self.repo):
+            code = main(["init", "--projectmem"])
+
+        self.assertEqual(code, 0)
+        self.assertTrue(os.path.isfile(os.path.join(self._mem_dir(), "config.toml")))
+        info = get_repo_info(self.repo)
+        self.assertEqual(detect_projectmem(info), "installed")
+
+        # Positive proof PROJECTMEM_HOME isolation is actually in effect
+        # (registration lands in the isolated registry, not the real one).
+        registry = os.path.join(self.registry_home.name, "projects.json")
+        self.assertTrue(os.path.isfile(registry))
+        with open(registry) as f:
+            self.assertIn(os.path.realpath(self.repo), f.read())
+
+    def test_real_pjm_init_uses_the_narrowed_arg_set_then_installs_hooks_separately(self):
+        real_run = subprocess.run
+        pjm_calls = []
+
+        def spy_run(cmd, **kwargs):
+            if cmd and os.path.basename(cmd[0]) == "pjm":
+                pjm_calls.append(cmd)
+            return real_run(cmd, **kwargs)
+
+        with _chdir(self.repo), mock.patch("subprocess.run", side_effect=spy_run):
+            code = main(["init", "--projectmem"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(len(pjm_calls), 2)
+        init_cmd, hooks_cmd = pjm_calls
+        for flag in (
+            "--no-hooks",
+            "--no-global",
+            "--no-watch",
+            "--no-backfill",
+            "--no-claude-md",
+            "--no-mcp-config",
+            "--no-structure",
+            "--no-stack-detect",
+        ):
+            self.assertIn(flag, init_cmd)
+        self.assertEqual(hooks_cmd[1:], ["hooks", "install"])
+
+    def test_real_pjm_init_does_not_create_claude_md(self):
+        # --no-claude-md: Bindle is provider-neutral — Projectmem must not
+        # silently append its own Claude-specific bridge prose into
+        # repository policy files as a side effect of Bindle setup. The
+        # fixture starts with no CLAUDE.md (_init_repo only writes
+        # README.md); it must still have none afterward.
+        with _chdir(self.repo):
+            code = main(["init", "--projectmem"])
+
+        self.assertEqual(code, 0)
+        self.assertFalse(os.path.exists(os.path.join(self.repo, "CLAUDE.md")))
+
+    def test_real_pjm_init_does_not_print_mcp_config(self):
+        # --no-mcp-config: Projectmem MCP registration/configuration is a
+        # separate concern, not part of this seam. _print_mcp_config only
+        # ever writes to stdout (no file artifact), so stdout content is
+        # the only observable signal.
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["init", "--projectmem"])
+
+        self.assertEqual(code, 0)
+        self.assertNotIn("MCP client configuration", out.getvalue())
+        self.assertNotIn("mcpServers", out.getvalue())
+
+    def test_real_pjm_init_does_not_backfill_git_history(self):
+        # --no-backfill: `bindle init` must not unexpectedly ingest existing
+        # Git history into working memory. _init_repo already made one
+        # commit before `bindle init --projectmem` runs; without backfill,
+        # events.jsonl must stay empty (the only other event-producing path,
+        # git hook auto-capture, only fires on a *future* commit/merge).
+        with _chdir(self.repo):
+            code = main(["init", "--projectmem"])
+
+        self.assertEqual(code, 0)
+        events_path = os.path.join(self._mem_dir(), "events.jsonl")
+        with open(events_path) as f:
+            self.assertEqual(f.read().strip(), "")
+
+    def test_real_pjm_init_does_not_build_structure_cache(self):
+        # --no-structure: Bindle setup should not trigger Projectmem's
+        # repository code-structure analysis.
+        with _chdir(self.repo):
+            code = main(["init", "--projectmem"])
+
+        self.assertEqual(code, 0)
+        self.assertFalse(os.path.exists(os.path.join(self._mem_dir(), "structure.json")))
+
+    def test_real_pjm_init_does_not_run_stack_detection(self):
+        # --no-stack-detect: Bindle setup should not trigger Projectmem's
+        # stack/manifest analysis merely to initialize provider storage.
+        # Without it, PROJECT_MAP.md keeps its native placeholder ("Status:
+        # not created yet") instead of being rewritten to "Status:
+        # auto-detected from project manifests ...".
+        with _chdir(self.repo):
+            code = main(["init", "--projectmem"])
+
+        self.assertEqual(code, 0)
+        with open(os.path.join(self._mem_dir(), "PROJECT_MAP.md")) as f:
+            content = f.read()
+        self.assertIn("Status: not created yet", content)
+
+    def test_real_pjm_init_does_not_start_a_watcher(self):
+        # --no-watch: no long-running daemon started by `bindle init`. The
+        # watcher writes a PID file only when actually running — its
+        # absence is the repo-local, safe-to-check signal (no need to scan
+        # system processes).
+        with _chdir(self.repo):
+            code = main(["init", "--projectmem"])
+
+        self.assertEqual(code, 0)
+        self.assertFalse(os.path.exists(os.path.join(self._mem_dir(), "watch.pid")))
+
+    def test_real_pjm_init_still_installs_git_hooks(self):
+        # `pjm init` itself skips hook installation (--no-hooks); Bindle
+        # installs them separately via `pjm hooks install` right after.
+        # This is an ordinary (non-worktree) checkout, where repo_root ==
+        # worktree_root, so `.git/hooks` here is the same directory either
+        # way — see TestInitProjectmemLinkedWorktree for the case where
+        # that matters.
+        with _chdir(self.repo):
+            code = main(["init", "--projectmem"])
+
+        self.assertEqual(code, 0)
+        for hook_name in ("pre-commit", "post-commit", "post-merge"):
+            hook_path = os.path.join(self.repo, ".git", "hooks", hook_name)
+            self.assertTrue(os.path.isfile(hook_path), f"{hook_name} hook missing")
+            self.assertTrue(os.access(hook_path, os.X_OK), f"{hook_name} hook not executable")
+
+    def test_real_pjm_init_is_idempotent_on_rerun(self):
+        with _chdir(self.repo):
+            self.assertEqual(main(["init", "--projectmem"]), 0)
+
+        config = os.path.join(self._mem_dir(), "config.toml")
+        before = os.path.getmtime(config)
+
+        # The second run must short-circuit on "installed" and never invoke
+        # pjm again — proven by making a second real invocation impossible.
+        with _chdir(self.repo), mock.patch(
+            "bindle.cli.pjm_executable",
+            side_effect=AssertionError("must not re-invoke pjm once already installed"),
+        ):
+            code = main(["init", "--projectmem"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(os.path.getmtime(config), before)
+
+    def test_remove_preserves_real_projectmem_after_real_init(self):
+        with _chdir(self.repo):
+            self.assertEqual(main(["init", "--projectmem"]), 0)
+            self.assertEqual(main(["remove"]), 0)
+
+        info = get_repo_info(self.repo)
+        self.assertEqual(detect_projectmem(info), "installed")
+        self.assertEqual(detect_git_guardrails(info), "not-installed")
+        self.assertEqual(detect_claude_guardrails(info), "not-installed")
+
+    def test_git_hook_composition_with_bindle_guardrails(self):
+        # Empirically verified once already this session in a disposable
+        # fixture (see the session report); automated here so it's covered
+        # by scripts/check.sh wherever `pjm` is installed.
+        with _chdir(self.repo):
+            self.assertEqual(main(["init", "--projectmem"]), 0)
+
+        _run(["git", "checkout", "-q", "-b", "feature-x"], self.repo)
+        with open(os.path.join(self.repo, "NOTE.md"), "w") as f:
+            f.write("hook composition check\n")
+        _run(["git", "add", "NOTE.md"], self.repo)
+
+        commit = subprocess.run(
+            ["git", "commit", "-m", "feat: verify hook composition"],
+            cwd=self.repo,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(commit.returncode, 0, commit.stderr)
+
+        # Projectmem's post-commit auto-capture hook backgrounds itself
+        # (`... &`), so the event may land a moment after `git commit`
+        # returns — poll briefly rather than assuming synchronous capture.
+        events_path = os.path.join(self._mem_dir(), "events.jsonl")
+        deadline = time.time() + 5
+        captured_event = False
+        while time.time() < deadline:
+            with open(events_path) as f:
+                if '"capture_source": "git_post_commit"' in f.read():
+                    captured_event = True
+                    break
+            time.sleep(0.2)
+        self.assertTrue(
+            captured_event,
+            "Projectmem's post-commit auto-capture hook never fired through "
+            "Bindle's dispatcher — hook composition is broken",
+        )
+
+        # Protected main is unaffected by Projectmem's own hooks being
+        # present: the dispatcher's policy check still runs (and still
+        # blocks) before it would ever delegate to `.git/hooks/pre-commit`
+        # (Projectmem's own precheck warning).
+        _run(["git", "checkout", "-q", "main"], self.repo)
+        with open(os.path.join(self.repo, "MAIN.md"), "w") as f:
+            f.write("direct main write\n")
+        _run(["git", "add", "MAIN.md"], self.repo)
+        blocked = subprocess.run(
+            ["git", "commit", "-m", "test: direct main write"],
+            cwd=self.repo,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(blocked.returncode, 0)
+        self.assertIn("protected", blocked.stderr)
+
+
+@unittest.skipUnless(_HAS_REAL_PJM, "requires the real `pjm` CLI on PATH")
+class TestInitProjectmemLinkedWorktree(unittest.TestCase):
+    # Regression coverage for the linked-worktree hook-installation fix
+    # (docs/DECISIONS.md D033): Projectmem's native hook installer resolves
+    # `<cwd>/.git/hooks` directly, which does not exist as a directory in a
+    # linked worktree (`.git` there is a file, not a directory) — so
+    # `bindle init --projectmem` must install Projectmem's storage
+    # worktree-locally but its hooks against the repository's shared Git
+    # common directory (RepoInfo.repo_root), not silently skip them.
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.main_repo = os.path.join(self.tmp.name, "main")
+        _init_repo(self.main_repo)
+
+        self.worktree = os.path.join(self.tmp.name, "linked")
+        _run(["git", "worktree", "add", "-q", "-b", "feature-x", self.worktree], self.main_repo)
+
+        self.registry_home = tempfile.TemporaryDirectory()
+        self.env_patcher = mock.patch.dict(
+            os.environ, {"PROJECTMEM_HOME": self.registry_home.name}
+        )
+        self.env_patcher.start()
+
+    def tearDown(self):
+        self.env_patcher.stop()
+        self.registry_home.cleanup()
+        self.tmp.cleanup()
+
+    def _mem_dir(self):
+        return os.path.join(self.worktree, ".projectmem")
+
+    def test_fixture_premise_git_is_a_file_in_the_worktree_and_a_directory_in_main(self):
+        self.assertTrue(os.path.isfile(os.path.join(self.worktree, ".git")))
+        self.assertTrue(os.path.isdir(os.path.join(self.main_repo, ".git")))
+
+    def test_init_from_linked_worktree_initializes_storage_and_installs_shared_hooks(self):
+        with _chdir(self.worktree):
+            code = main(["init", "--projectmem"])
+
+        self.assertEqual(code, 0)
+
+        # Storage stays worktree-local.
+        self.assertTrue(os.path.isfile(os.path.join(self._mem_dir(), "config.toml")))
+        info = get_repo_info(self.worktree)
+        self.assertEqual(detect_projectmem(info), "installed")
+
+        # Hooks land in the SHARED repository hook directory (the main
+        # checkout's `.git/hooks`) — never skipped merely because
+        # `<worktree>/.git` is a file, and never present under the
+        # worktree's own (nonexistent) `.git/hooks`.
+        self.assertFalse(os.path.isdir(os.path.join(self.worktree, ".git", "hooks")))
+        for hook_name in ("pre-commit", "post-commit", "post-merge"):
+            hook_path = os.path.join(self.main_repo, ".git", "hooks", hook_name)
+            self.assertTrue(os.path.isfile(hook_path), f"{hook_name} missing from the shared hooks dir")
+            self.assertTrue(os.access(hook_path, os.X_OK), f"{hook_name} not executable")
+            with open(hook_path) as f:
+                self.assertIn("projectmem auto-capture", f.read())
+
+    def test_post_commit_capture_fires_through_bindles_dispatcher_from_the_linked_worktree(self):
+        with _chdir(self.worktree):
+            self.assertEqual(main(["init", "--projectmem"]), 0)
+
+        with open(os.path.join(self.worktree, "NOTE.md"), "w") as f:
+            f.write("linked worktree hook composition check\n")
+        _run(["git", "add", "NOTE.md"], self.worktree)
+        commit = subprocess.run(
+            ["git", "commit", "-m", "feat: linked worktree hook composition"],
+            cwd=self.worktree,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(commit.returncode, 0, commit.stderr)
+
+        # Auto-capture backgrounds itself — poll briefly rather than
+        # assuming synchronous capture (same as the ordinary-checkout
+        # composition test).
+        events_path = os.path.join(self._mem_dir(), "events.jsonl")
+        deadline = time.time() + 5
+        captured_event = False
+        while time.time() < deadline:
+            with open(events_path) as f:
+                if '"capture_source": "git_post_commit"' in f.read():
+                    captured_event = True
+                    break
+            time.sleep(0.2)
+        self.assertTrue(
+            captured_event,
+            "Projectmem's post-commit auto-capture hook never fired through "
+            "Bindle's dispatcher from the linked worktree",
+        )
+
+    def test_protected_main_still_blocks_in_the_main_checkout(self):
+        with _chdir(self.worktree):
+            self.assertEqual(main(["init", "--projectmem"]), 0)
+
+        with open(os.path.join(self.main_repo, "MAIN.md"), "w") as f:
+            f.write("direct main write\n")
+        _run(["git", "add", "MAIN.md"], self.main_repo)
+        blocked = subprocess.run(
+            ["git", "commit", "-m", "test: direct main write"],
+            cwd=self.main_repo,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(blocked.returncode, 0)
+        self.assertIn("protected", blocked.stderr)
 
 
 if __name__ == "__main__":
