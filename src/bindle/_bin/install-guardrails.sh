@@ -117,7 +117,7 @@ HOOK_NAMES=(
 # is deterministic expansion into Claude's required per-tool permission-rule
 # strings (test-install-guardrails.sh proves the expansion is exact) —
 # adding a newly-recognized secret filename means adding one line to
-# FILE_DENY_GLOBS, not four separate Read/Edit/Write/Grep rules.
+# FILE_DENY_GLOBS, not three separate Read/Edit/Grep rules.
 
 # Precise private-key and env-file path shapes, not a blanket *.pem (PEM is
 # also a public-certificate format) and not id_*.pub (the public half of an
@@ -135,7 +135,17 @@ FILE_DENY_GLOBS=(
 # directory-wide Grep that merely CONTAINS one of these paths as a subpath
 # is a documented, un-closed gap (Claude's permission globs are
 # path-anchored, not content-scoped).
-FILE_DENY_TOOLS=(Read Edit Write Grep)
+#
+# No separate "Write" entry: Claude Code's permission engine does not match
+# file-editing tool calls against a `Write(path)` rule at all — a single
+# `Edit(path)` rule already covers every file-editing tool (Edit, Write,
+# MultiEdit, NotebookEdit; see PRETOOLUSE_MATCHER below, which gates on
+# exactly that same tool set). A `Write(glob)` deny entry is therefore dead
+# weight: Claude Code's own startup diagnostics flag it as "not matched by
+# file permission checks," and it was never providing protection `Edit`
+# didn't already provide. Confirmed against a real installed
+# settings.local.json rather than assumed.
+FILE_DENY_TOOLS=(Read Edit Grep)
 
 # Bash commands that dump the whole environment — denied both bare (no
 # arguments) and with any argument list, since the two are distinct
