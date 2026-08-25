@@ -37,6 +37,7 @@ uv run bindle repo info --json
 
 * `bindle --version` — deterministic package version.
 * `bindle repo info` — repository/execution/code-state identity (docs/WORKTREES.md): repository root, current worktree root, Git directory, Git common directory, current branch (when attached), and HEAD SHA. Add `--json` for machine-readable output.
+* `bindle branch <name>` — creates a new feature branch off freshly-fetched `origin/main` in its own linked Git worktree, following the development-isolation model in AGENTS.md and docs/WORKTREES.md. `main` itself is left untouched as the clean baseline. Refuses to reuse an existing branch name or worktree path, and refuses to fall back to a stale local `main` if the fetch fails.
 
 The CLI stays intentionally small; it is infrastructure for future narrow capabilities, not a work-DAG or orchestration layer (see AGENTS.md, docs/SCOPE.md).
 
