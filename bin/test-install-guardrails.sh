@@ -154,8 +154,10 @@ check ".env.*.local is denied for Read" bash -c \
   "jq -e '.permissions.deny | any(. == \"Read(.env.*.local)\")' '$SETTINGS' >/dev/null"
 check "secrets/** is denied for Read" bash -c \
   "jq -e '.permissions.deny | any(. == \"Read(secrets/**)\")' '$SETTINGS' >/dev/null"
-check ".env is denied for Edit and Write too, not just Read" bash -c \
-  "jq -e '.permissions.deny | any(. == \"Edit(.env)\") and any(. == \"Write(.env)\")' '$SETTINGS' >/dev/null"
+check ".env is denied for Edit too, not just Read" bash -c \
+  "jq -e '.permissions.deny | any(. == \"Edit(.env)\")' '$SETTINGS' >/dev/null"
+check "no separate Write(.env) deny entry — Claude Code doesn't match Write(path); Edit(path) already covers it" bash -c \
+  "! jq -e '.permissions.deny | any(. == \"Write(.env)\")' '$SETTINGS' >/dev/null"
 
 check ".env.example is never targeted by any deny pattern (excluded by construction)" bash -c \
   "! jq -e '.permissions.deny | any(test(\"\\\\.env\\\\.example\"))' '$SETTINGS' >/dev/null"
