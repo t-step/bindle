@@ -28,9 +28,15 @@ section() { printf '\n== %s ==\n' "$1"; }
 # expansion below rather than drop set -u (same convention as
 # bin/check-private-info.sh).
 SH_FILES=()
+# Excludes .specify/ — Spec Kit's own vendored scripts (D035: committed
+# verbatim for team reproducibility, never hand-edited by Bindle). Linting
+# upstream's own code and either fixing it (creating local drift a future
+# `specify integration upgrade` would clobber) or leaving warnings unfixed
+# (permanently failing this gate) are both wrong; this repository has no
+# standing to lint code it doesn't own and never modifies.
 while IFS= read -r f; do
   SH_FILES+=("$f")
-done < <(git ls-files '*.sh')
+done < <(git ls-files '*.sh' ':!:.specify/**')
 
 # --- 1. bash syntax validation ----------------------------------------------
 section "bash -n (syntax)"
