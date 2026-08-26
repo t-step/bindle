@@ -312,3 +312,80 @@ This distinction — not a metric, dashboard, or scoring system — is the
 actual thing worth preserving from this deferral. Everything else in this
 section is disposable and expected to be re-derived once real evidence
 exists.
+
+## Addendum (2026-08-26): durable implementation-work model specified — sequencing update, not architecture adopted
+
+Status: **specification-only artifact created; nothing in this section changes
+this plan's own "Settled direction" or "Work" above, and nothing here
+constitutes adoption.** Recorded so a future session does not re-derive the
+current sequencing or reopen questions this addendum's own referenced spec
+already settled.
+
+This plan's own text above ("Work items are loaded into SQLite manually for
+now") and D037's correction (Symphony's finished local tracker is plain
+JSON, not SQLite) left one thing genuinely unresolved: **Bindle's own
+durable work-item model**, independent of whatever format Symphony's
+tracker happens to use. `specs/001-durable-work-ledger/` (spec.md, plan.md,
+research.md, data-model.md, contracts/, quickstart.md — no tasks.md,
+deliberately, see below) now answers that question at the specification
+level:
+
+* The durable record is a **Bindle-owned coordination ledger** — orthogonal
+  facts (status, blocking, claim, evidence, source pointer) per work item,
+  not a lifecycle enum — stored as plain per-item files at the repository's
+  Git common directory, untracked, mirroring the same architectural slot
+  Projectmem (D022/D033) and QMD (D036) already occupy. **Not SQLite** —
+  see `specs/001-durable-work-ledger/research.md`'s "Decision: storage
+  format" for the full justification, independently derived from
+  `docs/SCOPE.md`'s own storage criteria, not copied from Symphony's choice.
+* Symphony (or any future coordinator) consumes a **generated, disposable
+  projection** of this ledger — the ledger is never generated from
+  Symphony's tracker schema, and Symphony's tracker adapter shape never
+  becomes Bindle's own ontology. `specs/001-durable-work-ledger/contracts/coordinator-projection.md`
+  documents the minimum fields, verified this session against the pinned
+  fork's actual source (not this plan's own prior, partly-stale
+  assumptions): the `local` tracker adapter hardcodes `dispatchable: true`
+  and does not evaluate `blocked_by` itself, so a future projection step —
+  not Symphony — must withhold still-blocked items from any `active_states`
+  value.
+* Spec Kit's own `tasks.md` is **not** the runtime work ledger. Promoting a
+  task (or a plan section, or an ad hoc need) into a durable ledger item is
+  a deliberate, explicit act — automatic ingestion is explicitly rejected,
+  consistent with this plan's own prior "automatic Spec Kit ingestion...
+  is an explicit, acknowledged gap, not this exploration's job" line above,
+  now resolved as a permanent design choice rather than a gap.
+
+**Corrected sequencing** (this addendum's actual purpose — the reason a
+future session must not follow this plan's original "Work" section as
+written): a future implementation must land in this order —
+
+1. adopt the durable implementation-work model (this addendum's referenced
+   spec, once a `docs/DECISIONS.md` entry actually adopts it — not yet
+   recorded, see below);
+2. establish its minimal durable representation (the ledger itself, e.g.
+   `src/bindle/work_ledger.py` per `specs/001-durable-work-ledger/plan.md`'s
+   illustrative — not fixed — module name);
+3. define and validate the Symphony projection;
+4. only then implement the Symphony execution integration this plan's own
+   "Work" section describes (tracker-adapter/worker-harness patch,
+   `bindle init` Symphony wiring).
+
+This plan's own "Settled direction" and "Work" sections above are otherwise
+unchanged and still govern Symphony-side architecture (Symphony remains the
+coordinator, Claude Code as worker harness, no dependency/DAG solver, no
+Bindle-owned scheduler) — this addendum only inserts steps 1–3 ahead of
+step 4, which this plan's original text had implicitly assumed could start
+from "work items are loaded... manually."
+
+**Not decided by this addendum**: this remains specification, not adoption.
+No `docs/DECISIONS.md` entry has been recorded for the durable work-item
+model — one is expected only once a first implementation slice (see
+`specs/001-durable-work-ledger/plan.md`'s recommended next step) is actually
+built and observed working, mirroring this repository's own established
+precedent (D033/D035/D036 each followed a working slice, and D037 recorded
+only a reference, not adoption). `docs/PHILOSOPHY.md`'s "Bindle-owned
+runtime state" categories are not yet amended either — `specs/001-durable-work-ledger/research.md`'s
+"Decision: ownership" names the specific gap (bounded coordination state is
+a distinct fourth category, not cleanly "configuration," "disposable
+cache," or "explicit export") for that future decision to close explicitly,
+rather than leaving a future session to notice the mismatch on its own.
