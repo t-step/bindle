@@ -30,9 +30,16 @@ undocumented, a future session picking up "evaluate Symphony-style
 scheduling semantics" has no way to tell that a dependency/DAG model, a
 Python orchestration package, a 9-state lifecycle, and a generic
 provider/harness framework were all considered and rejected — it would be
-likely to reintroduce them from the still-present `feat/local-orchestration`
-branch, which contains exactly that architecture. This document exists to
-prevent that.
+likely to reintroduce them by rediscovering that architecture from
+scratch. This document exists to prevent that.
+
+`feat/local-orchestration` was intentionally retired (deleted locally and
+from origin) once this plan and `docs/DECISIONS.md` D037 had captured its
+reusable findings — it is no longer a branch a future session can check
+out. Do not search for it or treat its absence as data loss; the durable
+findings from mining it one final time before retirement are recorded in
+this plan's "Evidence" section below and in Projectmem, not on the branch
+itself.
 
 ## Scope
 
@@ -146,6 +153,21 @@ branch's own claims about itself:
   does no ordering) — it existed only to power a `bindle orchestration
   queue` CLI preview column, and is exactly the kind of hand-duplicated
   logic this exploration rejects.
+* `active_states`/`terminal_states` are two independently-configured
+  membership sets with no third "paused" status — confirmed directly
+  against the pinned fork revision's `orchestrator.ex`
+  (`reconcile_issue_state/4`, `candidate_issue?/3`): a running or blocked
+  issue whose state is in neither set is treated the same as one that
+  fell out of an active state (agent stopped, claim released), and a
+  state must be in `active_states` and not in `terminal_states` to be
+  dispatched at all. Two consequences worth getting right before writing
+  a WORKFLOW.md: (1) a genuinely-in-progress state from Symphony's own
+  example config (e.g. `merging`) must stay in `active_states` or
+  in-flight monitoring breaks — `feat/local-orchestration`'s first pass
+  wrongly excluded it, conflating it with a human-gate state; (2) a real
+  human-gate/parking state must be deliberately excluded from *both*
+  sets (never dispatched, never swept as complete), not just left out of
+  `active_states` alone.
 * Reusable pieces from `feat/local-orchestration`: the SQLite tracker
   adapter's shape (shell out to the `sqlite3` CLI with `-json`, no new
   Hex/mix dependency) and the Claude worker-harness adapter's shape
