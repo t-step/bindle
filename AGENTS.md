@@ -351,3 +351,4 @@ Consult these when their subject is material to the task:
 * docs/DATA-OWNERSHIP.md — authority, routing, and durable knowledge
 * docs/WORKTREES.md — repository/worktree identity and operations
 * docs/PRIVACY.md — disclosure threat model and repository privacy rules
+* docs/SYMPHONY.md — canonical Symphony fork reference, pinned revision, and bootstrap requirements

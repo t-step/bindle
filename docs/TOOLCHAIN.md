@@ -59,6 +59,14 @@ Tooling in this workshop uses these states:
 
 Bindle does not implement model routing, agent loops, approval systems, compaction, sandboxing, tool execution, or subagent runtimes.
 
+### Coordination
+
+| Tool | State | Role |
+| --- | --- | --- |
+| Symphony | Trial | candidate external work coordinator — referenced only, not installed, run, or invoked by Bindle |
+
+Symphony is Bindle's candidate coordinator for the coordination pillar (PLAN.md, "Next" item 3): the canonical fork, pinned revision, and Symphony's own bootstrap requirements are recorded in `docs/SYMPHONY.md` (`docs/DECISIONS.md` D037). Bindle does not own subagent orchestration (see "Bindle does not own" in `docs/SCOPE.md`); Symphony stays externally owned, and this Trial state reflects an evaluated reference, not adoption. `plans/active/2026-08-24-symphony-coordination-exploration.md` records the architecture direction a future implementation would follow.
+
 ### Source and collaboration
 
 | Tool | State | Role |

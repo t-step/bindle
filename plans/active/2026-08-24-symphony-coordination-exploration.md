@@ -194,11 +194,28 @@ in place.
 
 ## Decisions
 
-None recorded here. This plan does not adopt Symphony, SQLite tracking, or
-a Claude worker harness as repository policy — it only sharpens what
-`PLAN.md` line 14 already marked as exploration. A `docs/DECISIONS.md`
-entry is expected only after the vertical proof above is actually observed
+None recorded here for the architecture this plan settles. This plan does
+not adopt Symphony, SQLite tracking, or a Claude worker harness as
+repository policy — it only sharpens what `PLAN.md` line 14 already
+marked as exploration. A `docs/DECISIONS.md` entry for *that* adoption is
+still expected only after the vertical proof above is actually observed
 working.
+
+A narrower, separate decision has since landed: `docs/DECISIONS.md` D037
+records only an intentional reference to the Symphony fork (canonical
+repository, a pinned `development` revision) in a new `docs/SYMPHONY.md`,
+with no execution, `bindle init`/`status` wiring, or work-item model of
+any kind. It does not start this plan's "Work" section and does not
+constitute the vertical-proof decision described above. D037 also found,
+by inspecting the pinned fork revision directly, that Symphony's finished
+local tracker (`tracker.kind: local`) reads and writes a plain JSON file
+(`.symphony/local_tracker.json`), not SQLite — this plan's "Settled
+direction" bullet above ("a repository-scoped local SQLite database
+replaces Linear as Symphony's tracker") was accurate to the evidence
+available on 2026-08-24 but does not match what the fork actually shipped;
+a future implementation session should re-verify the tracker adapter's
+real shape against the pinned revision rather than this plan's original
+SQLite framing.
 
 ## Open questions
 
