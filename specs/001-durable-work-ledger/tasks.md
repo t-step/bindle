@@ -35,8 +35,8 @@ Both are single files for this feature; most tasks below therefore target one of
 
 **Purpose**: Project initialization and basic structure. No new dependencies — `sqlite3` is Python stdlib, matching this repository's existing zero-dependency posture (research.md, "Decision: storage format").
 
-- [ ] T001 Create `src/bindle/work_ledger.py` module skeleton, following the existing flat per-provider module convention (`src/bindle/repo.py`, `projectmem.py`, `qmd.py`)
-- [ ] T002 [P] Create `tests/test_work_ledger.py` test file skeleton with `pytest` imports and a temp-directory-backed fixture for a fake Git common directory
+- [x] T001 Create `src/bindle/work_ledger.py` module skeleton, following the existing flat per-provider module convention (`src/bindle/repo.py`, `projectmem.py`, `qmd.py`)
+- [x] T002 [P] Create `tests/test_work_ledger.py` test file skeleton with `pytest` imports and a temp-directory-backed fixture for a fake Git common directory
 
 ---
 
@@ -46,11 +46,11 @@ Both are single files for this feature; most tasks below therefore target one of
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T003 Implement ledger database path resolution in `src/bindle/work_ledger.py` (resolve from the Git common directory via `RepoInfo`/`repo_root` in `src/bindle/repo.py`, per research.md's "Decision: storage location" — not the invoking worktree)
-- [ ] T004 Implement a short-lived per-operation connection helper in `src/bindle/work_ledger.py` (opens a `sqlite3` connection, sets `PRAGMA foreign_keys = ON`, `PRAGMA journal_mode = WAL`, `PRAGMA synchronous = NORMAL`, `PRAGMA busy_timeout = 2000`, and closes on completion — no long-lived connection or daemon, per research.md's "Decision: connection lifecycle and concurrency")
-- [ ] T005 Implement schema initialization in `src/bindle/work_ledger.py` (`CREATE TABLE` for `work_items`, `work_item_blocked_by`, `work_item_claims`, `work_item_evidence` exactly per data-model.md's "Schema overview," including all `CHECK`/`FOREIGN KEY`/`PRIMARY KEY` constraints)
-- [ ] T006 Implement schema-version bootstrap and check in `src/bindle/work_ledger.py` (read `PRAGMA user_version`; `0` → run T005's schema creation and set `user_version = 1`; nonzero → compare against the expected version, per research.md's "Decision: schema versioning and migration ownership")
-- [ ] T007 Test schema bootstrap, mandatory PRAGMA settings, and version-check idempotency (a fresh db initializes all four tables and their constraints; reopening an already-initialized db does not re-create or reset the schema) in `tests/test_work_ledger.py` (depends on T003–T006)
+- [x] T003 Implement ledger database path resolution in `src/bindle/work_ledger.py` (resolve from the Git common directory via `RepoInfo`/`repo_root` in `src/bindle/repo.py`, per research.md's "Decision: storage location" — not the invoking worktree)
+- [x] T004 Implement a short-lived per-operation connection helper in `src/bindle/work_ledger.py` (opens a `sqlite3` connection, sets `PRAGMA foreign_keys = ON`, `PRAGMA journal_mode = WAL`, `PRAGMA synchronous = NORMAL`, `PRAGMA busy_timeout = 2000`, and closes on completion — no long-lived connection or daemon, per research.md's "Decision: connection lifecycle and concurrency")
+- [x] T005 Implement schema initialization in `src/bindle/work_ledger.py` (`CREATE TABLE` for `work_items`, `work_item_blocked_by`, `work_item_claims`, `work_item_evidence` exactly per data-model.md's "Schema overview," including all `CHECK`/`FOREIGN KEY`/`PRIMARY KEY` constraints)
+- [x] T006 Implement schema-version bootstrap and check in `src/bindle/work_ledger.py` (read `PRAGMA user_version`; `0` → run T005's schema creation and set `user_version = 1`; nonzero → compare against the expected version, per research.md's "Decision: schema versioning and migration ownership")
+- [x] T007 Test schema bootstrap, mandatory PRAGMA settings, and version-check idempotency (a fresh db initializes all four tables and their constraints; reopening an already-initialized db does not re-create or reset the schema) in `tests/test_work_ledger.py` (depends on T003–T006)
 
 **Checkpoint**: Foundation ready — user story implementation can now begin.
 
@@ -64,15 +64,15 @@ Both are single files for this feature; most tasks below therefore target one of
 
 ### Implementation for User Story 1
 
-- [ ] T008 [US1] Implement `create_work_item(id, title, source_kind, source_locator, source_promoted_by=None)` in `src/bindle/work_ledger.py` (single `INSERT` into `work_items` with `status = 'open'`, `created_at`/`updated_at` set — the only operation that creates a Work Item, per FR-002/FR-003; depends on T003–T006)
-- [ ] T009 [US1] Implement `get_work_item(id)` in `src/bindle/work_ledger.py` (single-row `SELECT` by `id`, returning the same record structure regardless of caller worktree/session, per contracts/work-item-record.md's Read guarantees)
-- [ ] T010 [US1] Implement `list_work_items()` in `src/bindle/work_ledger.py` (`SELECT` across all rows, active and archived)
+- [x] T008 [US1] Implement `create_work_item(id, title, source_kind, source_locator, source_promoted_by=None)` in `src/bindle/work_ledger.py` (single `INSERT` into `work_items` with `status = 'open'`, `created_at`/`updated_at` set — the only operation that creates a Work Item, per FR-002/FR-003; depends on T003–T006)
+- [x] T009 [US1] Implement `get_work_item(id)` in `src/bindle/work_ledger.py` (single-row `SELECT` by `id`, returning the same record structure regardless of caller worktree/session, per contracts/work-item-record.md's Read guarantees)
+- [x] T010 [US1] Implement `list_work_items()` in `src/bindle/work_ledger.py` (`SELECT` across all rows, active and archived)
 
 ### Tests for User Story 1
 
-- [ ] T011 [US1] Test that creating a work item stores a stable `id`, `title`, and source pointer (Acceptance Scenario 1.1) in `tests/test_work_ledger.py`
-- [ ] T012 [US1] Test that a created work item's identity, source pointer, and coordination facts are fully recoverable through a second, independent connection to the same database file, with no state carried from the creating connection (simulates a fresh session in a different worktree; Acceptance Scenario 1.2, SC-001) in `tests/test_work_ledger.py`
-- [ ] T013 [US1] Test that no work item is created merely by the existence or editing of an upstream `tasks.md` — only an explicit `create_work_item` call creates one (Acceptance Scenario 1.3) in `tests/test_work_ledger.py`
+- [x] T011 [US1] Test that creating a work item stores a stable `id`, `title`, and source pointer (Acceptance Scenario 1.1) in `tests/test_work_ledger.py`
+- [x] T012 [US1] Test that a created work item's identity, source pointer, and coordination facts are fully recoverable through a second, independent connection to the same database file, with no state carried from the creating connection (simulates a fresh session in a different worktree; Acceptance Scenario 1.2, SC-001) in `tests/test_work_ledger.py`
+- [x] T013 [US1] Test that no work item is created merely by the existence or editing of an upstream `tasks.md` — only an explicit `create_work_item` call creates one (Acceptance Scenario 1.3) in `tests/test_work_ledger.py`
 
 **Checkpoint**: User Story 1 is fully functional and independently testable — items can be created and are durably recoverable.
 
