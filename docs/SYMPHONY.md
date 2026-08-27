@@ -108,22 +108,56 @@ resolved status and evidence; whether it is actually *accepted* remains a
 human judgment recorded as an explicit transition, never inferred or
 automated from readiness alone (D038).
 
+## Published projection and write surface
+
+`specs/003-symphony-task-integration/` (adopted in `docs/DECISIONS.md`)
+gives Bindle a narrow, explicit path from a settled Spec Kit task
+decomposition to a form an external coordinator can actually read and
+act on, without adopting Symphony itself or any of its tracker formats:
+
+* An explicit, maintainer-invoked loader (`src/bindle/speckit_loader.py`)
+  reads one Spec Kit feature directory's `tasks.md` and creates canonical
+  `type = 'task'` work items from it, idempotently — never automatically,
+  never as a side effect of editing `tasks.md`.
+* A published, versioned, read-only SQLite export
+  (`src/bindle/symphony_projection.py`'s `publish()`,
+  `contracts/symphony-projection-v1.md` in that feature's spec directory)
+  — a physically separate artifact from Bindle's own internal ledger
+  file, containing task-only rows with a direct status and a derived
+  `dispatchable` fact. This is the "supported interface" referenced
+  above and in `docs/PHILOSOPHY.md`'s D014: an external reader depends on
+  this file and its documented contract, never on Bindle's internal
+  schema.
+* A narrow write surface (`claim_task`/`release_task`/`complete_task`,
+  and the `bindle work claim`/`release`/`done` CLI equivalents) built
+  directly on the ledger's own existing atomic claim/release/mark-done
+  primitives — no new arbitration mechanism, no raw SQL exposed as the
+  contract (`contracts/task-write-surface.md`).
+
+This remains a one-directional, disposable projection and a fixed set of
+narrow write operations — not a Symphony-specific tracker adapter, and
+not a translation into Symphony's own `local_tracker.json` shape. See
+"Non-scope" below for what specifically remains out of scope even with
+this in place.
+
 ## Non-scope
 
-This document establishes a reference only. As of this reference, Bindle
-does not:
+This document establishes a reference only. Even with the published
+projection and write surface above, Bindle still does not:
 
 * install, build, configure, start, stop, or supervise Symphony;
-* invoke Symphony or exchange data with it;
-* create, read, or translate work items for any Symphony tracker,
-  including the local JSON tracker above — the Symphony-specific adapter
-  and field-name translation layer remain future work, deferred until a
-  first end-to-end integration is actually attempted;
-* couple its own SQLite work-item model (`docs/DECISIONS.md` D038,
-  `specs/001-durable-work-ledger/`, `specs/002-milestone-task-work-items/`)
-  to Symphony's tracker/storage in any way — that model was finalized
-  independently of, and remains structurally unrelated to, Symphony's own
-  (JSON, not SQLite) local tracker;
+* build a Symphony-specific tracker adapter — that adapter, if built,
+  remains future work, deferred until a first end-to-end integration is
+  actually attempted, and would read the published projection and map
+  its rows onto `Tracker.Issue` directly, never translate into Symphony's
+  own separate, standalone local tracker format
+  (`.symphony/local_tracker.json`), which is unrelated;
+* make its published SQLite projection a second copy of, or a
+  replacement for, Symphony's own tracker/storage — the projection is a
+  disposable, regenerable read model derived from Bindle's own canonical
+  ledger (`docs/DECISIONS.md` D038, `specs/001-durable-work-ledger/`,
+  `specs/002-milestone-task-work-items/`), never a durable store Symphony
+  or any other consumer may treat as authoritative;
 * standardize a `bindle` command to launch or manage Symphony.
 
 `plans/active/2026-08-24-symphony-coordination-exploration.md` records the

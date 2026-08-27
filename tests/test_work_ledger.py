@@ -1735,6 +1735,171 @@ class TestSchemaMigrationV1ToV2(LedgerTestCase):
         self.assertEqual(item.type, "task")
 
 
+# ============================================================================
+# specs/003-symphony-task-integration: created_at NOT NULL for live rows.
+# ============================================================================
+
+# The exact version-2 schema (as it existed on this branch before the v3
+# `CHECK (archived_at IS NOT NULL OR created_at IS NOT NULL)` fix), frozen
+# here verbatim — mirroring `_V1_WORK_ITEMS_SQL` above — so
+# TestSchemaMigrationV2ToV3 can construct a real pre-migration database
+# independent of whatever `work_ledger._work_items_create_sql` currently
+# produces.
+_V2_WORK_ITEMS_SQL = """
+CREATE TABLE work_items (
+  id                TEXT PRIMARY KEY,
+  type              TEXT NOT NULL CHECK (type IN ('task', 'milestone')),
+  parent_id         TEXT REFERENCES work_items(id),
+  title             TEXT,
+  description       TEXT,
+  status            TEXT NOT NULL,
+  superseded_by     TEXT REFERENCES work_items(id),
+  source_kind       TEXT CHECK (source_kind IN ('speckit_task', 'plan', 'adhoc')),
+  source_locator    TEXT,
+  source_promoted_by TEXT,
+  created_at        TEXT,
+  updated_at        TEXT NOT NULL,
+  archived_at       TEXT,
+  CHECK (
+    (status = 'superseded' AND superseded_by IS NOT NULL) OR
+    (status != 'superseded' AND superseded_by IS NULL)
+  ),
+  CHECK (
+    (type = 'task' AND status IN ('open', 'done', 'superseded')) OR
+    (type = 'milestone' AND status IN ('open', 'review', 'accepted', 'superseded'))
+  ),
+  CHECK (
+    (type = 'milestone' AND parent_id IS NULL) OR (type = 'task')
+  )
+)
+"""
+
+
+class TestSchemaMigrationV2ToV3(LedgerTestCase):
+    """specs/003-symphony-task-integration/research.md's "Decision:
+    created_at NOT NULL for live rows": an existing version-2 database —
+    including one holding a live (non-archived) row whose `created_at` is
+    already `NULL`, a state no exposed v2 method could produce but that
+    the v2 schema itself never structurally forbade — migrates forward to
+    version 3 automatically and safely, backfilling that row's
+    `created_at` from its own `updated_at` rather than failing or losing
+    data, and the new invariant is enforced from then on."""
+
+    def _create_v2_database(self, rows=(), legacy_null_created_at_rows=(), archived_rows=()):
+        db_path = work_ledger.ledger_path(self.repo_root)
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute(_V2_WORK_ITEMS_SQL)
+            for statement in _V1_OTHER_TABLES_SQL:
+                conn.execute(statement)
+            for row_id in rows:
+                conn.execute(
+                    "INSERT INTO work_items "
+                    "(id, type, status, source_kind, source_locator, created_at, updated_at) "
+                    "VALUES (?, 'task', 'open', 'adhoc', ?, ?, ?)",
+                    (row_id, f"loc-{row_id}", _NOW, _NOW),
+                )
+            # A real legacy/migrated case: a live task whose created_at is
+            # already NULL — unreachable via create_work_item()/
+            # archive_work_item(), but not something the v2 schema itself
+            # ever rejected, exactly the gap this migration closes.
+            for row_id, updated_at in legacy_null_created_at_rows:
+                conn.execute(
+                    "INSERT INTO work_items "
+                    "(id, type, status, source_kind, source_locator, created_at, updated_at) "
+                    "VALUES (?, 'task', 'open', 'adhoc', ?, NULL, ?)",
+                    (row_id, f"loc-{row_id}", updated_at),
+                )
+            # An archived row with created_at already NULL (archive_work_item's
+            # own deliberate data-minimization) — must be left untouched.
+            for row_id in archived_rows:
+                conn.execute(
+                    "INSERT INTO work_items "
+                    "(id, type, status, source_kind, source_locator, created_at, "
+                    "updated_at, archived_at) "
+                    "VALUES (?, 'task', 'done', NULL, NULL, NULL, ?, ?)",
+                    (row_id, _NOW, _NOW),
+                )
+            conn.execute("PRAGMA user_version = 2")
+            conn.commit()
+        finally:
+            conn.close()
+
+    def test_existing_v2_database_migrates_to_v3_on_open(self):
+        self._create_v2_database(rows=["WI-1"])
+
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            self.assertEqual(
+                conn.execute("PRAGMA user_version").fetchone()[0],
+                work_ledger._SCHEMA_VERSION,
+            )
+        finally:
+            conn.close()
+
+    def test_non_null_created_at_is_preserved_verbatim_across_migration(self):
+        self._create_v2_database(rows=["WI-1"])
+
+        item = work_ledger.WorkLedger(self.repo_root).get_work_item("WI-1")
+        self.assertEqual(item.created_at, _NOW)
+
+    def test_legacy_null_created_at_on_a_live_row_is_backfilled_from_updated_at(self):
+        legacy_updated_at = "2020-01-01T00:00:00Z"
+        self._create_v2_database(
+            legacy_null_created_at_rows=[("WI-legacy", legacy_updated_at)]
+        )
+
+        item = work_ledger.WorkLedger(self.repo_root).get_work_item("WI-legacy")
+        self.assertEqual(item.created_at, legacy_updated_at)
+        self.assertEqual(item.updated_at, legacy_updated_at)
+
+    def test_legacy_null_created_at_row_is_published_with_a_non_null_created_at(self):
+        # The exact failure this migration prevents: without the backfill,
+        # publish()'s own `task_projection.created_at TEXT NOT NULL`
+        # INSERT would raise sqlite3.IntegrityError against this row.
+        legacy_updated_at = "2020-01-01T00:00:00Z"
+        self._create_v2_database(
+            legacy_null_created_at_rows=[("WI-legacy", legacy_updated_at)]
+        )
+
+        ledger = work_ledger.WorkLedger(self.repo_root)
+        from bindle import symphony_projection
+
+        path = symphony_projection.publish(ledger)
+
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            created_at = conn.execute(
+                "SELECT created_at FROM task_projection WHERE id = ?", ("WI-legacy",)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(created_at, legacy_updated_at)
+
+    def test_archived_rows_null_created_at_is_left_untouched(self):
+        self._create_v2_database(archived_rows=["WI-archived"])
+
+        item = work_ledger.WorkLedger(self.repo_root).get_work_item("WI-archived")
+        self.assertIsNone(item.created_at)
+        self.assertIsNotNone(item.archived_at)
+
+    def test_new_check_rejects_a_live_row_with_null_created_at_after_migration(self):
+        self._create_v2_database(rows=["WI-1"])
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            with self.assertRaises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO work_items "
+                    "(id, type, status, created_at, updated_at, archived_at) "
+                    "VALUES (?, 'task', 'open', NULL, ?, NULL)",
+                    ("WI-bad", _NOW),
+                )
+        finally:
+            conn.close()
+
+
 class TestWorkItemTypeAndParent(LedgerTestCase):
     """T006: type immutability (no mutator exists), parent_id creation
     validation (FR-002/FR-003), and type-aware blocking resolution across
@@ -2366,6 +2531,134 @@ class TestProjectionExcludesMilestones(LedgerTestCase):
         self.assertEqual(first, second)
 
 
+class TestGenerateExternalProjection(LedgerTestCase):
+    """specs/003-symphony-task-integration T015 (User Story 2, Acceptance
+    Scenarios 2.1-2.4): `generate_external_projection()` produces exactly
+    the task rows, with `dispatchable` matching the ledger's own
+    "available to start" computation and `status` exposed as a direct,
+    readable string — never a milestone row, under any status, claim, or
+    blocking state."""
+
+    def _create_task(self, id, blocked_by=(), parent_id=None):
+        self.ledger.create_work_item(
+            id=id,
+            title=f"Title {id}",
+            description=f"Description {id}",
+            source_kind="adhoc",
+            source_locator=f"plans/active/example.md#{id}",
+            blocked_by=blocked_by,
+            parent_id=parent_id,
+        )
+
+    def _create_milestone(self, id):
+        self.ledger.create_work_item(
+            id=id,
+            title=f"Milestone {id}",
+            source_kind="adhoc",
+            source_locator=f"plans/active/example.md#{id}",
+            type="milestone",
+        )
+
+    def test_open_unclaimed_unblocked_task_is_dispatchable(self):
+        self._create_task("T-open")
+        by_id = {row.id: row for row in self.ledger.generate_external_projection()}
+        self.assertTrue(by_id["T-open"].dispatchable)
+        self.assertEqual(by_id["T-open"].status, "open")
+
+    def test_blocked_task_is_not_dispatchable(self):
+        self._create_task("T-blocker")
+        self._create_task("T-blocked", blocked_by=["T-blocker"])
+        by_id = {row.id: row for row in self.ledger.generate_external_projection()}
+        self.assertFalse(by_id["T-blocked"].dispatchable)
+        self.assertEqual(by_id["T-blocked"].status, "open")
+
+    def test_claimed_task_is_not_dispatchable(self):
+        self._create_task("T-claimed")
+        self.assertTrue(self.ledger.claim("T-claimed", "owner-1"))
+        by_id = {row.id: row for row in self.ledger.generate_external_projection()}
+        self.assertFalse(by_id["T-claimed"].dispatchable)
+        self.assertEqual(by_id["T-claimed"].status, "open")
+
+    def test_done_and_superseded_tasks_report_direct_status_and_are_not_dispatchable(
+        self,
+    ):
+        self._create_task("T-done")
+        self.assertTrue(self.ledger.mark_done("T-done"))
+        self._create_task("T-superseded")
+        self._create_task("T-supersedes")
+        self.assertTrue(
+            self.ledger.mark_superseded("T-superseded", "T-supersedes")
+        )
+
+        by_id = {row.id: row for row in self.ledger.generate_external_projection()}
+        self.assertEqual(by_id["T-done"].status, "done")
+        self.assertFalse(by_id["T-done"].dispatchable)
+        self.assertEqual(by_id["T-superseded"].status, "superseded")
+        self.assertFalse(by_id["T-superseded"].dispatchable)
+
+    def test_milestones_never_appear_regardless_of_status(self):
+        # Every milestone status this schema allows: open, review,
+        # accepted, superseded.
+        self._create_milestone("M-open")
+
+        self._create_milestone("M-review")
+        self._create_task("T-for-review", parent_id="M-review")
+        self.assertTrue(self.ledger.mark_done("T-for-review"))
+        self.ledger.add_evidence("T-for-review", "commit", "abc")
+        self.assertTrue(self.ledger.mark_in_review("M-review"))
+
+        self._create_milestone("M-accepted")
+        self._create_task("T-for-accepted", parent_id="M-accepted")
+        self.assertTrue(self.ledger.mark_done("T-for-accepted"))
+        self.ledger.add_evidence("T-for-accepted", "commit", "def")
+        self.assertTrue(self.ledger.mark_in_review("M-accepted"))
+        self.assertTrue(self.ledger.accept_milestone("M-accepted"))
+
+        self._create_milestone("M-other")
+        self.assertTrue(self.ledger.mark_superseded("M-other", "M-open"))
+
+        self.assertTrue(self.ledger.claim("M-open", "reviewer"))
+
+        by_id = {row.id: row for row in self.ledger.generate_external_projection()}
+        for milestone_id in ("M-open", "M-review", "M-accepted", "M-other"):
+            self.assertNotIn(milestone_id, by_id)
+        # The attributed tasks themselves are still task rows and remain
+        # present, alongside their now-absent milestone parents.
+        self.assertIn("T-for-review", by_id)
+        self.assertIn("T-for-accepted", by_id)
+
+    def test_title_description_and_identifier_are_carried_through(self):
+        self._create_task("speckit:003-symphony-task-integration:T003")
+        by_id = {
+            row.id: row for row in self.ledger.generate_external_projection()
+        }
+        row = by_id["speckit:003-symphony-task-integration:T003"]
+        self.assertEqual(row.title, "Title speckit:003-symphony-task-integration:T003")
+        self.assertEqual(
+            row.description,
+            "Description speckit:003-symphony-task-integration:T003",
+        )
+        self.assertEqual(
+            row.identifier, "speckit-003-symphony-task-integration-T003"
+        )
+
+    def test_deterministic_across_two_generations(self):
+        self._create_task("T-a")
+        self._create_task("T-b", blocked_by=["T-a"])
+        self._create_milestone("M-1")
+
+        first = self.ledger.generate_external_projection()
+        second = self.ledger.generate_external_projection()
+        self.assertEqual(first, second)
+
+    def test_created_at_is_preserved_verbatim_from_the_canonical_item(self):
+        self._create_task("T-1")
+        canonical = self.ledger.get_work_item("T-1")
+        by_id = {row.id: row for row in self.ledger.generate_external_projection()}
+        self.assertIsNotNone(canonical.created_at)
+        self.assertEqual(by_id["T-1"].created_at, canonical.created_at)
+
+
 class TestAvailableWorkItemsExcludesMilestones(LedgerTestCase):
     """FR-017a: `list_available_work_items()` reports only `type='task'`
     rows — a milestone is a human acceptance unit, never a startable unit
@@ -2833,6 +3126,82 @@ class TestQuickstartEndToEndV2(LedgerTestCase):
         self.assertTrue({"T-1", "T-2", "T-4"} <= ids)
         second_projection = self.ledger.generate_projection()
         self.assertEqual(projection, second_projection)
+
+
+class TestResyncDeclarativeFields(LedgerTestCase):
+    """specs/003-symphony-task-integration T005 (User Story 1):
+    resync_declarative_fields() is a single guarded UPDATE touching only
+    title/description/updated_at — status, work_item_claims,
+    work_item_evidence, source_kind, and source_locator are left
+    completely untouched, and it is a true no-op (returns False) against
+    an archived or nonexistent id."""
+
+    def test_updates_only_title_description_and_updated_at(self):
+        self.ledger.create_work_item(
+            id="T-1",
+            title="Original title",
+            source_kind="speckit_task",
+            source_locator="specs/003-x/tasks.md#T001",
+        )
+        before = self.ledger.get_work_item("T-1")
+
+        self.assertTrue(
+            self.ledger.resync_declarative_fields(
+                "T-1", "New title", "New description"
+            )
+        )
+        after = self.ledger.get_work_item("T-1")
+
+        self.assertEqual(after.title, "New title")
+        self.assertEqual(after.description, "New description")
+        self.assertNotEqual(after.updated_at, before.updated_at)
+        self.assertEqual(after.id, before.id)
+        self.assertEqual(after.type, before.type)
+        self.assertEqual(after.parent_id, before.parent_id)
+        self.assertEqual(after.status, before.status)
+        self.assertEqual(after.superseded_by, before.superseded_by)
+        self.assertEqual(after.source_kind, before.source_kind)
+        self.assertEqual(after.source_locator, before.source_locator)
+        self.assertEqual(after.source_promoted_by, before.source_promoted_by)
+        self.assertEqual(after.created_at, before.created_at)
+        self.assertEqual(after.archived_at, before.archived_at)
+
+    def test_does_not_touch_status_claim_or_evidence(self):
+        self.ledger.create_work_item(
+            id="T-1", title="T", source_kind="adhoc", source_locator="x"
+        )
+        self.assertTrue(self.ledger.claim("T-1", "worker-1"))
+        self.ledger.add_evidence("T-1", "commit", "abc123")
+        self.assertTrue(self.ledger.mark_done("T-1"))
+
+        self.assertTrue(
+            self.ledger.resync_declarative_fields("T-1", "New title", None)
+        )
+
+        item = self.ledger.get_work_item("T-1")
+        self.assertEqual(item.status, "done")
+        self.assertTrue(self.ledger.is_claimed("T-1"))
+        self.assertTrue(self.ledger.has_qualifying_evidence("T-1"))
+
+    def test_returns_false_for_nonexistent_id(self):
+        self.assertFalse(
+            self.ledger.resync_declarative_fields("does-not-exist", "T", None)
+        )
+
+    def test_returns_false_and_is_noop_for_archived_item(self):
+        self.ledger.create_work_item(
+            id="T-1", title="T", source_kind="adhoc", source_locator="x"
+        )
+        self.assertTrue(self.ledger.mark_done("T-1"))
+        self.assertTrue(self.ledger.archive_work_item("T-1"))
+        before = self.ledger.get_work_item("T-1")
+
+        self.assertFalse(
+            self.ledger.resync_declarative_fields("T-1", "New title", "New desc")
+        )
+
+        after = self.ledger.get_work_item("T-1")
+        self.assertEqual(before, after)
 
 
 if __name__ == "__main__":

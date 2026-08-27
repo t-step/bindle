@@ -56,17 +56,31 @@ _LEDGER_FILE_NAME = "ledger.sqlite3"
 # `description` to `work_items` and replaces its flat status CHECK with a
 # compound (type, status) CHECK. A version-1 database is migrated forward
 # by `_migrate_v1_to_v2`, never left behind.
-_SCHEMA_VERSION = 2
+#
+# v3 (specs/003-symphony-task-integration/research.md, "Decision: created_at
+# NOT NULL for live rows"): installs `CHECK (archived_at IS NOT NULL OR
+# created_at IS NOT NULL)` on `work_items` — the published Symphony
+# projection's `task_projection.created_at` is `NOT NULL`
+# (contracts/symphony-projection-v1.md) and is sourced verbatim from this
+# column, but v2's own `created_at TEXT` carried no such guarantee for a
+# live (non-archived) row. A version-2 database is migrated forward by
+# `_migrate_v2_to_v3`, which backfills any pre-existing live row's `NULL`
+# `created_at` from that row's own `updated_at` before installing the
+# constraint; a version-1 database reaches v3 via `_migrate_v1_to_v2`
+# followed by `_migrate_v2_to_v3`, never left at v2.
+_SCHEMA_VERSION = 3
 
 
 def _work_items_create_sql(table_name: str) -> str:
-    """The `work_items` (v2) `CREATE TABLE` body, parameterized by table name.
+    """The `work_items` (v3) `CREATE TABLE` body, parameterized by table name.
 
-    Used both for fresh initialization (`table_name="work_items"`) and for
-    the v1->v2 table-rebuild migration (`table_name="work_items_new"`,
-    later renamed) — one definition, so the two paths can never drift
-    apart. specs/002-milestone-task-work-items/data-model.md's "Schema
-    overview", verbatim, aside from the parameterized name.
+    Used for fresh initialization (`table_name="work_items"`) and for both
+    the v1->v2 and v2->v3 table-rebuild migrations
+    (`table_name="work_items_new"`, later renamed) — one definition, so
+    none of these paths can ever drift apart. specs/002-milestone-task-
+    work-items/data-model.md's "Schema overview", extended by specs/003-
+    symphony-task-integration/research.md's "Decision: created_at NOT NULL
+    for live rows" (the final CHECK below).
     """
     return f"""
     CREATE TABLE {table_name} (
@@ -93,6 +107,9 @@ def _work_items_create_sql(table_name: str) -> str:
       ),
       CHECK (
         (type = 'milestone' AND parent_id IS NULL) OR (type = 'task')
+      ),
+      CHECK (
+        archived_at IS NOT NULL OR created_at IS NOT NULL
       )
     )
     """
@@ -170,6 +187,8 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
     elif version == 1:
         _migrate_v1_to_v2(conn)
+    elif version == 2:
+        _migrate_v2_to_v3(conn)
     elif version != _SCHEMA_VERSION:
         raise SchemaVersionError(
             f"ledger at schema version {version}, expected {_SCHEMA_VERSION}"
@@ -198,11 +217,22 @@ def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
     Every pre-existing row is backfilled to `type = 'task'` with
     `parent_id` left `NULL` — the only sensible reading of a v1 item, which
     had no milestone concept to attribute it to (research.md's "Decision:
-    schema migration...", "Alternatives considered"). Wrapped in one
-    transaction (mirroring `_ensure_schema`'s own fresh-bootstrap
-    atomicity) so a crash mid-migration leaves the database at its
-    original, fully-functional version-1 state, never a partially
-    migrated one.
+    schema migration...", "Alternatives considered"). This function always
+    rebuilds straight to the current `_work_items_create_sql` shape (the
+    same shared definition fresh initialization uses) and stamps
+    `_SCHEMA_VERSION`, so a v1 database never stops at an intermediate,
+    no-longer-defined "v2-only" shape — it lands wherever `_ensure_schema`
+    currently considers latest, exactly like `_migrate_v2_to_v3` below.
+    Because that shared shape now includes v3's `CHECK (archived_at IS NOT
+    NULL OR created_at IS NOT NULL)` (research.md's "Decision: created_at
+    NOT NULL for live rows"), any pre-existing live row's `NULL`
+    `created_at` is backfilled from that row's own `updated_at` before the
+    rebuild reads it — the identical backfill `_migrate_v2_to_v3` performs,
+    needed here for exactly the same reason: nothing in v1's own schema
+    prevented that state either. Wrapped in one transaction (mirroring
+    `_ensure_schema`'s own fresh-bootstrap atomicity) so a crash
+    mid-migration leaves the database at its original, fully-functional
+    version-1 state, never a partially migrated one.
     """
     conn.execute("PRAGMA foreign_keys = OFF")
     try:
@@ -211,6 +241,10 @@ def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE work_items ADD COLUMN parent_id TEXT")
             conn.execute("ALTER TABLE work_items ADD COLUMN description TEXT")
             conn.execute("UPDATE work_items SET type = 'task' WHERE type IS NULL")
+            conn.execute(
+                "UPDATE work_items SET created_at = updated_at "
+                "WHERE created_at IS NULL AND archived_at IS NULL"
+            )
             conn.execute(_work_items_create_sql("work_items_new"))
             conn.execute(
                 "INSERT INTO work_items_new "
@@ -229,6 +263,65 @@ def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
         if integrity_violations:
             raise SchemaVersionError(
                 f"v1->v2 migration left dangling foreign keys: {integrity_violations}"
+            )
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
+def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
+    """Migrate an existing version-2 database to version 3 in place.
+
+    specs/003-symphony-task-integration/research.md's "Decision: created_at
+    NOT NULL for live rows": the published Symphony projection's
+    `task_projection.created_at` column is `NOT NULL`
+    (contracts/symphony-projection-v1.md) and is sourced verbatim from the
+    canonical `work_items.created_at` column — but v2's own `created_at
+    TEXT` carried no such guarantee for a live (`archived_at IS NULL`) row.
+    No exposed method can currently produce that state (every
+    `create_work_item()` call stamps `created_at` at insert time; the only
+    code that ever clears it is `archive_work_item()`, which requires
+    `archived_at` to become non-`NULL` in the same update), but the column
+    itself did not structurally prevent it — a hand-restored or externally
+    written ledger file could still carry a live row with `created_at IS
+    NULL`, which would then make `publish()`'s own `NOT NULL` insert into
+    `task_projection` fail. v3 closes that gap: this migration first
+    backfills any such row's `created_at` from that row's own `updated_at`
+    — the closest already-recorded, non-`NULL` timestamp already on the
+    row, never a value invented at migration time — then rebuilds the
+    table with `_work_items_create_sql`'s new `CHECK (archived_at IS NOT
+    NULL OR created_at IS NOT NULL)`, exactly mirroring
+    `_migrate_v1_to_v2`'s own table-rebuild pattern (SQLite cannot `ALTER`
+    a `CHECK` constraint onto an existing table). An already-archived row's
+    `created_at` (deliberately cleared by `archive_work_item`) is left
+    untouched — the backfill's own `WHERE ... AND archived_at IS NULL`
+    guard excludes it, and the new CHECK permits `created_at IS NULL`
+    exactly when `archived_at IS NOT NULL`.
+    """
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        with _transaction(conn):
+            conn.execute(
+                "UPDATE work_items SET created_at = updated_at "
+                "WHERE created_at IS NULL AND archived_at IS NULL"
+            )
+            conn.execute(_work_items_create_sql("work_items_new"))
+            conn.execute(
+                "INSERT INTO work_items_new "
+                "(id, type, parent_id, title, description, status, superseded_by, "
+                "source_kind, source_locator, source_promoted_by, created_at, "
+                "updated_at, archived_at) "
+                "SELECT id, type, parent_id, title, description, status, superseded_by, "
+                "source_kind, source_locator, source_promoted_by, created_at, "
+                "updated_at, archived_at "
+                "FROM work_items"
+            )
+            conn.execute("DROP TABLE work_items")
+            conn.execute("ALTER TABLE work_items_new RENAME TO work_items")
+            conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+        integrity_violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if integrity_violations:
+            raise SchemaVersionError(
+                f"v2->v3 migration left dangling foreign keys: {integrity_violations}"
             )
     finally:
         conn.execute("PRAGMA foreign_keys = ON")
@@ -470,6 +563,44 @@ class ProjectedWorkItem:
     eligible: bool
 
 
+@dataclasses.dataclass(frozen=True)
+class ExternalProjectionRow:
+    """One row of the published, external Symphony-facing projection.
+
+    specs/003-symphony-task-integration/data-model.md's "New WorkLedger
+    methods" -> `generate_external_projection()`, and
+    contracts/symphony-projection-v1.md's schema — a physically separate
+    contract from `ProjectedWorkItem` above, never sharing a schema with
+    it (FR-019). `status` is exposed directly as the raw, readable string
+    (`open` | `done` | `superseded`) rather than as a pair of booleans an
+    external reader would otherwise have to reconstruct from, and
+    `dispatchable` is computed entirely inside Bindle (FR-016) so an
+    external reader never needs to evaluate blocking or claim state
+    itself. `identifier` (FR-015) is a non-empty, workspace-name-safe
+    derivation of `id` (research.md's "Decision: identifier derivation
+    for external workspace naming") — deterministic, never a second,
+    independently-assigned identity. `created_at` is preserved verbatim
+    from the canonical work item's own `created_at` column, never derived
+    or synthesized at publish time — Symphony's dispatch ordering needs a
+    real creation timestamp to rank simultaneously-eligible candidates,
+    not a value invented at export time. Typed `str`, never `str | None`:
+    this query is restricted to `archived_at IS NULL` rows, and v3's
+    `CHECK (archived_at IS NOT NULL OR created_at IS NOT NULL)`
+    (research.md's "Decision: created_at NOT NULL for live rows")
+    structurally guarantees every such row carries a non-`NULL`
+    `created_at` — exactly what `task_projection.created_at`'s own `NOT
+    NULL` column requires.
+    """
+
+    id: str
+    identifier: str
+    title: str | None
+    description: str | None
+    status: str
+    dispatchable: bool
+    created_at: str
+
+
 _WORK_ITEM_COLUMNS = (
     "id",
     "type",
@@ -691,6 +822,44 @@ class WorkLedger:
                 (id,),
             ).fetchone()
             return _row_to_work_item(row) if row is not None else None
+        finally:
+            conn.close()
+
+    def resync_declarative_fields(
+        self, id: str, title: str | None, description: str | None
+    ) -> bool:
+        """Re-sync a Work Item's declarative fields from a fresh source read.
+
+        specs/003-symphony-task-integration data-model.md/research.md
+        ("Decision: how a reload updates an existing work item"): a single
+        guarded `UPDATE work_items SET title = ?, description = ?,
+        updated_at = ? WHERE id = ? AND archived_at IS NULL`. This is the
+        only mutation a reloading caller (e.g. a Spec Kit `tasks.md`
+        loader) may perform against a work item whose id it already
+        recognizes — it never touches `status`, `type`, `parent_id`,
+        `source_kind`, `source_locator`, `source_promoted_by`, any claim,
+        or any evidence, so a reload can never disturb runtime-owned
+        state. Coordinator- and source-agnostic, like every other method
+        here: it has no idea what `speckit_task` or any other
+        `source_kind` means, only that `title`/`description` are the two
+        columns a reload is ever allowed to change.
+
+        Guarded on `archived_at IS NULL`, mirroring `mark_done`'s own
+        "guarded transition, not an error, when it doesn't apply"
+        convention: resyncing an archived item's already-thinned row (its
+        `title`/`description` are already `NULL` by archival's own
+        design) would be meaningless, so it is a true no-op here, not a
+        failure. Returns `True` iff exactly one row was updated; `False`
+        if `id` does not exist or names an archived item.
+        """
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                "UPDATE work_items SET title = ?, description = ?, updated_at = ? "
+                "WHERE id = ? AND archived_at IS NULL",
+                (title, description, _now(), id),
+            )
+            return cursor.rowcount == 1
         finally:
             conn.close()
 
@@ -1411,6 +1580,95 @@ class WorkLedger:
                 title=row[1],
                 terminal=row[2] in ("done", "superseded"),
                 eligible=bool(row[3]),
+            )
+            for row in rows
+        ]
+
+    # -- specs/003-symphony-task-integration: published, external
+    # projection (User Story 2) — a separate, additional query, never a
+    # modification of generate_projection()/ProjectedWorkItem above --------
+
+    def generate_external_projection(self) -> list[ExternalProjectionRow]:
+        """Generate the row set for the published, external Symphony
+        projection (data-model.md's "New WorkLedger methods" ->
+        `generate_external_projection()`).
+
+        Deliberately a second, independent query from `generate_projection()`
+        above, not a transformation of its result: specs/003's own
+        published contract (contracts/symphony-projection-v1.md) is a
+        physically separate artifact with its own shape and version, and
+        must never be coupled to `generate_projection()`/`ProjectedWorkItem`'s
+        own, unchanged internal contract (FR-019, research.md's "Decision:
+        published projection storage location and format"). The two
+        queries happen to share the same `_STILL_BLOCKING_CONDITION`
+        fragment only because both need the identical "is this dependency
+        still blocking" predicate — reusing that one shared fragment,
+        rather than writing a second, independently-maintained copy of it,
+        is the only thing they share.
+
+        Restricted to non-archived task rows only (`WHERE wi.archived_at
+        IS NULL AND wi.type = 'task'`) — a structural `WHERE` predicate,
+        not a post-filter, so no milestone work item can ever appear here
+        regardless of its own status, claim, or blocking state (FR-014,
+        SC-007). `dispatchable` is computed inline, in the same single
+        `SELECT` that reads `id`/`title`/`description`/`status`/
+        `created_at`, for the same "one snapshot, not two" reason
+        `generate_projection()`'s own docstring already explains in
+        detail — see there rather than repeating it here. `created_at` is
+        read straight off the canonical row, never derived: this query is
+        the only place it is read, so there is nothing to keep in sync.
+
+        `identifier` (FR-015) is derived purely from `id` by replacing
+        every `:` with `-` (research.md's "Decision: identifier derivation
+        for external workspace naming") — a fixed, deterministic string
+        transform, never a second, independently-assigned identity.
+
+        Deterministic for unchanged ledger state (`ORDER BY id`, mirroring
+        `generate_projection()`'s own determinism guarantee) — regenerating
+        it twice from an unchanged ledger produces an equal (`==`) list
+        (SC-006).
+
+        Purely a read: opens exactly one connection and one `SELECT`, and
+        never mutates the ledger.
+        """
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT
+                  wi.id,
+                  wi.title,
+                  wi.description,
+                  wi.status,
+                  wi.created_at,
+                  (
+                    wi.status = 'open'
+                    AND NOT EXISTS (
+                      SELECT 1 FROM work_item_claims c WHERE c.work_item_id = wi.id
+                    )
+                    AND NOT EXISTS (
+                      SELECT 1 FROM work_item_blocked_by e
+                      LEFT JOIN work_items dep ON dep.id = e.blocked_on_id
+                      WHERE e.work_item_id = wi.id
+                        AND {_STILL_BLOCKING_CONDITION}
+                    )
+                  ) AS dispatchable
+                FROM work_items wi
+                WHERE wi.archived_at IS NULL AND wi.type = 'task'
+                ORDER BY wi.id
+                """
+            ).fetchall()
+        finally:
+            conn.close()
+        return [
+            ExternalProjectionRow(
+                id=row[0],
+                identifier=row[0].replace(":", "-"),
+                title=row[1],
+                description=row[2],
+                status=row[3],
+                created_at=row[4],
+                dispatchable=bool(row[5]),
             )
             for row in rows
         ]
