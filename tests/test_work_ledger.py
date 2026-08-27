@@ -127,6 +127,85 @@ class TestSchemaBootstrap(LedgerTestCase):
         finally:
             conn.close()
 
+    def test_failed_fresh_initialization_rolls_back_schema_and_then_succeeds(self):
+        """A failure partway through fresh schema initialization must not
+        leave a half-created schema behind (the bug this test guards
+        against: each CREATE TABLE previously committed individually under
+        autocommit, so a failure after some tables existed but before
+        `PRAGMA user_version` was set left the ledger permanently
+        unopenable — the next `connect()` would see `user_version == 0`
+        again and fail trying to recreate already-existing tables).
+
+        Fault injection: temporarily replace `_SCHEMA_STATEMENTS` with a
+        tuple containing the first two real CREATE TABLE statements
+        followed by deliberately invalid SQL, so `_ensure_schema` raises
+        partway through fresh initialization.
+        """
+        real_statements = work_ledger._SCHEMA_STATEMENTS
+        broken_statements = real_statements[:2] + ("CREATE TABLE this is not valid sql",)
+        work_ledger._SCHEMA_STATEMENTS = broken_statements
+        try:
+            with self.assertRaises(sqlite3.OperationalError):
+                work_ledger.connect(self.repo_root)
+        finally:
+            work_ledger._SCHEMA_STATEMENTS = real_statements
+
+        # Inspect on a fresh, raw connection — bypassing work_ledger.connect
+        # entirely — so this inspection step does not re-trigger fault
+        # injection or re-run _ensure_schema itself.
+        db_path = work_ledger.ledger_path(self.repo_root)
+        raw_conn = sqlite3.connect(db_path)
+        try:
+            self.assertEqual(
+                raw_conn.execute("PRAGMA user_version").fetchone()[0], 0
+            )
+            tables = {
+                row[0]
+                for row in raw_conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            self.assertEqual(tables, set())
+        finally:
+            raw_conn.close()
+
+        # Subsequent open (with the real schema restored) initializes
+        # normally and produces a fully-initialized schema — the second
+        # half of the same guarantee, exercised end-to-end rather than
+        # merely implied.
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            self.assertEqual(
+                tables,
+                {
+                    "work_items",
+                    "work_item_blocked_by",
+                    "work_item_claims",
+                    "work_item_evidence",
+                },
+            )
+            self.assertEqual(
+                conn.execute("PRAGMA user_version").fetchone()[0],
+                work_ledger._SCHEMA_VERSION,
+            )
+        finally:
+            conn.close()
+
+        # Indirect signal that connect()'s failure path actually closed the
+        # connection it opened (rather than leaking it): an ordinary
+        # connect() immediately after the fault-injected failure above
+        # succeeds without "database is locked" — a lingering, unclosed
+        # connection holding SQLite's write lock would manifest as exactly
+        # that error.
+        conn2 = work_ledger.connect(self.repo_root)
+        conn2.close()
+
 
 class TestWorkItemCreationAndDurability(LedgerTestCase):
     def test_create_stores_stable_id_title_and_source_pointer(self):
@@ -784,6 +863,123 @@ class TestReconcileBranchExistence(unittest.TestCase):
         self.assertEqual(stale, [])
 
 
+class TestReconcileWorktreeRegistration(unittest.TestCase):
+    """Regression for the bug where reconcile()'s stale_claim check used
+    `os.path.isdir(worktree_path)`, which only proves *some* directory
+    exists at the recorded path — not that it is still a worktree Git
+    itself knows about (FR-009, data-model.md's "Staleness": "no longer
+    exists as a worktree on this machine", not "no longer exists as a
+    directory"). A worktree properly removed with `git worktree remove`
+    frees its path for an unrelated, ordinary directory to occupy later;
+    `os.path.isdir` would then incorrectly report the claim as not
+    stale. Uses a real temporary Git repository (mirroring
+    `TestReconcileBranchExistence`'s own style) so the assertions
+    exercise the actual `git worktree list --porcelain` semantics
+    `_registered_worktree_paths` relies on."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo_root = self.tmp.name
+        _run_git(["init", "-q"], self.repo_root)
+        _run_git(["config", "user.email", "test@example.com"], self.repo_root)
+        _run_git(["config", "user.name", "Test"], self.repo_root)
+        with open(os.path.join(self.repo_root, "README.md"), "w") as f:
+            f.write("x\n")
+        _run_git(["add", "README.md"], self.repo_root)
+        _run_git(["commit", "-q", "-m", "init"], self.repo_root)
+        self.ledger = work_ledger.WorkLedger(self.repo_root)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _create(self, item_id):
+        self.ledger.create_work_item(
+            id=item_id,
+            title=f"Item {item_id}",
+            source_kind="adhoc",
+            source_locator=f"loc-{item_id}",
+        )
+
+    def test_directory_at_recorded_path_that_is_not_a_registered_worktree_is_stale(
+        self,
+    ):
+        # A plain directory that was never a Git worktree at all.
+        not_a_worktree = tempfile.mkdtemp()
+        self.addCleanup(lambda: os.path.isdir(not_a_worktree) and os.rmdir(not_a_worktree))
+
+        self._create("WI-1")
+        self.assertTrue(
+            self.ledger.claim("WI-1", "agent-A", worktree_path=not_a_worktree)
+        )
+
+        findings = self.ledger.reconcile()
+        stale = [f for f in findings if f.finding == "stale_claim"]
+        self.assertEqual([f.item_id for f in stale], ["WI-1"])
+        self.assertIn("not a currently registered Git worktree", stale[0].detail)
+
+        # Reconciliation must remain read-only: the claim row survives.
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            row = conn.execute(
+                "SELECT owner FROM work_item_claims WHERE work_item_id = 'WI-1'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row, ("agent-A",))
+
+    def test_ordinary_directory_recreated_at_a_properly_removed_worktrees_path_is_stale(
+        self,
+    ):
+        # The exact scenario the bug allowed through: a worktree is
+        # properly removed (both its directory and Git's own
+        # administrative registration go away), and something unrelated
+        # later creates a plain directory at that same path.
+        worktree_path = os.path.join(self.repo_root + "-wt", "reused-path")
+        os.makedirs(os.path.dirname(worktree_path), exist_ok=True)
+        self.addCleanup(
+            lambda: subprocess.run(
+                ["rm", "-rf", os.path.dirname(worktree_path)], check=False
+            )
+        )
+        _run_git(
+            ["worktree", "add", "-q", "-b", "wt-reused-branch", worktree_path],
+            self.repo_root,
+        )
+        _run_git(["worktree", "remove", worktree_path], self.repo_root)
+        os.makedirs(worktree_path)  # an ordinary, unrelated directory now
+
+        self._create("WI-2")
+        self.assertTrue(
+            self.ledger.claim("WI-2", "agent-B", worktree_path=worktree_path)
+        )
+
+        findings = self.ledger.reconcile()
+        stale = [f for f in findings if f.finding == "stale_claim"]
+        self.assertEqual([f.item_id for f in stale], ["WI-2"])
+
+    def test_real_registered_worktree_is_not_reported_stale(self):
+        worktree_path = os.path.join(self.repo_root + "-wt2", "live")
+        os.makedirs(os.path.dirname(worktree_path), exist_ok=True)
+        self.addCleanup(
+            lambda: subprocess.run(
+                ["rm", "-rf", os.path.dirname(worktree_path)], check=False
+            )
+        )
+        _run_git(
+            ["worktree", "add", "-q", "-b", "wt-live-branch", worktree_path],
+            self.repo_root,
+        )
+
+        self._create("WI-3")
+        self.assertTrue(
+            self.ledger.claim("WI-3", "agent-C", worktree_path=worktree_path)
+        )
+
+        findings = self.ledger.reconcile()
+        stale = [f for f in findings if f.finding == "stale_claim"]
+        self.assertEqual(stale, [])
+
+
 class TestCoordinatorProjection(LedgerTestCase):
     """User Story 4 (T034-T037): a generated, disposable coordinator-facing
     projection (contracts/coordinator-projection.md), never a second
@@ -1090,15 +1286,22 @@ class TestArchival(LedgerTestCase):
 
     def test_archiving_already_archived_item_is_idempotent(self):
         self._create("A")
+        # Attach evidence and a claim before the *first* archival so that
+        # call's cleanup DELETEs have something real to remove — proving
+        # the first call's `if archived:` cleanup actually ran, not just
+        # that there was nothing to clean up in the first place.
+        self.ledger.add_evidence("A", "branch", "feature/example")
+        self.assertTrue(self.ledger.claim("A", "agent-A"))
         self.assertTrue(self.ledger.mark_done("A"))
         self.assertTrue(self.ledger.archive_work_item("A"))
         first = self.ledger.get_work_item("A")
 
-        # Whatever this implementation returns for a second archival
-        # attempt, it must not raise, and the thinned shape must be
-        # unchanged afterward.
+        # A second archival attempt on an already-archived item must now
+        # be a determinate, correct `False` — the guard's
+        # `AND archived_at IS NULL` means the UPDATE no longer matches
+        # this row at all, so nothing about it is touched a second time.
         second_result = self.ledger.archive_work_item("A")
-        self.assertIn(second_result, (True, False))
+        self.assertFalse(second_result)
 
         second = self.ledger.get_work_item("A")
         self.assertEqual(second.id, first.id)
@@ -1110,6 +1313,27 @@ class TestArchival(LedgerTestCase):
         self.assertIsNone(second.source_promoted_by)
         self.assertIsNone(second.created_at)
         self.assertIsNotNone(second.archived_at)
+        # The core of the fix: archived_at/updated_at are permanent —
+        # the second call must not bump either forward to a later
+        # timestamp.
+        self.assertEqual(second.archived_at, first.archived_at)
+        self.assertEqual(second.updated_at, first.updated_at)
+
+        # No cleanup mutation of any kind on the second call: nothing
+        # errors, and there is nothing left to double-delete (the first
+        # call's cleanup already removed the evidence/claim rows).
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            evidence_count = conn.execute(
+                "SELECT COUNT(*) FROM work_item_evidence WHERE work_item_id = 'A'"
+            ).fetchone()[0]
+            claim_row = conn.execute(
+                "SELECT * FROM work_item_claims WHERE work_item_id = 'A'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(evidence_count, 0)
+        self.assertIsNone(claim_row)
 
 
 class TestQuickstartEndToEnd(LedgerTestCase):

@@ -108,12 +108,29 @@ def ledger_path(repo_root: str) -> str:
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version == 0:
-        for statement in _SCHEMA_STATEMENTS:
-            conn.execute(statement)
-        # PRAGMA user_version does not accept `?` bind parameters; the
-        # value here is always the fixed internal constant above, never
-        # caller-provided input.
-        conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+        # Fresh initialization is one atomic unit: every CREATE TABLE plus
+        # the PRAGMA user_version write that marks the schema as
+        # initialized, all inside one explicit transaction (research.md's
+        # "Decision: transaction boundaries", reusing `_transaction` rather
+        # than a second atomicity mechanism). Without this, `connect()`'s
+        # autocommit mode (`isolation_level=None`) would commit each
+        # CREATE TABLE individually — a failure partway through (e.g. after
+        # `work_items` and `work_item_blocked_by` exist but before the
+        # remaining tables are created) would leave `user_version` at `0`
+        # with a partially-created schema, so the next `connect()` would
+        # try to recreate already-existing tables and fail permanently.
+        # Verified empirically that `PRAGMA user_version` participates in
+        # and is rolled back by an explicit ROLLBACK exactly like ordinary
+        # DDL/DML in this SQLite/Python version (3.53.4 via the stdlib
+        # `sqlite3` module) — see the accompanying report for the
+        # throwaway script and its output.
+        with _transaction(conn):
+            for statement in _SCHEMA_STATEMENTS:
+                conn.execute(statement)
+            # PRAGMA user_version does not accept `?` bind parameters; the
+            # value here is always the fixed internal constant above, never
+            # caller-provided input.
+            conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
     elif version != _SCHEMA_VERSION:
         raise SchemaVersionError(
             f"ledger at schema version {version}, expected {_SCHEMA_VERSION}"
@@ -140,11 +157,22 @@ def connect(repo_root: str) -> sqlite3.Connection:
     db_path = ledger_path(repo_root)
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     conn = sqlite3.connect(db_path, isolation_level=None)
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA synchronous = NORMAL")
-    conn.execute("PRAGMA busy_timeout = 2000")
-    _ensure_schema(conn)
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA busy_timeout = 2000")
+        _ensure_schema(conn)
+    except BaseException:
+        # A connection that fails setup (a PRAGMA, or schema bootstrap)
+        # must not be left open for garbage collection to close
+        # eventually — that is not a reliable way to release SQLite's
+        # file lock promptly, and a lingering open connection can cause a
+        # subsequent, otherwise-healthy `connect()` call to hang or fail
+        # with "database is locked". Close explicitly and re-raise the
+        # original exception unchanged.
+        conn.close()
+        raise
     return conn
 
 
@@ -175,6 +203,84 @@ def _local_branch_exists(repo_root: str, branch: str) -> bool:
         text=True,
     )
     return result.returncode == 0
+
+
+def _registered_worktree_paths(repo_root: str) -> set[str] | None:
+    """Every path currently registered with Git as a live worktree of
+    `repo_root` (`RepoInfo.repo_root`), per `git worktree list
+    --porcelain` — used by `reconcile()`'s `stale_claim` check (FR-009)
+    as a strictly more accurate signal than `os.path.isdir`, which only
+    proves *some* directory exists at the recorded path, not that it is
+    still a worktree Git itself knows about (data-model.md's
+    "Staleness": "no longer exists as a worktree on this machine", not
+    "no longer exists as a directory"). Mirrors `src/bindle/repo.py`'s
+    narrow `_run_git`-style convention (plain `subprocess.run`,
+    plain-text parsing, no generic git abstraction) rather than reusing
+    `repo.py`'s own `_git`/`_run_git` directly — this needs to parse
+    multi-line, multi-block porcelain output, a different shape than
+    `repo.py`'s single-value lookups. Read-only: `git worktree list`
+    never creates, moves, or deletes anything.
+
+    Returns `None` (rather than an empty set) when `repo_root` is not
+    itself a Git repository Git can enumerate worktrees for (nonzero
+    exit — e.g. this repository's own `LedgerTestCase` fixture, which
+    deliberately uses a plain temporary directory so most of this
+    module's tests need no real Git repository at all). `None` is a
+    distinct signal from "queried successfully, zero registered
+    worktrees" so `reconcile()` can fall back to the older,
+    directory-existence heuristic in that case rather than treating
+    every recorded `worktree_path` as unconditionally stale. In real
+    use `WorkLedger.repo_root` is always `RepoInfo.repo_root` — an
+    actual Git common directory (this module's own docstring) — so this
+    fallback is not expected to ever trigger outside of tests that
+    deliberately avoid a real repository.
+
+    Empirically verified (scratch-repository investigation) porcelain
+    shape: one block per worktree, starting with a `worktree <path>`
+    line, followed by attribute lines (`HEAD`, `branch`/`bare`/
+    `detached`, optionally `locked [reason]` and/or `prunable
+    [reason]`), blocks separated by a blank line.
+
+    - A `locked` worktree is still live and registered (locking only
+      guards against accidental removal) and is included.
+    - A `prunable` worktree is excluded even though it still appears in
+      the raw listing: empirically, once a worktree directory is removed
+      with a bare `rm -rf` (skipping `git worktree remove`), Git's own
+      per-worktree administrative entry survives until `git worktree
+      prune` runs, and `git worktree list --porcelain` keeps emitting a
+      `worktree <path>` block for it annotated `prunable ...` — this
+      remains true even after an ordinary, unrelated directory is later
+      created at that exact same path (confirmed empirically: creating
+      the directory does not make Git re-examine or clear the
+      `prunable` annotation). Treating a `prunable` entry as registered
+      would therefore silently readmit exactly the "ordinary directory
+      mistaken for a live worktree" case this check exists to close, so
+      it is filtered out here rather than left for the caller to check.
+
+    Paths are normalized with `os.path.realpath` (Git's own listing
+    already reports canonicalized paths, e.g. with symlinks resolved —
+    observed empirically) so a caller can compare its own
+    `os.path.realpath`-normalized `worktree_path` against this set
+    directly.
+    """
+    result = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+
+    paths: set[str] = set()
+    for block in result.stdout.strip("\n").split("\n\n"):
+        lines = block.splitlines()
+        if not lines or not lines[0].startswith("worktree "):
+            continue
+        if any(line.startswith("prunable") for line in lines[1:]):
+            continue
+        paths.add(os.path.realpath(lines[0][len("worktree ") :]))
+    return paths
 
 
 @contextlib.contextmanager
@@ -645,13 +751,14 @@ class WorkLedger:
         """Run a read-only Reconciliation Report (FR-010).
 
         Compares recorded ledger state against observed repository state
-        (claim `worktree_path` existence, and claim `branch` existence as
-        a local ref — FR-009, checked via a single read-only `git
-        show-ref` shelled out against `self.repo_root`, never a mutating
-        Git command) and internal consistency (claim row-shape,
+        (claim `worktree_path` registration as a live Git worktree, and
+        claim `branch` existence as a local ref — FR-009, checked via
+        read-only `git worktree list` and `git show-ref` invocations
+        shelled out against `self.repo_root`, never a mutating Git
+        command) and internal consistency (claim row-shape,
         whole-database integrity, dangling blocking edges, duplicate
         sources, blocking cycles), per data-model.md's "Reconciliation
-        Report". Every query below is a `SELECT`, and the one Git
+        Report". Every query below is a `SELECT`, and every Git
         invocation is read-only; this method never opens a write
         transaction and never mutates `work_items`, `work_item_claims`,
         `work_item_blocked_by`, or `work_item_evidence` — finding a claim
@@ -672,31 +779,65 @@ class WorkLedger:
         findings: list[ReconciliationFinding] = []
         conn = self._connect()
         try:
-            # stale_claim: a recorded worktree_path that no longer exists
-            # as a directory, or (FR-009, data-model.md's "Staleness") a
-            # recorded branch that no longer exists as a local ref. Every
-            # claim row is inspected — including a branch-only claim
-            # (branch set, worktree_path NULL), which the worktree check
-            # alone would otherwise never flag. When both are recorded,
-            # the worktree is checked first (the more common case); either
-            # signal being stale produces exactly one `stale_claim`
-            # finding for that claim, never two, so a caller never has to
-            # reconcile duplicate/contradictory findings for one row. The
-            # branch check ("Explicitly not solved by this model" in
+            # stale_claim: a recorded worktree_path that no longer
+            # resolves to a currently registered Git worktree of this
+            # repository (FR-009, data-model.md's "Staleness": "no
+            # longer exists as a worktree on this machine" — not merely
+            # "no longer exists as a directory"; see
+            # `_registered_worktree_paths`'s own docstring for the
+            # empirical basis of this check, including why a plain
+            # `os.path.isdir` would be fooled by an ordinary, unrelated
+            # directory later created at a properly-removed worktree's
+            # old path), falling back to the plain `os.path.isdir`
+            # heuristic only when `repo_root` is not itself a Git
+            # repository Git can enumerate worktrees for (see that
+            # function's docstring — not expected outside tests), or
+            # (FR-009, data-model.md's "Staleness") a recorded branch
+            # that no longer exists as a local ref. Every claim row is
+            # inspected — including a branch-only claim (branch set,
+            # worktree_path NULL), which the worktree check alone would
+            # otherwise never flag. When both are recorded, the worktree
+            # is checked first (the more common case); either signal
+            # being stale produces exactly one `stale_claim` finding for
+            # that claim, never two, so a caller never has to reconcile
+            # duplicate/contradictory findings for one row. The branch
+            # check ("Explicitly not solved by this model" in
             # data-model.md's "Staleness" section) is unrelated to this
             # fix — that documented gap is specifically about a claim
             # whose worktree/branch still exists but whose owner simply
             # stopped working, which no absence-based check can detect.
+            #
+            # The registered-worktree set is computed once per
+            # reconcile() call (one read-only `git worktree list`
+            # shell-out total, not one per claim row) and reused for
+            # every claim inspected below.
+            registered_worktrees = _registered_worktree_paths(self.repo_root)
             for work_item_id, worktree_path, branch in conn.execute(
                 "SELECT work_item_id, worktree_path, branch FROM work_item_claims "
                 "WHERE worktree_path IS NOT NULL OR branch IS NOT NULL"
             ).fetchall():
-                if worktree_path is not None and not os.path.isdir(worktree_path):
+                if worktree_path is not None:
+                    if registered_worktrees is not None:
+                        worktree_stale = (
+                            os.path.realpath(worktree_path) not in registered_worktrees
+                        )
+                        detail = (
+                            f"worktree_path {worktree_path!r} is not a "
+                            "currently registered Git worktree"
+                        )
+                    else:
+                        worktree_stale = not os.path.isdir(worktree_path)
+                        detail = f"worktree_path {worktree_path!r} does not exist"
+                else:
+                    worktree_stale = False
+                    detail = ""
+
+                if worktree_stale:
                     findings.append(
                         ReconciliationFinding(
                             item_id=work_item_id,
                             finding="stale_claim",
-                            detail=f"worktree_path {worktree_path!r} does not exist",
+                            detail=detail,
                         )
                     )
                 elif branch is not None and not _local_branch_exists(
@@ -831,13 +972,32 @@ class WorkLedger:
         calling `list_available_work_items()` (its own connection) and
         then opening a second connection to read `id`/`title`/`status`:
         two separate reads left a window in which a claim could land
-        between them, producing a stale `eligible=True` for an item that
-        was, by the time this call returned, already claimed. Expressing
+        between them, producing a stale `eligible=True` for an item whose
+        `id`/`title`/`status` were read from a *different*, later
+        snapshot than the one `eligible` was computed from. Expressing
         eligibility inline as `NOT EXISTS` claim/blocking subqueries in
         the same statement that selects `id`/`title`/`status` (mirroring
-        data-model.md's "Available to start" query shape) makes that race
-        structurally impossible — both facts are computed from the same
-        SQLite snapshot in the same query, not two racing ones.
+        data-model.md's "Available to start" query shape) makes *that*
+        two-snapshot mixing structurally impossible — both facts are
+        always computed from the same SQLite read snapshot in the same
+        query, so one projected row can never combine eligibility and
+        item state from two different points in time.
+
+        This guarantees internal consistency of one projection, nothing
+        more. It does NOT guarantee that no claim lands immediately after
+        this query's snapshot is taken and before the caller of
+        `generate_projection()` acts on the result — another process can
+        always issue a competing `claim()` in that gap, and this method
+        cannot and does not prevent it. That is ordinary, unavoidable
+        staleness inherent to any generated/disposable snapshot
+        (contracts/coordinator-projection.md already describes a
+        projection this way), not something a single-query fix
+        eliminates. Actual dispatch/acquisition safety comes from
+        `claim()`'s own atomic arbitration (the primary-key-constraint
+        mechanism in data-model.md's "Claim atomicity contract"), not
+        from projection freshness — a coordinator MUST still attempt
+        `claim()` before treating an item as acquired; this projection is
+        advisory, never a reservation.
 
         Purely a read: opens exactly one `SELECT` connection, and never
         mutates the ledger. Deterministic for unchanged ledger state —
@@ -901,18 +1061,21 @@ class WorkLedger:
 
         Returns `True` iff the `UPDATE` actually matched a row — i.e.
         `id` exists and was, at the moment this ran, `done` or
-        `superseded`. Returns `False` if `id` does not exist or is
-        currently `open` — a true, guarded no-op, not an error,
-        mirroring `mark_done`/`mark_superseded`'s own "guarded transition
-        returns whether it applied" convention: when the `UPDATE` does
-        not match, the cleanup `DELETE`s below are skipped entirely, so
-        an `open` (or nonexistent) item's evidence, claim, and
+        `superseded` and not yet archived. Returns `False` if `id` does
+        not exist, is currently `open`, or is already archived — a true,
+        guarded no-op, not an error, mirroring `mark_done`/
+        `mark_superseded`'s own "guarded transition returns whether it
+        applied" convention: when the `UPDATE` does not match, the
+        cleanup `DELETE`s below are skipped entirely, so an `open` (or
+        nonexistent, or already-archived) item's evidence, claim, and
         self-declared `blocked_by` edges are left completely untouched.
-        Re-running this on an already-archived item is idempotent in
-        effect: the `WHERE status IN (...)` guard still matches (archival
-        never changes `status`), so the `UPDATE` re-sets already-`NULL`
-        columns and the `DELETE`s affect zero rows — no error, no
-        corruption either way.
+        Re-running this on an already-archived item is a true no-op: the
+        guard includes `AND archived_at IS NULL`, so once `archived_at`
+        has been set by a first successful archival, the `UPDATE` no
+        longer matches that row at all on a second call — `archived_at`
+        and `updated_at` are left exactly as the first archival set them,
+        never bumped forward to a later timestamp (data-model.md's
+        "`archived_at`... `NULL` until archived, then permanent").
         """
         now = _now()
         conn = self._connect()
@@ -922,7 +1085,8 @@ class WorkLedger:
                     "UPDATE work_items SET title = NULL, source_kind = NULL, "
                     "source_locator = NULL, source_promoted_by = NULL, "
                     "created_at = NULL, archived_at = ?, updated_at = ? "
-                    "WHERE id = ? AND status IN ('done', 'superseded')",
+                    "WHERE id = ? AND status IN ('done', 'superseded') "
+                    "AND archived_at IS NULL",
                     (now, now, id),
                 )
                 archived = cursor.rowcount == 1
