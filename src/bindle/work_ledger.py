@@ -599,16 +599,34 @@ class WorkLedger:
         `type` defaults to `"task"` (backward-compatible with every 001
         caller). specs/002-milestone-task-work-items FR-002/FR-003: a
         `parent_id`, when given, MUST name an existing `type='milestone'`
-        row — checked here (a plain `REFERENCES` foreign key cannot express
-        "must be a milestone," only "must exist") and raised as `ValueError`
-        before any row is written; a `type='milestone'` row naming a
-        `parent_id` is instead rejected by the schema's own `CHECK`
+        row that is currently `status = 'open'` — checked here (a plain
+        `REFERENCES` foreign key cannot express "must be an open
+        milestone," only "must exist") and raised as `ValueError` before
+        any row is written; a `type='milestone'` row naming a `parent_id`
+        is instead rejected by the schema's own `CHECK`
         (`sqlite3.IntegrityError`), since that restriction needs no
-        cross-row lookup. This check does not need to run inside the same
-        transaction as the `INSERT` below for correctness: `type` is
-        immutable once set and no operation in this model ever deletes a
-        row, so a `parent_id` found valid here cannot be invalidated by a
-        concurrent actor before the `INSERT` that follows.
+        cross-row lookup.
+
+        Membership is frozen once a milestone leaves `open`
+        (specs/002-milestone-task-work-items FR-003a): a task may be
+        attached only while its milestone is `open`, never while `review`,
+        `accepted`, or `superseded` — otherwise a milestone's accepted (or
+        currently-under-review) child set could change underneath a
+        decision a human already made, or after one. This is why the
+        parent's `status`, not only its `type`, is validated. Unlike
+        `type` (immutable once set), `status` **is** mutable — a milestone
+        can move `open -> review` at any time — so this check MUST run
+        inside the same `BEGIN IMMEDIATE` transaction as the `INSERT`
+        below, not merely before it: a separate pre-check followed by a
+        second, later `INSERT` would leave a race window in which a
+        concurrent `mark_in_review()` (or any other status transition)
+        could invalidate the parent's `open`-ness between the check and
+        the write, the same class of check-then-act race FR-010 already
+        closes for `mark_in_review` and this method's own archival
+        counterpart closes for `archive_work_item`. `BEGIN IMMEDIATE`
+        acquires SQLite's write lock for the whole transaction, so no
+        concurrent writer can transition the parent's status between this
+        `SELECT` and the `INSERT` that depends on its result.
         """
         now = _now()
         insert_item = (
@@ -632,19 +650,23 @@ class WorkLedger:
 
         conn = self._connect()
         try:
-            if parent_id is not None:
-                parent_row = conn.execute(
-                    "SELECT type FROM work_items WHERE id = ?", (parent_id,)
-                ).fetchone()
-                if parent_row is None or parent_row[0] != "milestone":
-                    raise ValueError(
-                        f"parent_id {parent_id!r} does not name an existing "
-                        "milestone work item"
-                    )
-            if not blocked_by:
-                conn.execute(insert_item, params)
-                return
             with _transaction(conn):
+                if parent_id is not None:
+                    parent_row = conn.execute(
+                        "SELECT type, status FROM work_items WHERE id = ?",
+                        (parent_id,),
+                    ).fetchone()
+                    if parent_row is None or parent_row[0] != "milestone":
+                        raise ValueError(
+                            f"parent_id {parent_id!r} does not name an existing "
+                            "milestone work item"
+                        )
+                    if parent_row[1] != "open":
+                        raise ValueError(
+                            f"parent_id {parent_id!r} names a milestone that is "
+                            f"not open (status={parent_row[1]!r}); a task may "
+                            "only be attached to an open milestone"
+                        )
                 conn.execute(insert_item, params)
                 for blocked_on_id in blocked_by:
                     conn.execute(
@@ -753,12 +775,21 @@ class WorkLedger:
             conn.close()
 
     def list_available_work_items(self) -> list[str]:
-        """List the ids of every item currently available to start (T017).
+        """List the ids of every **task** currently available to start (T017).
 
         The composite query from data-model.md's "Derived facts" →
         "Available to start": `status = 'open'` AND not claimed AND not
         blocked. Returns ids only (mirroring the data-model.md query,
         which selects only `id`), ordered by `id` for determinism.
+
+        specs/002-milestone-task-work-items: restricted to `type = 'task'`
+        rows only (`AND wi.type = 'task'`), mirroring
+        `generate_projection()`'s own `type = 'task'` filter (FR-017) and
+        for the same reason — a milestone is a human acceptance unit, not
+        an executable/startable unit of work (data-model.md's "Milestone"),
+        so an `open`, unclaimed, unblocked milestone must never be reported
+        as something to "start." This is a `WHERE` predicate, not a
+        post-filter a caller could bypass by reading the table directly.
         """
         conn = self._connect()
         try:
@@ -766,6 +797,7 @@ class WorkLedger:
                 f"""
                 SELECT id FROM work_items wi
                 WHERE wi.status = 'open'
+                  AND wi.type = 'task'
                   AND NOT EXISTS (
                     SELECT 1 FROM work_item_claims c WHERE c.work_item_id = wi.id
                   )
@@ -1404,12 +1436,27 @@ class WorkLedger:
         (specs/002 FR-005) — both are accepted here.
 
         specs/002-milestone-task-work-items FR-015: archiving a
-        `type='milestone'` row is refused outright — before opening any
-        transaction, leaving the row completely untouched — while any
-        child (`parent_id` naming it) has a status outside
-        `('done', 'accepted', 'superseded')`. This precondition query is
-        harmless for a task (which has no children by construction) and so
-        is not conditioned on `type` here.
+        `type='milestone'` row is refused outright while any child
+        (`parent_id` naming it) has a status outside
+        `('done', 'accepted', 'superseded')`. This precondition is embedded
+        directly in the guarded `UPDATE`'s own `WHERE` clause below, inside
+        the same `BEGIN IMMEDIATE` transaction as the mutation itself —
+        mirroring `mark_in_review`'s own FR-010 pattern
+        (`_review_ready_sql`) rather than checking it with a separate
+        statement beforehand. A check performed *before* opening the
+        transaction would leave a race window open: another writer could
+        insert a new open child, or reopen/re-review a resolved one,
+        between that check and this method's own mutation, letting a
+        milestone be archived with an unresolved child underneath it — the
+        same class of check-then-act race FR-010 already closes for
+        `mark_in_review`. Embedding the condition inline closes that
+        window: `BEGIN IMMEDIATE` acquires SQLite's write lock for the
+        whole transaction, so no concurrent writer can insert or mutate a
+        child row between the precondition's evaluation and the `UPDATE`
+        that reads it — one atomic statement's row-count is the sole
+        arbitration mechanism, never a check-then-act pair. This
+        precondition is harmless for a task (which has no children by
+        construction) and so is not conditioned on `type` here.
 
         Returns `True` iff the `UPDATE` actually matched a row — i.e.
         `id` exists, was at the moment this ran in one of its type's
@@ -1427,13 +1474,6 @@ class WorkLedger:
         now = _now()
         conn = self._connect()
         try:
-            has_unresolved_children = conn.execute(
-                "SELECT EXISTS (SELECT 1 FROM work_items c WHERE c.parent_id = ? "
-                "AND c.status NOT IN ('done', 'accepted', 'superseded'))",
-                (id,),
-            ).fetchone()[0]
-            if has_unresolved_children:
-                return False
             with _transaction(conn):
                 cursor = conn.execute(
                     "UPDATE work_items SET title = NULL, description = NULL, "
@@ -1441,8 +1481,12 @@ class WorkLedger:
                     "source_promoted_by = NULL, "
                     "created_at = NULL, archived_at = ?, updated_at = ? "
                     "WHERE id = ? AND status IN ('done', 'accepted', 'superseded') "
-                    "AND archived_at IS NULL",
-                    (now, now, id),
+                    "AND archived_at IS NULL "
+                    "AND NOT EXISTS ("
+                    "  SELECT 1 FROM work_items c WHERE c.parent_id = ? "
+                    "  AND c.status NOT IN ('done', 'accepted', 'superseded')"
+                    ")",
+                    (now, now, id, id),
                 )
                 archived = cursor.rowcount == 1
                 if archived:

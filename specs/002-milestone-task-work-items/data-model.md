@@ -51,8 +51,8 @@ Every other column (`id`, `superseded_by`, `source_kind`, `source_locator`, `sou
 
 **New invariants**:
 - A `milestone` row's `parent_id` is always `NULL` — enforced by `CHECK`, not application discipline alone (same technique 001 already uses for `status`/`superseded_by` pairing).
-- A `task` row's `parent_id`, when non-`NULL`, names a row that exists and has `type = 'milestone'` at the moment of creation — enforced by the creation function's own validation (a plain `REFERENCES` FK cannot express the type restriction), inside the same atomic create operation 001 already uses for `blocked_by` (all-or-nothing: creation fails entirely if `parent_id` is invalid, no partial row).
-- `parent_id`, once validly set, is never revalidated against the parent's *current* type or status — exactly mirroring how `blocked_by` edges are "a declared, historical set" (001 `data-model.md`) rather than continuously re-checked. A parent later archived remains resolvable (see below); nothing re-derives or prunes the child's `parent_id`.
+- A `task` row's `parent_id`, when non-`NULL`, names a row that exists, has `type = 'milestone'`, and has `status = 'open'`, all at the moment of creation — enforced by the creation function's own validation (a plain `REFERENCES` FK cannot express the type/status restriction), inside the same atomic create operation 001 already uses for `blocked_by` (all-or-nothing: creation fails entirely if `parent_id` is invalid, no partial row). The `status = 'open'` requirement (FR-003a) — membership is frozen once a milestone leaves `open` — is what makes the parent's status check load-bearing rather than incidental: unlike `type`, a milestone's `status` is mutable, so this check runs *inside* the same `BEGIN IMMEDIATE` transaction as the `INSERT`, not merely before it, closing the same class of check-then-act race FR-010 already closes for `mark_in_review`.
+- `parent_id`, once validly set, is never revalidated against the parent's *current* type or status by any operation other than creation itself — exactly mirroring how `blocked_by` edges are "a declared, historical set" (001 `data-model.md`) rather than continuously re-checked. A parent later archived remains resolvable (see below); nothing re-derives or prunes the child's `parent_id`, and a milestone's later transition away from `open` never retroactively invalidates a task that was already validly attached to it.
 
 ## Dependency resolution — generalized to be type-aware
 
@@ -67,7 +67,7 @@ SELECT type, status, superseded_by FROM work_items WHERE id = :blocked_on_id;
 - Any other status for either type → still blocking.
 - No row returned → Dangling, same as 001, still conservatively treated as still-blocking.
 
-The **Blocked** and **Available to start** queries (001 `data-model.md`, "Derived facts") gain the same type-aware `WHEN` in their `JOIN` condition; no other change to their shape.
+The **Blocked** query (001 `data-model.md`, "Derived facts") gains the same type-aware `WHEN` in its `JOIN` condition; no other change to its shape. The **Available to start** query gains that same type-aware `WHEN`, plus one additional predicate: `AND type = 'task'` (FR-017a) — a milestone is a human acceptance unit, not an executable/startable unit of work (see "Milestone" below and `generate_projection()`'s own, analogous `type = 'task'` filter, FR-017), so an `open`, unclaimed, unblocked milestone must never be reported as available to start.
 
 ## Milestone-specific derived facts
 
@@ -123,15 +123,15 @@ No trigger, no transition-graph table — the `WHERE`-clause precondition on eac
 
 001's archival transaction (`data-model.md`, "Archival") is extended with one precondition, evaluated before the transaction begins, and one addition to what a milestone's thinned row preserves:
 
-```sql
--- Precondition (milestones only): refuse if any child is unresolved.
-SELECT EXISTS (
-  SELECT 1 FROM work_items c
-  WHERE c.parent_id = :id
-    AND c.status NOT IN ('done', 'accepted', 'superseded')
-) AS has_unresolved_children;
--- If true, archive_work_item returns False without opening the transaction below.
-```
+The unresolved-child precondition (milestones only) is embedded directly in
+the guarded `UPDATE`'s own `WHERE` clause, inside the same `BEGIN IMMEDIATE`
+transaction as the mutation itself — mirroring the "Enter review" transition's
+own inline `<review-readiness condition>` above (FR-010), not evaluated by a
+separate statement beforehand. A pre-transaction check-then-act pair would
+leave a race window in which a concurrent writer could insert a new open
+child, or reopen/re-review a resolved one, between the check and the
+mutation — this closes that window the same way `mark_in_review` closes its
+own:
 
 ```sql
 BEGIN IMMEDIATE;
@@ -139,7 +139,17 @@ UPDATE work_items
   SET title = NULL, description = NULL, source_kind = NULL, source_locator = NULL,
       source_promoted_by = NULL, created_at = NULL,
       archived_at = :now, updated_at = :now
-  WHERE id = :id AND status IN ('done', 'accepted', 'superseded');
+  WHERE id = :id AND status IN ('done', 'accepted', 'superseded')
+    AND archived_at IS NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM work_items c
+      WHERE c.parent_id = :id
+        AND c.status NOT IN ('done', 'accepted', 'superseded')
+    );
+-- If the UPDATE matches no row (nonexistent id, not yet terminal, already
+-- archived, or — for a milestone — an unresolved child at the moment this
+-- statement runs), archive_work_item returns False and the DELETEs below
+-- are skipped entirely.
 DELETE FROM work_item_evidence WHERE work_item_id = :id;
 DELETE FROM work_item_blocked_by WHERE work_item_id = :id;
 DELETE FROM work_item_claims WHERE work_item_id = :id;

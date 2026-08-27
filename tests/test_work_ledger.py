@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -2149,6 +2150,148 @@ class TestMilestoneDeclineAndAccept(LedgerTestCase):
             self.assertNotIn("reason", params)
 
 
+class TestMilestoneMembershipFreeze(LedgerTestCase):
+    """FR-003a: a task may be attached to a milestone (via `parent_id` at
+    creation) only while that milestone is `status='open'`. Membership is
+    frozen the instant a milestone leaves `open` — `review`, `accepted`,
+    and `superseded` all reject a new attach attempt outright, with no
+    partial row written — while the corrective-work flow (`review` ->
+    `decline_review` -> `open` -> attach -> `review` again) keeps working
+    exactly as FR-011 already establishes. The parent's existence/type/
+    status check and the child `INSERT` are atomic with respect to a
+    concurrent milestone lifecycle transition."""
+
+    def _milestone_ready_for_review(self):
+        self.ledger.create_work_item(
+            id="M-1", title="M", source_kind="adhoc", source_locator="x", type="milestone"
+        )
+        self.ledger.create_work_item(
+            id="T-1", title="T1", source_kind="adhoc", source_locator="y", parent_id="M-1"
+        )
+        self.assertTrue(self.ledger.mark_done("T-1"))
+        self.ledger.add_evidence("T-1", "commit", "abc")
+
+    def _assert_attach_rejected(self, item_id="T-race"):
+        with self.assertRaises(ValueError):
+            self.ledger.create_work_item(
+                id=item_id,
+                title="Racer",
+                source_kind="adhoc",
+                source_locator=item_id,
+                parent_id="M-1",
+            )
+        self.assertIsNone(self.ledger.get_work_item(item_id))
+
+    def test_task_may_be_attached_while_milestone_is_open(self):
+        self.ledger.create_work_item(
+            id="M-1", title="M", source_kind="adhoc", source_locator="x", type="milestone"
+        )
+        self.ledger.create_work_item(
+            id="T-1", title="T", source_kind="adhoc", source_locator="y", parent_id="M-1"
+        )
+        self.assertEqual(self.ledger.get_work_item("T-1").parent_id, "M-1")
+
+    def test_task_may_not_be_attached_while_milestone_in_review(self):
+        self._milestone_ready_for_review()
+        self.assertTrue(self.ledger.mark_in_review("M-1"))
+        self._assert_attach_rejected()
+
+    def test_task_may_not_be_attached_after_accepted(self):
+        self._milestone_ready_for_review()
+        self.assertTrue(self.ledger.mark_in_review("M-1"))
+        self.assertTrue(self.ledger.accept_milestone("M-1"))
+        self._assert_attach_rejected()
+
+    def test_task_may_not_be_attached_after_superseded(self):
+        self.ledger.create_work_item(
+            id="M-1", title="M", source_kind="adhoc", source_locator="x", type="milestone"
+        )
+        self.ledger.create_work_item(
+            id="M-2", title="M2", source_kind="adhoc", source_locator="y", type="milestone"
+        )
+        self.assertTrue(self.ledger.mark_superseded("M-1", "M-2"))
+        self._assert_attach_rejected()
+
+    def test_task_may_not_be_attached_after_archival(self):
+        self._milestone_ready_for_review()
+        self.assertTrue(self.ledger.mark_in_review("M-1"))
+        self.assertTrue(self.ledger.accept_milestone("M-1"))
+        self.assertTrue(self.ledger.archive_work_item("M-1"))
+        self._assert_attach_rejected()
+
+    def test_corrective_task_may_be_attached_after_decline_review(self):
+        self._milestone_ready_for_review()
+        self.assertTrue(self.ledger.mark_in_review("M-1"))
+        self.assertTrue(self.ledger.decline_review("M-1"))
+
+        self.ledger.create_work_item(
+            id="T-2", title="Fix", source_kind="adhoc", source_locator="z", parent_id="M-1"
+        )
+        self.assertEqual(self.ledger.get_work_item("T-2").parent_id, "M-1")
+
+    def test_concurrent_mark_in_review_vs_task_attach_never_produces_invalid_membership(
+        self,
+    ):
+        """A milestone that is review-ready right now (one resolved,
+        evidenced child) races two operations against each other: moving
+        it into `review`, and attaching a fresh, unresolved task to it.
+        Whichever operation's write commits first must determine the
+        other's outcome correctly — never both succeeding (a milestone in
+        `review` with a brand-new unresolved child underneath it) and
+        never both failing (a live application bug, not a race)."""
+        self._milestone_ready_for_review()
+
+        barrier = threading.Barrier(2)
+        results = {}
+
+        def do_mark_in_review():
+            barrier.wait()
+            results["mark_in_review"] = self.ledger.mark_in_review("M-1")
+
+        def do_attach():
+            barrier.wait()
+            try:
+                self.ledger.create_work_item(
+                    id="T-race",
+                    title="Racer",
+                    source_kind="adhoc",
+                    source_locator="race",
+                    parent_id="M-1",
+                )
+                results["attach"] = True
+            except ValueError:
+                results["attach"] = False
+
+        t1 = threading.Thread(target=do_mark_in_review)
+        t2 = threading.Thread(target=do_attach)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        self.assertIn("mark_in_review", results)
+        self.assertIn("attach", results)
+        self.assertFalse(
+            results["mark_in_review"] and results["attach"],
+            "a milestone must never enter review while a concurrently "
+            "attached, unresolved task lands on it",
+        )
+        self.assertTrue(
+            results["mark_in_review"] or results["attach"],
+            "at least one of the two non-conflicting operations must succeed",
+        )
+
+        milestone = self.ledger.get_work_item("M-1")
+        t_race = self.ledger.get_work_item("T-race")
+        if results["attach"]:
+            self.assertIsNotNone(t_race)
+            self.assertEqual(t_race.status, "open")
+            self.assertNotEqual(milestone.status, "review")
+        else:
+            self.assertIsNone(t_race)
+            self.assertEqual(milestone.status, "review")
+
+
 class TestProjectionExcludesMilestones(LedgerTestCase):
     """T017 (User Story 5, SC-005): no milestone row ever appears in a
     generated projection, under any status/claim combination; a task
@@ -2223,6 +2366,30 @@ class TestProjectionExcludesMilestones(LedgerTestCase):
         self.assertEqual(first, second)
 
 
+class TestAvailableWorkItemsExcludesMilestones(LedgerTestCase):
+    """FR-017a: `list_available_work_items()` reports only `type='task'`
+    rows — a milestone is a human acceptance unit, never a startable unit
+    of work, so an open/unclaimed/unblocked milestone must never appear,
+    mirroring `generate_projection()`'s own `type='task'` filter."""
+
+    def test_open_unclaimed_unblocked_milestone_is_never_available(self):
+        self.ledger.create_work_item(
+            id="M-1", title="M", source_kind="adhoc", source_locator="x", type="milestone"
+        )
+        self.assertNotIn("M-1", self.ledger.list_available_work_items())
+
+    def test_task_remains_available_alongside_an_available_looking_milestone(self):
+        self.ledger.create_work_item(
+            id="M-1", title="M", source_kind="adhoc", source_locator="x", type="milestone"
+        )
+        self.ledger.create_work_item(
+            id="T-1", title="T", source_kind="adhoc", source_locator="y", parent_id="M-1"
+        )
+        available = self.ledger.list_available_work_items()
+        self.assertIn("T-1", available)
+        self.assertNotIn("M-1", available)
+
+
 class TestMilestoneArchival(LedgerTestCase):
     """T017 (SC-006/SC-007): archiving a milestone with an unresolved
     child is refused and leaves the row untouched; archiving succeeds
@@ -2243,9 +2410,30 @@ class TestMilestoneArchival(LedgerTestCase):
 
     def test_archiving_milestone_with_unresolved_child_is_refused(self):
         self._accepted_milestone_with_one_child()
-        self.ledger.create_work_item(
-            id="T-2", title="T2", source_kind="adhoc", source_locator="z", parent_id="M-1"
-        )
+
+        # FR-003a forbids attaching a task to an already-accepted milestone
+        # through the public API (see TestMilestoneMembershipFreeze) — by
+        # the time a milestone reaches `accepted`, every child present at
+        # that moment is already resolved by construction (mark_in_review's
+        # own review-readiness precondition), and no operation can un-
+        # resolve a task or attach a new one afterward. FR-015's archival
+        # precondition is therefore defense-in-depth against a state the
+        # normal API can no longer produce; constructing it here requires
+        # a direct raw-SQL insert bypassing `create_work_item()`'s own
+        # validation entirely, isolating archival's own precondition
+        # enforcement from creation-time enforcement (mirroring this
+        # module's existing "direct-fixture construction" precedent, e.g.
+        # `TestWorkItemTypeAndParent.test_type_aware_blocking_resolution_task_on_milestone`).
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            conn.execute(
+                "INSERT INTO work_items "
+                "(id, type, parent_id, title, status, created_at, updated_at) "
+                "VALUES ('T-2', 'task', 'M-1', 'T2', 'open', ?, ?)",
+                (_NOW, _NOW),
+            )
+        finally:
+            conn.close()
         before = self.ledger.get_work_item("M-1")
 
         self.assertFalse(self.ledger.archive_work_item("M-1"))
@@ -2283,6 +2471,71 @@ class TestMilestoneArchival(LedgerTestCase):
             blocked_by=["M-1"],
         )
         self.assertFalse(self.ledger.is_blocked("T-2"))
+
+    def test_archival_precondition_is_atomic_against_a_concurrent_child_insertion(self):
+        """Regression for the archival check-then-act race: pre-fix,
+        `archive_work_item()` evaluated "any unresolved child?" as a plain
+        `SELECT` *before* opening its own transaction, then archived in a
+        separate later transaction. That left a window in which a
+        concurrent writer could insert a new open child between the check
+        and the mutation, producing an archived milestone with live,
+        unresolved child work underneath it.
+
+        Constructed with a second, raw connection under direct manual
+        transaction control so the interleaving this regression targets is
+        forced deterministically rather than left to scheduler luck: a
+        `BEGIN IMMEDIATE` transaction that inserts a fresh open child under
+        M-1 is opened and left uncommitted *before* `archive_work_item()`
+        is ever invoked, on the same milestone this test's own fixture
+        just confirmed has zero unresolved children. `archive_work_item()`
+        is then run concurrently on a separate thread — its own
+        `BEGIN IMMEDIATE` can only proceed once the held write lock is
+        released (SQLite serializes writers), so its resolved-children
+        precondition is necessarily evaluated against the *post-insert*
+        state, never a stale pre-insert snapshot, proving the fix closes
+        the race rather than merely making it less likely."""
+        self._accepted_milestone_with_one_child()  # M-1 accepted; T-1 resolved.
+
+        now = "2026-08-27T00:00:00Z"
+        conn_holder = work_ledger.connect(self.repo_root)
+        conn_holder.execute("BEGIN IMMEDIATE")
+        conn_holder.execute(
+            "INSERT INTO work_items "
+            "(id, type, parent_id, title, status, created_at, updated_at) "
+            "VALUES ('T-race', 'task', 'M-1', 'Racer', 'open', ?, ?)",
+            (now, now),
+        )
+        # conn_holder now holds the ledger's single write lock with an
+        # uncommitted, unresolved child inserted under M-1 — this is the
+        # exact mid-race state a pre-fix check would already have missed.
+
+        archive_result = []
+
+        def do_archive():
+            archive_result.append(self.ledger.archive_work_item("M-1"))
+
+        t = threading.Thread(target=do_archive)
+        t.start()
+        # A brief window for archive_work_item()'s own BEGIN IMMEDIATE to
+        # be issued and block behind the held lock (not required for
+        # correctness — busy_timeout=2000ms covers any scheduling delay —
+        # but makes the intended lock-contention interleaving concrete
+        # rather than merely possible).
+        time.sleep(0.05)
+        conn_holder.execute("COMMIT")
+        conn_holder.close()
+        t.join(timeout=5)
+        self.assertFalse(t.is_alive(), "archive_work_item() did not return")
+
+        self.assertEqual(
+            archive_result,
+            [False],
+            "archival must be refused once an unresolved child exists, "
+            "even one inserted after the initial fixture setup",
+        )
+        item = self.ledger.get_work_item("M-1")
+        self.assertIsNone(item.archived_at)
+        self.assertEqual(item.status, "accepted")
 
 
 class TestQuickstartEndToEndV2(LedgerTestCase):
