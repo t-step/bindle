@@ -43,9 +43,24 @@ Bindle does not vendor (`docs/TOOLCHAIN.md`).
 Bindle's own planning currently targets:
 
 * Branch: `development`
-* Commit: `099535b3e75735581b3e43fb57d034ca58aa2baf`
-* Nearest tag: `v0.0.2-40-g099535b` (40 commits past the fork's last
+* Commit: `a9d577518b0354f1176ab9750a51d2d4250a3f9b`
+* Nearest tag: `v0.0.2-42-ga9d5775` (42 commits past the fork's last
   tagged revision, `v0.0.2`; `development` has no tag of its own yet)
+
+Bumped 2026-08-27 from the prior pin (`099535b`, `v0.0.2-40-g099535b`) by
+this repository's own reconciliation pass, per D040: the two intervening
+commits (`c9a657d`, `a9d5775`) are both spec-only — Symphony's own commit
+messages state "authorizes zero source code changes" for both, and this
+was independently verified against `git show --stat` for each. They write
+down, in `specs/002-bindle-integration/`, the projection/write-surface
+assumptions this reconciliation pass depends on being current, and add
+FR-017 — the specification that `dispatchable` MUST be a start/admission
+gate only, never a continuation/preemption gate. **FR-017 is a
+specification, not a fix**: Symphony's runtime (`orchestrator.ex`,
+`agent_runner.ex`) still violates it today (see D040's "Known,
+confirmed-real gap" bullet); correcting the runtime is explicitly deferred
+by Symphony's own spec to a subsequent implementation feature, not
+performed by these two commits or by this pin bump.
 
 This pin is deliberate, not a moving branch tip: bump it here, on purpose,
 when a future implementation session adopts a newer revision. Do not treat
@@ -107,6 +122,27 @@ derived fact (`is_review_ready()`) computed from its children's own
 resolved status and evidence; whether it is actually *accepted* remains a
 human judgment recorded as an explicit transition, never inferred or
 automated from readiness alone (D038).
+
+**Task granularity is the schedulable unit; there is no task-under-task
+nesting (D040).** `parent_id` on a task can only ever name a milestone
+(schema `CHECK`, `specs/002-milestone-task-work-items/`) — never another
+task — and it records human-review attribution only, never execution
+decomposition. A task attached to a milestone is projected and computed
+`dispatchable` identically to a parentless one; `generate_external_projection()`
+carries no `parent_id` filter (`specs/003-symphony-task-integration/`). The
+Spec Kit loader (`src/bindle/speckit_loader.py`) never sets `parent_id` at
+all — every loaded task is `parent_id = NULL`. Concretely: one Spec Kit
+`T###` task line is one Bindle `type = 'task'` row is one projected,
+independently schedulable Symphony unit — the same granularity a Spec Kit
+`tasks.md` already uses for its own bounded, dependency-tracked,
+independently verifiable implementation steps. A primary coding-agent
+session that claims a task may decompose or use subagents internally to
+complete it; that internal decomposition is deliberately never written to
+Bindle's ledger and has no representation here — Bindle's coordination
+state stops at the task boundary, consistent with owning coordination
+state rather than execution internals (`docs/SCOPE.md`, "Bindle does not
+own"). See D040 for why no `parent_id`-based filter, new work-item type,
+or loader change was needed to express this.
 
 ## Published projection and write surface
 
