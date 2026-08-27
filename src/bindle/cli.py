@@ -44,7 +44,12 @@ D035) — a third, differently-shaped provider-lifecycle seam alongside
 guardrails and Projectmem. `list` (the global repository inventory,
 distinct from `skills list`), `update`, `upgrade`, and `doctor` remain
 interface-only placeholders until their underlying components are
-implemented in a later slice.
+implemented in a later slice. `work load-speckit`/`publish`/`claim`/
+`release`/`done` (specs/003-symphony-task-integration) load a settled
+Spec Kit feature's tasks.md into the durable work ledger, regenerate the
+published, versioned, read-only Symphony-facing SQLite projection, and
+claim/release/complete a task through the ledger's own atomic
+primitives — see speckit_loader.py and symphony_projection.py.
 """
 
 from __future__ import annotations
@@ -74,6 +79,9 @@ from . import qmd as qmd_mod
 from .repo import NotAGitRepositoryError, get_repo_info
 from .skills import CATALOG, UnknownKitError, add_desired_kit, read_desired_kits, remove_desired_kit, require_kit
 from .skills.config import SkillsConfigError
+from .speckit_loader import TasksFileError, load_feature
+from . import symphony_projection
+from .work_ledger import WorkLedger
 
 # Lifecycle commands with an established name and short/long --help text.
 # `init`, `remove`, `status`, and `migrate-legacy-global` have real behavior
@@ -692,6 +700,109 @@ def _cmd_skills_add(args: argparse.Namespace) -> int:
     return 0 if outcome.ok else 1
 
 
+def _cmd_work_load_speckit(args: argparse.Namespace) -> int:
+    try:
+        info = get_repo_info()
+    except NotAGitRepositoryError as exc:
+        print(f"bindle work load-speckit: {exc}", file=sys.stderr)
+        return 1
+
+    ledger = WorkLedger(info.repo_root)
+    try:
+        result = load_feature(
+            ledger, args.feature_dir, source_promoted_by=args.promoted_by
+        )
+    except TasksFileError as exc:
+        print(f"bindle work load-speckit: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"created: {len(result.created)}")
+    for item_id in result.created:
+        print(f"  {item_id}")
+    print(f"resynced: {len(result.resynced)}")
+    for item_id in result.resynced:
+        print(f"  {item_id}")
+
+    # Skipped lines and unresolved dependencies are reported to the caller
+    # (spec.md FR-010/FR-011) rather than silently discarded — surfaced as
+    # a non-zero exit so they're not missed in a script, even though every
+    # other well-formed task line in the same file still loaded normally.
+    ok = not result.skipped and not result.unresolved_dependencies
+    if result.skipped:
+        print(f"bindle work load-speckit: {len(result.skipped)} line(s) skipped:", file=sys.stderr)
+        for skipped in result.skipped:
+            print(f"  line {skipped.line_number}: {skipped.reason}", file=sys.stderr)
+    if result.unresolved_dependencies:
+        print(
+            f"bindle work load-speckit: {len(result.unresolved_dependencies)} "
+            "unresolved dependency reference(s):",
+            file=sys.stderr,
+        )
+        for dep in result.unresolved_dependencies:
+            print(f"  {dep.task_id} depends on missing {dep.depends_on}", file=sys.stderr)
+    return 0 if ok else 1
+
+
+def _cmd_work_publish(args: argparse.Namespace) -> int:
+    try:
+        info = get_repo_info()
+    except NotAGitRepositoryError as exc:
+        print(f"bindle work publish: {exc}", file=sys.stderr)
+        return 1
+
+    ledger = WorkLedger(info.repo_root)
+    path = symphony_projection.publish(ledger)
+    print(path)
+    return 0
+
+
+def _cmd_work_claim(args: argparse.Namespace) -> int:
+    try:
+        info = get_repo_info()
+    except NotAGitRepositoryError as exc:
+        print(f"bindle work claim: {exc}", file=sys.stderr)
+        return 1
+
+    ledger = WorkLedger(info.repo_root)
+    result = symphony_projection.claim_task(
+        ledger, args.id, args.owner, worktree_path=args.worktree, branch=args.branch
+    )
+    if not result.ok:
+        print(f"bindle work claim: {result.reason}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _cmd_work_release(args: argparse.Namespace) -> int:
+    try:
+        info = get_repo_info()
+    except NotAGitRepositoryError as exc:
+        print(f"bindle work release: {exc}", file=sys.stderr)
+        return 1
+
+    ledger = WorkLedger(info.repo_root)
+    result = symphony_projection.release_task(ledger, args.id, args.owner)
+    if not result.ok:
+        print(f"bindle work release: {result.reason}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _cmd_work_done(args: argparse.Namespace) -> int:
+    try:
+        info = get_repo_info()
+    except NotAGitRepositoryError as exc:
+        print(f"bindle work done: {exc}", file=sys.stderr)
+        return 1
+
+    ledger = WorkLedger(info.repo_root)
+    result = symphony_projection.complete_task(ledger, args.id)
+    if not result.ok:
+        print(f"bindle work done: {result.reason}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def _cmd_skills_remove(args: argparse.Namespace) -> int:
     try:
         info = get_repo_info()
@@ -808,6 +919,53 @@ def build_parser() -> argparse.ArgumentParser:
     )
     skills_remove_parser.add_argument("kit", help="Kit ID (see `bindle skills list`)")
 
+    work_parser = subparsers.add_parser(
+        "work",
+        help="Load Spec Kit tasks, publish the Symphony projection, and claim/release/complete tasks.",
+        description=(
+            "Symphony Task Integration (specs/003-symphony-task-integration): load a "
+            "settled Spec Kit feature's tasks.md into the durable work ledger, publish "
+            "the versioned, read-only Symphony-facing projection, and claim/release/"
+            "complete a task through the ledger's own atomic primitives."
+        ),
+    )
+    work_subparsers = work_parser.add_subparsers(dest="work_command")
+
+    load_speckit_parser = work_subparsers.add_parser(
+        "load-speckit",
+        help="Load one Spec Kit feature directory's tasks.md into the ledger.",
+    )
+    load_speckit_parser.add_argument(
+        "feature_dir",
+        help="Feature directory path relative to the repository root, e.g. specs/003-symphony-task-integration",
+    )
+    load_speckit_parser.add_argument(
+        "--promoted-by",
+        default=None,
+        help="Identity recorded as source_promoted_by for newly created work items.",
+    )
+
+    work_subparsers.add_parser(
+        "publish", help="Regenerate the published Symphony projection file."
+    )
+
+    claim_parser = work_subparsers.add_parser("claim", help="Claim a task.")
+    claim_parser.add_argument("id", help="Work item id")
+    claim_parser.add_argument("--owner", required=True, help="Claim owner identity")
+    claim_parser.add_argument(
+        "--worktree", default=None, help="Worktree path to record with the claim"
+    )
+    claim_parser.add_argument(
+        "--branch", default=None, help="Branch name to record with the claim"
+    )
+
+    release_parser = work_subparsers.add_parser("release", help="Release a claim.")
+    release_parser.add_argument("id", help="Work item id")
+    release_parser.add_argument("--owner", required=True, help="Claim owner identity")
+
+    done_parser = work_subparsers.add_parser("done", help="Mark a claimed task done.")
+    done_parser.add_argument("id", help="Work item id")
+
     return parser
 
 
@@ -849,6 +1007,20 @@ def main(argv: list[str] | None = None) -> int:
         if args.skills_command == "remove":
             return _cmd_skills_remove(args)
         parser.parse_args(["skills", "--help"])
+        return 1
+
+    if args.command == "work":
+        if args.work_command == "load-speckit":
+            return _cmd_work_load_speckit(args)
+        if args.work_command == "publish":
+            return _cmd_work_publish(args)
+        if args.work_command == "claim":
+            return _cmd_work_claim(args)
+        if args.work_command == "release":
+            return _cmd_work_release(args)
+        if args.work_command == "done":
+            return _cmd_work_done(args)
+        parser.parse_args(["work", "--help"])
         return 1
 
     parser.print_help()

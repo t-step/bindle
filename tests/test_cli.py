@@ -22,8 +22,9 @@ from bindle.projectmem import detect_projectmem
 from bindle.qmd import COLLECTION_NAME, detect_qmd
 from bindle.repo import get_repo_info
 from bindle.skills import KitInfo, KitOpOutcome, KitStatus
+from bindle.work_ledger import WorkLedger
 
-TOP_LEVEL_COMMANDS = [*_LIFECYCLE_COMMANDS, "repo", "branch", "skills"]
+TOP_LEVEL_COMMANDS = [*_LIFECYCLE_COMMANDS, "repo", "branch", "skills", "work"]
 
 _HAS_REAL_PJM = shutil.which("pjm") is not None
 _HAS_REAL_QMD = shutil.which("qmd") is not None
@@ -2507,6 +2508,95 @@ class TestSkillsCommand(unittest.TestCase):
             code = main(["skills", "status"])
         self.assertEqual(code, 0)
         self.assertIn("no", out.getvalue())
+
+
+_TASKS_MD_FIXTURE = """\
+# Tasks: Example Feature
+
+## Phase 1
+
+- [ ] T001 Do the first thing in src/example.py.
+- [ ] T002 Do the second thing, which needs the first. Depends on: T001.
+"""
+
+
+class TestWorkCliSubcommands(unittest.TestCase):
+    # T023 (specs/003-symphony-task-integration): the `bindle work`
+    # subcommand family is a thin wrapper over speckit_loader.load_feature
+    # and symphony_projection.publish/claim_task/release_task/
+    # complete_task — one success case and one rejection case per verb.
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = os.path.join(self.tmp.name, "repo")
+        _init_repo(self.repo)
+        self.feature_dir = os.path.join(self.repo, "specs", "999-example-feature")
+        os.makedirs(self.feature_dir, exist_ok=True)
+        with open(os.path.join(self.feature_dir, "tasks.md"), "w") as f:
+            f.write(_TASKS_MD_FIXTURE)
+        self.task1_id = "speckit:999-example-feature:T001"
+        self.task2_id = "speckit:999-example-feature:T002"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_load_speckit_success(self):
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["work", "load-speckit", "specs/999-example-feature"])
+        self.assertEqual(code, 0)
+        self.assertIn(self.task1_id, out.getvalue())
+        self.assertIn(self.task2_id, out.getvalue())
+
+    def test_load_speckit_missing_tasks_file_fails_clearly(self):
+        err = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stderr(err):
+            code = main(["work", "load-speckit", "specs/000-does-not-exist"])
+        self.assertEqual(code, 1)
+        self.assertIn("bindle work load-speckit:", err.getvalue())
+
+    def test_publish_success(self):
+        with _chdir(self.repo):
+            main(["work", "load-speckit", "specs/999-example-feature"])
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = main(["work", "publish"])
+        self.assertEqual(code, 0)
+        self.assertTrue(out.getvalue().strip().endswith("symphony-projection.sqlite3"))
+
+    def test_claim_release_done_success(self):
+        with _chdir(self.repo):
+            main(["work", "load-speckit", "specs/999-example-feature"])
+            code = main(["work", "claim", self.task1_id, "--owner", "agent-A"])
+            self.assertEqual(code, 0)
+            code = main(["work", "release", self.task1_id, "--owner", "agent-A"])
+            self.assertEqual(code, 0)
+            code = main(["work", "claim", self.task1_id, "--owner", "agent-A"])
+            self.assertEqual(code, 0)
+            code = main(["work", "done", self.task1_id])
+            self.assertEqual(code, 0)
+
+    def test_claim_already_claimed_fails_clearly(self):
+        with _chdir(self.repo):
+            main(["work", "load-speckit", "specs/999-example-feature"])
+            main(["work", "claim", self.task1_id, "--owner", "agent-A"])
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code = main(["work", "claim", self.task1_id, "--owner", "agent-B"])
+        self.assertEqual(code, 1)
+        self.assertIn("already_claimed", err.getvalue())
+
+    def test_done_rejects_milestone(self):
+        with _chdir(self.repo):
+            main(["work", "load-speckit", "specs/999-example-feature"])
+            ledger = WorkLedger(get_repo_info().repo_root)
+            ledger.create_work_item(
+                "M-1", "A milestone", "adhoc", "note", type="milestone"
+            )
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code = main(["work", "done", "M-1"])
+        self.assertEqual(code, 1)
+        self.assertIn("not_a_task", err.getvalue())
 
 
 if __name__ == "__main__":

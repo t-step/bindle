@@ -2366,6 +2366,127 @@ class TestProjectionExcludesMilestones(LedgerTestCase):
         self.assertEqual(first, second)
 
 
+class TestGenerateExternalProjection(LedgerTestCase):
+    """specs/003-symphony-task-integration T015 (User Story 2, Acceptance
+    Scenarios 2.1-2.4): `generate_external_projection()` produces exactly
+    the task rows, with `dispatchable` matching the ledger's own
+    "available to start" computation and `status` exposed as a direct,
+    readable string — never a milestone row, under any status, claim, or
+    blocking state."""
+
+    def _create_task(self, id, blocked_by=(), parent_id=None):
+        self.ledger.create_work_item(
+            id=id,
+            title=f"Title {id}",
+            description=f"Description {id}",
+            source_kind="adhoc",
+            source_locator=f"plans/active/example.md#{id}",
+            blocked_by=blocked_by,
+            parent_id=parent_id,
+        )
+
+    def _create_milestone(self, id):
+        self.ledger.create_work_item(
+            id=id,
+            title=f"Milestone {id}",
+            source_kind="adhoc",
+            source_locator=f"plans/active/example.md#{id}",
+            type="milestone",
+        )
+
+    def test_open_unclaimed_unblocked_task_is_dispatchable(self):
+        self._create_task("T-open")
+        by_id = {row.id: row for row in self.ledger.generate_external_projection()}
+        self.assertTrue(by_id["T-open"].dispatchable)
+        self.assertEqual(by_id["T-open"].status, "open")
+
+    def test_blocked_task_is_not_dispatchable(self):
+        self._create_task("T-blocker")
+        self._create_task("T-blocked", blocked_by=["T-blocker"])
+        by_id = {row.id: row for row in self.ledger.generate_external_projection()}
+        self.assertFalse(by_id["T-blocked"].dispatchable)
+        self.assertEqual(by_id["T-blocked"].status, "open")
+
+    def test_claimed_task_is_not_dispatchable(self):
+        self._create_task("T-claimed")
+        self.assertTrue(self.ledger.claim("T-claimed", "owner-1"))
+        by_id = {row.id: row for row in self.ledger.generate_external_projection()}
+        self.assertFalse(by_id["T-claimed"].dispatchable)
+        self.assertEqual(by_id["T-claimed"].status, "open")
+
+    def test_done_and_superseded_tasks_report_direct_status_and_are_not_dispatchable(
+        self,
+    ):
+        self._create_task("T-done")
+        self.assertTrue(self.ledger.mark_done("T-done"))
+        self._create_task("T-superseded")
+        self._create_task("T-supersedes")
+        self.assertTrue(
+            self.ledger.mark_superseded("T-superseded", "T-supersedes")
+        )
+
+        by_id = {row.id: row for row in self.ledger.generate_external_projection()}
+        self.assertEqual(by_id["T-done"].status, "done")
+        self.assertFalse(by_id["T-done"].dispatchable)
+        self.assertEqual(by_id["T-superseded"].status, "superseded")
+        self.assertFalse(by_id["T-superseded"].dispatchable)
+
+    def test_milestones_never_appear_regardless_of_status(self):
+        # Every milestone status this schema allows: open, review,
+        # accepted, superseded.
+        self._create_milestone("M-open")
+
+        self._create_milestone("M-review")
+        self._create_task("T-for-review", parent_id="M-review")
+        self.assertTrue(self.ledger.mark_done("T-for-review"))
+        self.ledger.add_evidence("T-for-review", "commit", "abc")
+        self.assertTrue(self.ledger.mark_in_review("M-review"))
+
+        self._create_milestone("M-accepted")
+        self._create_task("T-for-accepted", parent_id="M-accepted")
+        self.assertTrue(self.ledger.mark_done("T-for-accepted"))
+        self.ledger.add_evidence("T-for-accepted", "commit", "def")
+        self.assertTrue(self.ledger.mark_in_review("M-accepted"))
+        self.assertTrue(self.ledger.accept_milestone("M-accepted"))
+
+        self._create_milestone("M-other")
+        self.assertTrue(self.ledger.mark_superseded("M-other", "M-open"))
+
+        self.assertTrue(self.ledger.claim("M-open", "reviewer"))
+
+        by_id = {row.id: row for row in self.ledger.generate_external_projection()}
+        for milestone_id in ("M-open", "M-review", "M-accepted", "M-other"):
+            self.assertNotIn(milestone_id, by_id)
+        # The attributed tasks themselves are still task rows and remain
+        # present, alongside their now-absent milestone parents.
+        self.assertIn("T-for-review", by_id)
+        self.assertIn("T-for-accepted", by_id)
+
+    def test_title_description_and_identifier_are_carried_through(self):
+        self._create_task("speckit:003-symphony-task-integration:T003")
+        by_id = {
+            row.id: row for row in self.ledger.generate_external_projection()
+        }
+        row = by_id["speckit:003-symphony-task-integration:T003"]
+        self.assertEqual(row.title, "Title speckit:003-symphony-task-integration:T003")
+        self.assertEqual(
+            row.description,
+            "Description speckit:003-symphony-task-integration:T003",
+        )
+        self.assertEqual(
+            row.identifier, "speckit-003-symphony-task-integration-T003"
+        )
+
+    def test_deterministic_across_two_generations(self):
+        self._create_task("T-a")
+        self._create_task("T-b", blocked_by=["T-a"])
+        self._create_milestone("M-1")
+
+        first = self.ledger.generate_external_projection()
+        second = self.ledger.generate_external_projection()
+        self.assertEqual(first, second)
+
+
 class TestAvailableWorkItemsExcludesMilestones(LedgerTestCase):
     """FR-017a: `list_available_work_items()` reports only `type='task'`
     rows — a milestone is a human acceptance unit, never a startable unit
@@ -2833,6 +2954,82 @@ class TestQuickstartEndToEndV2(LedgerTestCase):
         self.assertTrue({"T-1", "T-2", "T-4"} <= ids)
         second_projection = self.ledger.generate_projection()
         self.assertEqual(projection, second_projection)
+
+
+class TestResyncDeclarativeFields(LedgerTestCase):
+    """specs/003-symphony-task-integration T005 (User Story 1):
+    resync_declarative_fields() is a single guarded UPDATE touching only
+    title/description/updated_at — status, work_item_claims,
+    work_item_evidence, source_kind, and source_locator are left
+    completely untouched, and it is a true no-op (returns False) against
+    an archived or nonexistent id."""
+
+    def test_updates_only_title_description_and_updated_at(self):
+        self.ledger.create_work_item(
+            id="T-1",
+            title="Original title",
+            source_kind="speckit_task",
+            source_locator="specs/003-x/tasks.md#T001",
+        )
+        before = self.ledger.get_work_item("T-1")
+
+        self.assertTrue(
+            self.ledger.resync_declarative_fields(
+                "T-1", "New title", "New description"
+            )
+        )
+        after = self.ledger.get_work_item("T-1")
+
+        self.assertEqual(after.title, "New title")
+        self.assertEqual(after.description, "New description")
+        self.assertNotEqual(after.updated_at, before.updated_at)
+        self.assertEqual(after.id, before.id)
+        self.assertEqual(after.type, before.type)
+        self.assertEqual(after.parent_id, before.parent_id)
+        self.assertEqual(after.status, before.status)
+        self.assertEqual(after.superseded_by, before.superseded_by)
+        self.assertEqual(after.source_kind, before.source_kind)
+        self.assertEqual(after.source_locator, before.source_locator)
+        self.assertEqual(after.source_promoted_by, before.source_promoted_by)
+        self.assertEqual(after.created_at, before.created_at)
+        self.assertEqual(after.archived_at, before.archived_at)
+
+    def test_does_not_touch_status_claim_or_evidence(self):
+        self.ledger.create_work_item(
+            id="T-1", title="T", source_kind="adhoc", source_locator="x"
+        )
+        self.assertTrue(self.ledger.claim("T-1", "worker-1"))
+        self.ledger.add_evidence("T-1", "commit", "abc123")
+        self.assertTrue(self.ledger.mark_done("T-1"))
+
+        self.assertTrue(
+            self.ledger.resync_declarative_fields("T-1", "New title", None)
+        )
+
+        item = self.ledger.get_work_item("T-1")
+        self.assertEqual(item.status, "done")
+        self.assertTrue(self.ledger.is_claimed("T-1"))
+        self.assertTrue(self.ledger.has_qualifying_evidence("T-1"))
+
+    def test_returns_false_for_nonexistent_id(self):
+        self.assertFalse(
+            self.ledger.resync_declarative_fields("does-not-exist", "T", None)
+        )
+
+    def test_returns_false_and_is_noop_for_archived_item(self):
+        self.ledger.create_work_item(
+            id="T-1", title="T", source_kind="adhoc", source_locator="x"
+        )
+        self.assertTrue(self.ledger.mark_done("T-1"))
+        self.assertTrue(self.ledger.archive_work_item("T-1"))
+        before = self.ledger.get_work_item("T-1")
+
+        self.assertFalse(
+            self.ledger.resync_declarative_fields("T-1", "New title", "New desc")
+        )
+
+        after = self.ledger.get_work_item("T-1")
+        self.assertEqual(before, after)
 
 
 if __name__ == "__main__":
