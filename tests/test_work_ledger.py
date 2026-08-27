@@ -213,5 +213,421 @@ class TestWorkItemCreationAndDurability(LedgerTestCase):
         self.assertEqual(count, 0)
 
 
+class TestBlockingAndAvailability(LedgerTestCase):
+    """User Story 2 (T019-T022): blocking, claim, and availability facts,
+    computed fresh from repository state per data-model.md's "Derived
+    facts" and "Available to start"."""
+
+    def _create(self, id, blocked_by=()):
+        self.ledger.create_work_item(
+            id=id,
+            title=f"Item {id}",
+            source_kind="adhoc",
+            source_locator=f"plans/active/example.md#{id}",
+            blocked_by=blocked_by,
+        )
+
+    def test_chain_of_blocking_relationships_excludes_blocked_items(self):
+        # T019 (Acceptance Scenario 2.1, SC-002): A blocked_by B, B blocked_by C.
+        self._create("C")
+        self._create("B", blocked_by=["C"])
+        self._create("A", blocked_by=["B"])
+
+        self.assertTrue(self.ledger.is_blocked("A"))
+        self.assertTrue(self.ledger.is_blocked("B"))
+        self.assertFalse(self.ledger.is_blocked("C"))
+
+        available = self.ledger.list_available_work_items()
+        self.assertEqual(available, ["C"])
+        self.assertNotIn("A", available)
+        self.assertNotIn("B", available)
+
+    def test_unblocked_unclaimed_item_is_available(self):
+        # T020 (Acceptance Scenario 2.2).
+        self._create("WI-1")
+
+        self.assertFalse(self.ledger.is_blocked("WI-1"))
+        self.assertFalse(self.ledger.is_claimed("WI-1"))
+        self.assertIn("WI-1", self.ledger.list_available_work_items())
+
+    def test_marking_blocker_done_unblocks_its_dependent(self):
+        # T021 (Acceptance Scenario 2.3).
+        self._create("B")
+        self._create("A", blocked_by=["B"])
+
+        self.assertTrue(self.ledger.is_blocked("A"))
+        self.assertNotIn("A", self.ledger.list_available_work_items())
+
+        self.assertTrue(self.ledger.mark_done("B"))
+
+        self.assertFalse(self.ledger.is_blocked("A"))
+        available = self.ledger.list_available_work_items()
+        self.assertIn("A", available)
+        self.assertNotIn("B", available)  # B is now done, not open
+
+    def test_guarded_transitions_are_no_ops_when_not_open(self):
+        self._create("WI-1")
+        self.assertTrue(self.ledger.mark_done("WI-1"))
+        # Already done: a second transition attempt does not double-apply.
+        self.assertFalse(self.ledger.mark_done("WI-1"))
+        self.assertFalse(self.ledger.mark_superseded("WI-1", "WI-2"))
+        # Nonexistent item: no row to update.
+        self.assertFalse(self.ledger.mark_done("does-not-exist"))
+
+    def test_full_set_availability_enumeration(self):
+        # T022 (User Story 2's own Independent Test): a mix of
+        # open/unclaimed, open/claimed, blocked, done, and superseded
+        # items. The open/claimed fixture is constructed by inserting
+        # directly into work_item_claims via a raw connection — never by
+        # calling a claim() method, which belongs to the concurrently
+        # implemented S4 claims slice and does not exist in this
+        # worktree. This keeps S3's availability-computation assertion
+        # independent of S4's claim-acquisition correctness.
+        self._create("open-unclaimed")
+
+        self._create("open-claimed")
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            conn.execute(
+                "INSERT INTO work_item_claims (work_item_id, owner, claimed_at) "
+                "VALUES (?, ?, ?)",
+                ("open-claimed", "test-owner", _NOW),
+            )
+        finally:
+            conn.close()
+
+        self._create("blocker-open")
+        self._create("blocked", blocked_by=["blocker-open"])
+
+        self._create("done-item")
+        self.assertTrue(self.ledger.mark_done("done-item"))
+
+        self._create("superseded-target")
+        self._create("superseded-item")
+        self.assertTrue(
+            self.ledger.mark_superseded("superseded-item", "superseded-target")
+        )
+
+        available = set(self.ledger.list_available_work_items())
+        self.assertEqual(
+            available,
+            {"open-unclaimed", "blocker-open", "superseded-target"},
+        )
+        self.assertNotIn("open-claimed", available)
+        self.assertNotIn("blocked", available)
+        self.assertNotIn("done-item", available)
+        self.assertNotIn("superseded-item", available)
+
+        # Cross-check against the individual derived facts too.
+        self.assertTrue(self.ledger.is_claimed("open-claimed"))
+        self.assertFalse(self.ledger.is_claimed("open-unclaimed"))
+        self.assertTrue(self.ledger.is_blocked("blocked"))
+        self.assertFalse(self.ledger.is_blocked("blocker-open"))
+
+
+class TestClaimsEvidenceAndReconciliation(LedgerTestCase):
+    """T023-T033, T040-T042: claim arbitration, release, override release,
+    evidence, and the reconciliation report's five in-scope findings."""
+
+    def _create(self, item_id, **overrides):
+        kwargs = dict(
+            id=item_id,
+            title=f"Item {item_id}",
+            source_kind="adhoc",
+            source_locator=f"loc-{item_id}",
+        )
+        kwargs.update(overrides)
+        self.ledger.create_work_item(**kwargs)
+
+    # -- T028: independent claims across two items/worktrees -----------
+
+    def test_two_independent_claims_do_not_affect_each_other(self):
+        self._create("WI-1")
+        self._create("WI-2")
+        wt1 = tempfile.mkdtemp()
+        wt2 = tempfile.mkdtemp()
+        try:
+            self.assertTrue(self.ledger.claim("WI-1", "agent-A", worktree_path=wt1))
+            self.assertTrue(self.ledger.claim("WI-2", "agent-B", worktree_path=wt2))
+
+            conn = work_ledger.connect(self.repo_root)
+            try:
+                rows = {
+                    row[0]: row[1:]
+                    for row in conn.execute(
+                        "SELECT work_item_id, owner, worktree_path "
+                        "FROM work_item_claims ORDER BY work_item_id"
+                    ).fetchall()
+                }
+            finally:
+                conn.close()
+            self.assertEqual(rows["WI-1"], ("agent-A", wt1))
+            self.assertEqual(rows["WI-2"], ("agent-B", wt2))
+        finally:
+            os.rmdir(wt1)
+            os.rmdir(wt2)
+
+    # -- T029: exactly one of many attempts against the same item wins --
+
+    def test_only_one_of_many_claim_attempts_on_the_same_item_succeeds(self):
+        for trial in range(25):
+            item_id = f"WI-trial-{trial}"
+            self._create(item_id)
+
+            self.assertTrue(self.ledger.claim(item_id, "owner-0"))
+            for attempt in range(5):
+                self.assertFalse(
+                    self.ledger.claim(item_id, f"owner-{attempt + 1}")
+                )
+
+    def test_claim_against_nonexistent_item_raises_not_already_claimed(self):
+        with self.assertRaises(sqlite3.IntegrityError) as ctx:
+            self.ledger.claim("does-not-exist", "agent-A")
+        self.assertIn("FOREIGN KEY", str(ctx.exception))
+
+    def test_release_claim_is_idempotent_and_owner_scoped(self):
+        self._create("WI-1")
+        self.ledger.release_claim("WI-1", "nobody")  # no-op, never claimed
+        self.assertTrue(self.ledger.claim("WI-1", "agent-A"))
+        self.ledger.release_claim("WI-1", "agent-B")  # wrong owner: no-op
+
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            row = conn.execute(
+                "SELECT owner FROM work_item_claims WHERE work_item_id = 'WI-1'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row[0], "agent-A")
+
+        self.ledger.release_claim("WI-1", "agent-A")
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            row = conn.execute(
+                "SELECT owner FROM work_item_claims WHERE work_item_id = 'WI-1'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNone(row)
+
+    # -- T030: stale_claim, non-mutating -------------------------------
+
+    def test_reconcile_reports_stale_claim_for_deleted_worktree(self):
+        self._create("WI-1")
+        vanished = tempfile.mkdtemp()
+        self.assertTrue(self.ledger.claim("WI-1", "agent-A", worktree_path=vanished))
+        os.rmdir(vanished)
+
+        findings = self.ledger.reconcile()
+        stale = [f for f in findings if f.finding == "stale_claim"]
+        self.assertEqual([f.item_id for f in stale], ["WI-1"])
+        self.assertIn(vanished, stale[0].detail)
+
+        # Reconciliation must not mutate the claim row.
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            row = conn.execute(
+                "SELECT owner, worktree_path FROM work_item_claims "
+                "WHERE work_item_id = 'WI-1'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row, ("agent-A", vanished))
+
+    # -- T031: corrupt_claim, distinct from stale_claim -----------------
+
+    def test_reconcile_reports_corrupt_claim_for_empty_owner(self):
+        self._create("WI-1")
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            conn.execute(
+                "INSERT INTO work_item_claims "
+                "(work_item_id, owner, claimed_at, worktree_path, branch) "
+                "VALUES ('WI-1', '', ?, NULL, NULL)",
+                (work_ledger._now(),),
+            )
+        finally:
+            conn.close()
+
+        findings = self.ledger.reconcile()
+        corrupt = [f for f in findings if f.finding == "corrupt_claim"]
+        stale = [f for f in findings if f.finding == "stale_claim"]
+        self.assertEqual([f.item_id for f in corrupt], ["WI-1"])
+        self.assertEqual(stale, [])
+
+    # -- T032: override release does not itself grant a claim -----------
+
+    def test_override_release_does_not_grant_a_claim(self):
+        self._create("WI-1")
+        vanished = tempfile.mkdtemp()
+        self.assertTrue(self.ledger.claim("WI-1", "agent-A", worktree_path=vanished))
+        os.rmdir(vanished)
+
+        self.ledger.override_release_claim("WI-1", note="worktree deleted")
+
+        # The override itself created no claim row.
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            row = conn.execute(
+                "SELECT * FROM work_item_claims WHERE work_item_id = 'WI-1'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNone(row)
+
+        # A subsequent claim() call goes through ordinary arbitration and
+        # succeeds because nothing else claimed it first.
+        self.assertTrue(self.ledger.claim("WI-1", "agent-B"))
+
+    def test_override_release_records_optional_evidence_note(self):
+        self._create("WI-1")
+        self.assertTrue(self.ledger.claim("WI-1", "agent-A"))
+        self.ledger.override_release_claim("WI-1", note="stale worktree gone")
+
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            row = conn.execute(
+                "SELECT kind, value, note FROM work_item_evidence "
+                "WHERE work_item_id = 'WI-1'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row, ("other", "claim-override", "stale worktree gone"))
+
+    def test_override_release_without_note_records_no_evidence(self):
+        self._create("WI-1")
+        self.assertTrue(self.ledger.claim("WI-1", "agent-A"))
+        self.ledger.override_release_claim("WI-1")
+
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM work_item_evidence WHERE work_item_id = 'WI-1'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(count, 0)
+
+    # -- T033: evidence is left unchanged; no mutation path exists -------
+
+    def test_evidence_pointer_is_immutable_and_unaffected_by_reconcile(self):
+        self._create("WI-1")
+        self.ledger.add_evidence(
+            "WI-1", "branch", "feature/example", note="initial branch"
+        )
+
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            before = conn.execute(
+                "SELECT kind, value, note FROM work_item_evidence "
+                "WHERE work_item_id = 'WI-1'"
+            ).fetchone()
+        finally:
+            conn.close()
+
+        # Simulate the branch later being rebased/squashed/deleted: this
+        # module never re-validates evidence against Git, so nothing
+        # should change it. Running reconcile() (which never mutates)
+        # confirms there is no accidental side effect either.
+        self.ledger.reconcile()
+
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            after = conn.execute(
+                "SELECT kind, value, note FROM work_item_evidence "
+                "WHERE work_item_id = 'WI-1'"
+            ).fetchone()
+        finally:
+            conn.close()
+
+        self.assertEqual(before, ("branch", "feature/example", "initial branch"))
+        self.assertEqual(after, before)
+        self.assertFalse(hasattr(self.ledger, "update_evidence"))
+
+    # -- T040: dangling_blocker, distinguishable from a genuinely done --
+    # -- dependency ------------------------------------------------------
+
+    def test_reconcile_reports_dangling_blocker_distinct_from_done_dependency(self):
+        self._create("WI-1")  # will become a genuinely completed dependency
+        self._create("WI-2")  # will declare a dangling reference
+
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            conn.execute(
+                "UPDATE work_items SET status = 'done', updated_at = ? WHERE id = 'WI-1'",
+                (work_ledger._now(),),
+            )
+            conn.execute(
+                "INSERT INTO work_item_blocked_by (work_item_id, blocked_on_id) "
+                "VALUES ('WI-2', 'WI-1')"
+            )
+        finally:
+            conn.close()
+
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            conn.execute("PRAGMA foreign_keys = OFF")
+            conn.execute(
+                "INSERT INTO work_item_blocked_by (work_item_id, blocked_on_id) "
+                "VALUES ('WI-2', 'never-existed')"
+            )
+        finally:
+            conn.close()
+
+        findings = self.ledger.reconcile()
+        dangling = [f for f in findings if f.finding == "dangling_blocker"]
+        self.assertEqual(len(dangling), 1)
+        self.assertEqual(dangling[0].item_id, "WI-2")
+        self.assertIn("never-existed", dangling[0].detail)
+        # The edge to the genuinely completed WI-1 must not be reported.
+        self.assertNotIn("WI-1", dangling[0].detail)
+
+    # -- T041: duplicate_source ------------------------------------------
+
+    def test_reconcile_reports_duplicate_source(self):
+        self.ledger.create_work_item(
+            id="WI-1",
+            title="A",
+            source_kind="plan",
+            source_locator="plans/active/example.md#work",
+        )
+        self.ledger.create_work_item(
+            id="WI-2",
+            title="B",
+            source_kind="plan",
+            source_locator="plans/active/example.md#work",
+        )
+
+        findings = self.ledger.reconcile()
+        duplicates = [f for f in findings if f.finding == "duplicate_source"]
+        self.assertEqual(len(duplicates), 1)
+        self.assertIsNone(duplicates[0].item_id)
+        self.assertIn("WI-1", duplicates[0].detail)
+        self.assertIn("WI-2", duplicates[0].detail)
+
+    # -- T042: cycle_detected (indirect cycle) ----------------------------
+
+    def test_reconcile_reports_indirect_cycle(self):
+        self._create("WI-A")
+        self._create("WI-B")
+
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            conn.execute(
+                "INSERT INTO work_item_blocked_by (work_item_id, blocked_on_id) "
+                "VALUES ('WI-A', 'WI-B')"
+            )
+            conn.execute(
+                "INSERT INTO work_item_blocked_by (work_item_id, blocked_on_id) "
+                "VALUES ('WI-B', 'WI-A')"
+            )
+        finally:
+            conn.close()
+
+        findings = self.ledger.reconcile()
+        cycles = {f.item_id for f in findings if f.finding == "cycle_detected"}
+        self.assertEqual(cycles, {"WI-A", "WI-B"})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -86,18 +86,18 @@ Both are single files for this feature; most tasks below therefore target one of
 
 ### Implementation for User Story 2
 
-- [ ] T014 [US2] Implement `add_blocked_by(work_item_id, blocked_on_id)` in `src/bindle/work_ledger.py` (single `INSERT` into `work_item_blocked_by`; relies on the Foundational schema's `CHECK`/`FOREIGN KEY` constraints to reject a direct self-cycle or a dangling target at write time; depends on T008)
-- [ ] T015 [US2] Implement `is_blocked(work_item_id)` in `src/bindle/work_ledger.py` (the derived `EXISTS` query per data-model.md's "Dependency resolution": any `blocked_by` row resolving to an open dependency, or to no row at all, counts as still blocking)
-- [ ] T016 [US2] Implement `is_claimed(work_item_id)` in `src/bindle/work_ledger.py` (`EXISTS` query against `work_item_claims` — claimed status is never a column on `work_items` itself)
-- [ ] T017 [US2] Implement `list_available_work_items()` in `src/bindle/work_ledger.py` (the composite query: `status = 'open'` AND NOT claimed AND NOT blocked, per data-model.md's "Available to start")
-- [ ] T018 [US2] Implement `mark_done(work_item_id)` and `mark_superseded(work_item_id, superseded_by)` in `src/bindle/work_ledger.py` (guarded `UPDATE ... WHERE status = 'open'` transitions per research.md's "Decision: transaction boundaries," so a double-transition race fails the row-count check rather than silently double-applying)
+- [x] T014 [US2] Implement `add_blocked_by(work_item_id, blocked_on_id)` in `src/bindle/work_ledger.py` (single `INSERT` into `work_item_blocked_by`; relies on the Foundational schema's `CHECK`/`FOREIGN KEY` constraints to reject a direct self-cycle or a dangling target at write time; depends on T008)
+- [x] T015 [US2] Implement `is_blocked(work_item_id)` in `src/bindle/work_ledger.py` (the derived `EXISTS` query per data-model.md's "Dependency resolution": any `blocked_by` row resolving to an open dependency, or to no row at all, counts as still blocking)
+- [x] T016 [US2] Implement `is_claimed(work_item_id)` in `src/bindle/work_ledger.py` (`EXISTS` query against `work_item_claims` — claimed status is never a column on `work_items` itself)
+- [x] T017 [US2] Implement `list_available_work_items()` in `src/bindle/work_ledger.py` (the composite query: `status = 'open'` AND NOT claimed AND NOT blocked, per data-model.md's "Available to start")
+- [x] T018 [US2] Implement `mark_done(work_item_id)` and `mark_superseded(work_item_id, superseded_by)` in `src/bindle/work_ledger.py` (guarded `UPDATE ... WHERE status = 'open'` transitions per research.md's "Decision: transaction boundaries," so a double-transition race fails the row-count check rather than silently double-applying)
 
 ### Tests for User Story 2
 
-- [ ] T019 [US2] Test a chain of three or more blocking relationships correctly excludes the blocked items from availability (Acceptance Scenario 2.1, SC-002) in `tests/test_work_ledger.py`
-- [ ] T020 [US2] Test an unblocked, unclaimed item is reported available (Acceptance Scenario 2.2) in `tests/test_work_ledger.py`
-- [ ] T021 [US2] Test marking a blocking item done removes it as a blocker for its dependents (Acceptance Scenario 2.3) in `tests/test_work_ledger.py`
-- [ ] T022 [US2] Test full-set availability enumeration against a constructed ledger mixing open/unclaimed, open/claimed, blocked, done, and superseded items matches the expected set exactly (User Story 2's own Independent Test) in `tests/test_work_ledger.py` — **construct the open/claimed fixture row by inserting directly into `work_item_claims` (the SQLite persistence boundary), not by calling US3's `claim()` (T023).** This task tests availability computation over a given valid ledger state, not claim acquisition; proving that `claim()` itself produces that state is US3's own responsibility (T029/T028). Direct-insert construction keeps US2 free of any implementation dependency on US3, preserving the S3 ∥ S4 parallel-execution opportunity — see `plans/active/2026-08-26-work-ledger-task-composition-handoff.md`.
+- [x] T019 [US2] Test a chain of three or more blocking relationships correctly excludes the blocked items from availability (Acceptance Scenario 2.1, SC-002) in `tests/test_work_ledger.py`
+- [x] T020 [US2] Test an unblocked, unclaimed item is reported available (Acceptance Scenario 2.2) in `tests/test_work_ledger.py`
+- [x] T021 [US2] Test marking a blocking item done removes it as a blocker for its dependents (Acceptance Scenario 2.3) in `tests/test_work_ledger.py`
+- [x] T022 [US2] Test full-set availability enumeration against a constructed ledger mixing open/unclaimed, open/claimed, blocked, done, and superseded items matches the expected set exactly (User Story 2's own Independent Test) in `tests/test_work_ledger.py` — **construct the open/claimed fixture row by inserting directly into `work_item_claims` (the SQLite persistence boundary), not by calling US3's `claim()` (T023).** This task tests availability computation over a given valid ledger state, not claim acquisition; proving that `claim()` itself produces that state is US3's own responsibility (T029/T028). Direct-insert construction keeps US2 free of any implementation dependency on US3, preserving the S3 ∥ S4 parallel-execution opportunity — see `plans/active/2026-08-26-work-ledger-task-composition-handoff.md`.
 
 **Checkpoint**: User Stories 1 and 2 both work independently — items can be created, decomposed with dependencies, and correctly evaluated for availability.
 
@@ -111,20 +111,20 @@ Both are single files for this feature; most tasks below therefore target one of
 
 ### Implementation for User Story 3
 
-- [ ] T023 [US3] Implement `claim(work_item_id, owner, worktree_path=None, branch=None)` in `src/bindle/work_ledger.py` (single `INSERT` into `work_item_claims`; the primary key on `work_item_id` is the sole arbitration mechanism for concurrent attempts, per FR-018 and research.md's "Decision: claim atomicity")
-- [ ] T024 [US3] Implement `release_claim(work_item_id, owner)` in `src/bindle/work_ledger.py` (ordinary release by the recorded owner; `DELETE` is a no-op, not an error, if the row is already absent)
-- [ ] T025 [US3] Implement `override_release_claim(work_item_id, note=None)` in `src/bindle/work_ledger.py` (one transaction: `DELETE` the claim row, plus an optional `kind = 'other'` Evidence Pointer `INSERT` documenting the justification, per FR-019 and research.md's "Decision: transaction boundaries"; depends on T023, T027)
-- [ ] T026 [US3] Implement `add_evidence(work_item_id, kind, value, note=None)` in `src/bindle/work_ledger.py` (append-only `INSERT` into `work_item_evidence` — no `UPDATE` path is defined, per data-model.md's Evidence Pointer invariant)
-- [ ] T027 [US3] Implement `reconcile()` in `src/bindle/work_ledger.py` (read-only report over current state plus observed repository/filesystem state, producing `stale_claim` (worktree/branch existence check), `corrupt_claim` (via `PRAGMA integrity_check` plus row-shape inspection), `dangling_blocker` (`LEFT JOIN` against `work_items`), `duplicate_source` (`GROUP BY source_kind, source_locator HAVING COUNT(*) > 1`), and `cycle_detected` (the `WITH RECURSIVE` reachability query) findings, per data-model.md's "Reconciliation Report"; never opens a write transaction, per FR-010)
+- [x] T023 [US3] Implement `claim(work_item_id, owner, worktree_path=None, branch=None)` in `src/bindle/work_ledger.py` (single `INSERT` into `work_item_claims`; the primary key on `work_item_id` is the sole arbitration mechanism for concurrent attempts, per FR-018 and research.md's "Decision: claim atomicity")
+- [x] T024 [US3] Implement `release_claim(work_item_id, owner)` in `src/bindle/work_ledger.py` (ordinary release by the recorded owner; `DELETE` is a no-op, not an error, if the row is already absent)
+- [x] T025 [US3] Implement `override_release_claim(work_item_id, note=None)` in `src/bindle/work_ledger.py` (one transaction: `DELETE` the claim row, plus an optional `kind = 'other'` Evidence Pointer `INSERT` documenting the justification, per FR-019 and research.md's "Decision: transaction boundaries"; depends on T023, T027)
+- [x] T026 [US3] Implement `add_evidence(work_item_id, kind, value, note=None)` in `src/bindle/work_ledger.py` (append-only `INSERT` into `work_item_evidence` — no `UPDATE` path is defined, per data-model.md's Evidence Pointer invariant)
+- [x] T027 [US3] Implement `reconcile()` in `src/bindle/work_ledger.py` (read-only report over current state plus observed repository/filesystem state, producing `stale_claim` (worktree/branch existence check), `corrupt_claim` (via `PRAGMA integrity_check` plus row-shape inspection), `dangling_blocker` (`LEFT JOIN` against `work_items`), `duplicate_source` (`GROUP BY source_kind, source_locator HAVING COUNT(*) > 1`), and `cycle_detected` (the `WITH RECURSIVE` reachability query) findings, per data-model.md's "Reconciliation Report"; never opens a write transaction, per FR-010)
 
 ### Tests for User Story 3
 
-- [ ] T028 [US3] Test two independent claims against two different items, from two simulated worktrees, do not affect each other's stored record (Acceptance Scenario 3.1, SC-004) in `tests/test_work_ledger.py`
-- [ ] T029 [US3] Test that many concurrent claim attempts against the same currently-unclaimed item resolve to exactly one success and every other attempt receives an immediate, unambiguous failure, repeated across many trials (FR-018, SC-004a) in `tests/test_work_ledger.py`
-- [ ] T030 [US3] Test that reconciliation reports a claim as stale once its recorded worktree path no longer exists, without mutating the claim row or the item's computed availability (Acceptance Scenario 3.2, SC-003) in `tests/test_work_ledger.py`
-- [ ] T031 [US3] Test that reconciliation reports a corrupt claim distinctly from a stale claim, and that the item remains computed as unavailable in both cases until an explicit release (SC-010) in `tests/test_work_ledger.py`
-- [ ] T032 [US3] Test that an override release does not itself grant the releasing actor a claim — a racing concurrent acquire may still legitimately win the immediately following `claim()` attempt (spec.md Edge Case on override release) in `tests/test_work_ledger.py`
-- [ ] T033 [US3] Test that an Evidence Pointer is left unchanged after its referenced branch is later rebased, squashed, or deleted (Acceptance Scenario 3.3) in `tests/test_work_ledger.py`
+- [x] T028 [US3] Test two independent claims against two different items, from two simulated worktrees, do not affect each other's stored record (Acceptance Scenario 3.1, SC-004) in `tests/test_work_ledger.py`
+- [x] T029 [US3] Test that many concurrent claim attempts against the same currently-unclaimed item resolve to exactly one success and every other attempt receives an immediate, unambiguous failure, repeated across many trials (FR-018, SC-004a) in `tests/test_work_ledger.py`
+- [x] T030 [US3] Test that reconciliation reports a claim as stale once its recorded worktree path no longer exists, without mutating the claim row or the item's computed availability (Acceptance Scenario 3.2, SC-003) in `tests/test_work_ledger.py`
+- [x] T031 [US3] Test that reconciliation reports a corrupt claim distinctly from a stale claim, and that the item remains computed as unavailable in both cases until an explicit release (SC-010) in `tests/test_work_ledger.py`
+- [x] T032 [US3] Test that an override release does not itself grant the releasing actor a claim — a racing concurrent acquire may still legitimately win the immediately following `claim()` attempt (spec.md Edge Case on override release) in `tests/test_work_ledger.py`
+- [x] T033 [US3] Test that an Evidence Pointer is left unchanged after its referenced branch is later rebased, squashed, or deleted (Acceptance Scenario 3.3) in `tests/test_work_ledger.py`
 
 **Checkpoint**: User Stories 1, 2, and 3 all work independently — claims, releases, and reconciliation are correct and multi-worktree-safe.
 
@@ -156,9 +156,9 @@ Both are single files for this feature; most tasks below therefore target one of
 
 - [ ] T038 Implement `archive_work_item(id)` in `src/bindle/work_ledger.py` (single transaction thinning a `done`/`superseded` row in place to `id`/`status`/`superseded_by`/`archived_at`, deleting that item's own `blocked_by` edges, its evidence, and any lingering claim, per data-model.md's "Archival"; depends on T018, T023–T027, T038 itself touches T014's edges table and T026's evidence table)
 - [ ] T039 Test that archiving a satisfied prerequisite leaves every dependent item's blocked evaluation still correctly reporting it as satisfied (SC-008) in `tests/test_work_ledger.py`
-- [ ] T040 Test that a `blocked_by` reference to an id that never validly identified a work item is reported unresolvable (`dangling_blocker`), and is distinguishable in reconciliation detail from a reference to an item that was genuinely completed and archived (SC-009) in `tests/test_work_ledger.py`
-- [ ] T041 Test that two items promoted from the same underlying source are surfaced by reconciliation as `duplicate_source` rather than silently merged or rejected (spec.md Edge Case on duplicate promotion) in `tests/test_work_ledger.py`
-- [ ] T042 Test that an indirect blocking cycle (`A blocked_by B`, `B blocked_by A`, via two independently-written edges) is detected by `reconcile()`'s `cycle_detected` finding (spec.md Edge Case on circular blocking) in `tests/test_work_ledger.py`
+- [x] T040 Test that a `blocked_by` reference to an id that never validly identified a work item is reported unresolvable (`dangling_blocker`), and is distinguishable in reconciliation detail from a reference to an item that was genuinely completed and archived (SC-009) in `tests/test_work_ledger.py`
+- [x] T041 Test that two items promoted from the same underlying source are surfaced by reconciliation as `duplicate_source` rather than silently merged or rejected (spec.md Edge Case on duplicate promotion) in `tests/test_work_ledger.py`
+- [x] T042 Test that an indirect blocking cycle (`A blocked_by B`, `B blocked_by A`, via two independently-written edges) is detected by `reconcile()`'s `cycle_detected` finding (spec.md Edge Case on circular blocking) in `tests/test_work_ledger.py`
 - [ ] T043 Run quickstart.md Scenarios 1–5 end-to-end as a single integration test tying together creation, availability, claim/reconcile/override, and projection generation in `tests/test_work_ledger.py`
 
 ---
