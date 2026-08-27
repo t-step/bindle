@@ -1437,54 +1437,99 @@ class WorkLedger:
 
         specs/002-milestone-task-work-items FR-015: archiving a
         `type='milestone'` row is refused outright while any child
-        (`parent_id` naming it) has a status outside
-        `('done', 'accepted', 'superseded')`. This precondition is embedded
-        directly in the guarded `UPDATE`'s own `WHERE` clause below, inside
-        the same `BEGIN IMMEDIATE` transaction as the mutation itself —
-        mirroring `mark_in_review`'s own FR-010 pattern
-        (`_review_ready_sql`) rather than checking it with a separate
-        statement beforehand. A check performed *before* opening the
-        transaction would leave a race window open: another writer could
-        insert a new open child, or reopen/re-review a resolved one,
-        between that check and this method's own mutation, letting a
-        milestone be archived with an unresolved child underneath it — the
-        same class of check-then-act race FR-010 already closes for
-        `mark_in_review`. Embedding the condition inline closes that
-        window: `BEGIN IMMEDIATE` acquires SQLite's write lock for the
-        whole transaction, so no concurrent writer can insert or mutate a
-        child row between the precondition's evaluation and the `UPDATE`
-        that reads it — one atomic statement's row-count is the sole
-        arbitration mechanism, never a check-then-act pair. This
-        precondition is harmless for a task (which has no children by
-        construction) and so is not conditioned on `type` here.
+        (`parent_id` naming it) has a status outside `('done', 'superseded')`
+        — a child is always a `task`, which per FR-005 can never itself be
+        `accepted` (that is a milestone-only status), so the child-status
+        check does not list it. This precondition is embedded directly in
+        the guarded `UPDATE`'s own `WHERE` clause below, inside the same
+        `BEGIN IMMEDIATE` transaction as the mutation itself — mirroring
+        `mark_in_review`'s own FR-010 pattern (`_review_ready_sql`) rather
+        than checking it with a separate statement beforehand. A check
+        performed *before* opening the transaction would leave a race
+        window open: another writer could insert a new open child, or
+        reopen/re-review a resolved one, between that check and this
+        method's own mutation, letting a milestone be archived with an
+        unresolved child underneath it — the same class of check-then-act
+        race FR-010 already closes for `mark_in_review`. Embedding the
+        condition inline closes that window: `BEGIN IMMEDIATE` acquires
+        SQLite's write lock for the whole transaction, so no concurrent
+        writer can insert or mutate a child row between the precondition's
+        evaluation and the `UPDATE` that reads it — one atomic statement's
+        row-count is the sole arbitration mechanism, never a check-then-act
+        pair. This precondition is harmless for a task (which has no
+        children by construction) and so is not conditioned on `type` here.
+
+        specs/002-milestone-task-work-items FR-015a: the reverse direction
+        of the same problem. Review-readiness (`is_review_ready`) is
+        computed from each child's current status and evidence — but
+        archiving an attributed, resolved (`done`/`superseded`) child task
+        deletes that child's own evidence rows (see the cleanup `DELETE`s
+        below), which can silently invalidate a parent milestone's
+        readiness, or the evidence that justified an `open`/`review`
+        milestone's readiness at the moment `mark_in_review`/
+        `accept_milestone` ran, entirely underneath it. An attributed task
+        (`parent_id IS NOT NULL`) is therefore refused archival while its
+        parent milestone's status is `open` or `review`; it is permitted
+        once the parent has reached `accepted` or `superseded` (its
+        children can never change again after that point) or when the task
+        has no `parent_id` at all (001's original, unattributed-task
+        behavior, entirely unchanged). Same atomicity requirement and
+        mechanism as the FR-015 precondition above: embedded as a
+        correlated `EXISTS` against the *current* row's own `parent_id`
+        directly in this `UPDATE`'s `WHERE` clause, inside the same
+        `BEGIN IMMEDIATE` transaction, so a concurrent `accept_milestone`/
+        `mark_in_review`/`decline_review` on the parent cannot land between
+        a separate readiness check and this mutation. SQLite serializes
+        writers to one at a time regardless of transaction shape (a single
+        guarded `UPDATE` like `accept_milestone`'s is already atomic under
+        `connect()`'s autocommit mode, exactly like this method's own
+        `BEGIN IMMEDIATE`), so a concurrent `accept_milestone(parent)` and
+        `archive_work_item(child)` always serialize to one of exactly two
+        valid outcomes: this archival's `BEGIN IMMEDIATE` acquires the
+        write lock first and evaluates the parent as still `review`
+        (refused; `accept_milestone` then proceeds and succeeds
+        afterward), or `accept_milestone`'s `UPDATE` commits first and this
+        archival's subsequent `BEGIN IMMEDIATE` observes the already-
+        `accepted` parent (archival succeeds). Archival succeeding against
+        a parent that is still `open` or `review` is not a reachable
+        outcome of either ordering.
 
         Returns `True` iff the `UPDATE` actually matched a row — i.e.
         `id` exists, was at the moment this ran in one of its type's
-        terminal statuses, was not yet archived, and (if a milestone) had
-        no unresolved child. Returns `False` otherwise — a true, guarded
-        no-op, not an error, mirroring `mark_done`/`mark_superseded`'s own
-        "guarded transition returns whether it applied" convention: when
-        the `UPDATE` does not match, the cleanup `DELETE`s below are
-        skipped entirely. Re-running this on an already-archived item is a
-        true no-op: the guard includes `AND archived_at IS NULL`, so
-        `archived_at`/`updated_at` are left exactly as the first archival
-        set them, never bumped forward (data-model.md's "`archived_at`...
-        `NULL` until archived, then permanent").
+        terminal statuses, was not yet archived, had no unresolved child
+        (if a milestone), and had no attributed parent still `open` or
+        `review` (if a task with a `parent_id`). Returns `False` otherwise
+        — a true, guarded no-op, not an error, mirroring `mark_done`/
+        `mark_superseded`'s own "guarded transition returns whether it
+        applied" convention: when the `UPDATE` does not match, the cleanup
+        `DELETE`s below are skipped entirely. Re-running this on an
+        already-archived item is a true no-op: the guard includes `AND
+        archived_at IS NULL`, so `archived_at`/`updated_at` are left
+        exactly as the first archival set them, never bumped forward
+        (data-model.md's "`archived_at`... `NULL` until archived, then
+        permanent").
         """
         now = _now()
         conn = self._connect()
         try:
             with _transaction(conn):
                 cursor = conn.execute(
-                    "UPDATE work_items SET title = NULL, description = NULL, "
+                    "UPDATE work_items AS wi SET title = NULL, description = NULL, "
                     "source_kind = NULL, source_locator = NULL, "
                     "source_promoted_by = NULL, "
                     "created_at = NULL, archived_at = ?, updated_at = ? "
-                    "WHERE id = ? AND status IN ('done', 'accepted', 'superseded') "
-                    "AND archived_at IS NULL "
+                    "WHERE wi.id = ? AND wi.status IN ('done', 'accepted', 'superseded') "
+                    "AND wi.archived_at IS NULL "
                     "AND NOT EXISTS ("
                     "  SELECT 1 FROM work_items c WHERE c.parent_id = ? "
-                    "  AND c.status NOT IN ('done', 'accepted', 'superseded')"
+                    "  AND c.status NOT IN ('done', 'superseded')"
+                    ") "
+                    "AND ("
+                    "  wi.parent_id IS NULL "
+                    "  OR EXISTS ("
+                    "    SELECT 1 FROM work_items p WHERE p.id = wi.parent_id "
+                    "    AND p.status IN ('accepted', 'superseded')"
+                    "  )"
                     ")",
                     (now, now, id, id),
                 )

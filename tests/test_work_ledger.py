@@ -2538,6 +2538,220 @@ class TestMilestoneArchival(LedgerTestCase):
         self.assertEqual(item.status, "accepted")
 
 
+class TestTaskArchivalParentLifecycle(LedgerTestCase):
+    """FR-015a regression: archiving a task deletes that task's own
+    evidence rows (data-model.md's "Archival"), so archiving an
+    attributed, done+evidenced task while its parent milestone is still
+    `open` or `review` can silently invalidate the parent's
+    review-readiness — or the very evidence that justified an
+    already-in-flight review — out from underneath it. An attributed
+    task's archival is refused while its parent is `open`/`review`, and
+    permitted once the parent reaches its own terminal state
+    (`accepted`/`superseded`, at which point its child set can never
+    change again). An unattributed task (no `parent_id`) keeps 001's
+    original, parent-independent archival behavior unchanged."""
+
+    def _milestone_with_done_evidenced_child(self, milestone_id="M-1", task_id="T-1"):
+        self.ledger.create_work_item(
+            id=milestone_id,
+            title="M",
+            source_kind="adhoc",
+            source_locator=milestone_id,
+            type="milestone",
+        )
+        self.ledger.create_work_item(
+            id=task_id,
+            title="T",
+            source_kind="adhoc",
+            source_locator=task_id,
+            parent_id=milestone_id,
+        )
+        self.assertTrue(self.ledger.mark_done(task_id))
+        self.ledger.add_evidence(task_id, "commit", "abc")
+
+    def test_attributed_done_evidenced_task_cannot_be_archived_while_parent_open(self):
+        self._milestone_with_done_evidenced_child()
+        self.assertTrue(self.ledger.is_review_ready("M-1"))
+        before = self.ledger.get_work_item("T-1")
+
+        self.assertFalse(self.ledger.archive_work_item("T-1"))
+
+        after = self.ledger.get_work_item("T-1")
+        self.assertEqual(before, after)
+        # The invariant this regression exists for: archival must not be
+        # allowed to quietly knock a review-ready milestone off of
+        # review-ready by deleting the evidence that made it so.
+        self.assertTrue(self.ledger.is_review_ready("M-1"))
+
+    def test_attributed_task_cannot_be_archived_while_parent_in_review(self):
+        self._milestone_with_done_evidenced_child()
+        self.assertTrue(self.ledger.mark_in_review("M-1"))
+        before = self.ledger.get_work_item("T-1")
+
+        self.assertFalse(self.ledger.archive_work_item("T-1"))
+
+        after = self.ledger.get_work_item("T-1")
+        self.assertEqual(before, after)
+        self.assertEqual(self.ledger.get_work_item("M-1").status, "review")
+
+    def test_attributed_task_can_be_archived_after_parent_accepted(self):
+        self._milestone_with_done_evidenced_child()
+        self.assertTrue(self.ledger.mark_in_review("M-1"))
+        self.assertTrue(self.ledger.accept_milestone("M-1"))
+
+        self.assertTrue(self.ledger.archive_work_item("T-1"))
+
+        item = self.ledger.get_work_item("T-1")
+        self.assertIsNotNone(item.archived_at)
+        self.assertEqual(item.status, "done")
+        self.assertEqual(item.parent_id, "M-1")
+
+    def test_attributed_task_can_be_archived_after_parent_superseded(self):
+        self._milestone_with_done_evidenced_child()
+        self.ledger.create_work_item(
+            id="M-2",
+            title="M2",
+            source_kind="adhoc",
+            source_locator="M-2",
+            type="milestone",
+        )
+        self.assertTrue(self.ledger.mark_superseded("M-1", "M-2"))
+
+        self.assertTrue(self.ledger.archive_work_item("T-1"))
+
+        item = self.ledger.get_work_item("T-1")
+        self.assertIsNotNone(item.archived_at)
+
+    def test_unattributed_terminal_task_retains_001_archival_behavior(self):
+        # No parent_id at all — 001's original archival path, entirely
+        # unaffected by FR-015a's parent-lifecycle precondition.
+        self.ledger.create_work_item(
+            id="T-solo",
+            title="Solo",
+            source_kind="adhoc",
+            source_locator="solo",
+        )
+        self.assertTrue(self.ledger.mark_done("T-solo"))
+
+        self.assertTrue(self.ledger.archive_work_item("T-solo"))
+
+        item = self.ledger.get_work_item("T-solo")
+        self.assertIsNotNone(item.archived_at)
+        self.assertIsNone(item.parent_id)
+
+    def test_failed_archival_leaves_task_and_evidence_completely_unchanged(self):
+        self._milestone_with_done_evidenced_child()
+        before = self.ledger.get_work_item("T-1")
+
+        self.assertFalse(self.ledger.archive_work_item("T-1"))
+
+        after = self.ledger.get_work_item("T-1")
+        self.assertEqual(before, after)
+        self.assertTrue(self.ledger.has_qualifying_evidence("T-1"))
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            evidence_count = conn.execute(
+                "SELECT COUNT(*) FROM work_item_evidence WHERE work_item_id = 'T-1'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(evidence_count, 1)
+
+    def test_concurrent_archive_refused_while_review_commit_is_still_in_flight(self):
+        """One of the two valid race orderings between `accept_milestone`
+        and `archive_work_item(child)`: `archive_work_item`'s own
+        `BEGIN IMMEDIATE` acquires the write lock first (forced here by
+        holding an unrelated write lock open on a second connection while
+        M-1 is still `review`, then releasing it only once the archival
+        thread is already blocked waiting on it) and evaluates the
+        parent-lifecycle precondition against the still-`review` parent —
+        refused. `accept_milestone` proceeds only afterward and succeeds
+        normally. This proves archival never observes a stale pre-review
+        snapshot that could let it slip through before an in-flight review
+        commits."""
+        self._milestone_with_done_evidenced_child()
+        self.assertTrue(self.ledger.mark_in_review("M-1"))
+
+        conn_holder = work_ledger.connect(self.repo_root)
+        conn_holder.execute("BEGIN IMMEDIATE")
+        # Holds the ledger's single write lock with M-1 still 'review' —
+        # the exact state archive_work_item's own transaction must observe
+        # once it acquires the lock in turn.
+
+        archive_result = []
+
+        def do_archive():
+            archive_result.append(self.ledger.archive_work_item("T-1"))
+
+        t = threading.Thread(target=do_archive)
+        t.start()
+        time.sleep(0.05)
+        conn_holder.execute("COMMIT")
+        conn_holder.close()
+        t.join(timeout=5)
+        self.assertFalse(t.is_alive(), "archive_work_item() did not return")
+
+        self.assertEqual(
+            archive_result,
+            [False],
+            "archival must be refused while the parent milestone is "
+            "still in review, never racing ahead of a pending review",
+        )
+        item = self.ledger.get_work_item("T-1")
+        self.assertIsNone(item.archived_at)
+
+        # The parent's own lifecycle is unaffected by the refused archival
+        # attempt — acceptance still proceeds normally afterward.
+        self.assertTrue(self.ledger.accept_milestone("M-1"))
+
+    def test_concurrent_archive_serializes_after_an_in_flight_accept_commits(self):
+        """The other valid race ordering: `accept_milestone`'s own
+        transition to `accepted` is held open, uncommitted, on a second
+        connection while `archive_work_item(child)` runs concurrently on a
+        thread. `archive_work_item`'s `BEGIN IMMEDIATE` can only proceed
+        once the held write lock is released (SQLite serializes writers),
+        so its parent-lifecycle precondition is necessarily evaluated
+        against the *post-accept* state, never a stale pre-accept `review`
+        snapshot — proving the fix closes the race in this direction too,
+        not merely in the archive-goes-first direction."""
+        self._milestone_with_done_evidenced_child()
+        self.assertTrue(self.ledger.mark_in_review("M-1"))
+
+        now = "2026-08-27T00:00:00Z"
+        conn_holder = work_ledger.connect(self.repo_root)
+        conn_holder.execute("BEGIN IMMEDIATE")
+        conn_holder.execute(
+            "UPDATE work_items SET status = 'accepted', updated_at = ? "
+            "WHERE id = 'M-1' AND type = 'milestone' AND status = 'review'",
+            (now,),
+        )
+        # conn_holder now holds the write lock with an uncommitted
+        # M-1 -> accepted transition — the exact mid-race state a
+        # pre-fix (or non-atomic) precondition check could still miss.
+
+        archive_result = []
+
+        def do_archive():
+            archive_result.append(self.ledger.archive_work_item("T-1"))
+
+        t = threading.Thread(target=do_archive)
+        t.start()
+        time.sleep(0.05)
+        conn_holder.execute("COMMIT")
+        conn_holder.close()
+        t.join(timeout=5)
+        self.assertFalse(t.is_alive(), "archive_work_item() did not return")
+
+        self.assertEqual(
+            archive_result,
+            [True],
+            "archival must succeed once the parent's acceptance has "
+            "actually committed, even when that commit lands mid-race",
+        )
+        item = self.ledger.get_work_item("T-1")
+        self.assertIsNotNone(item.archived_at)
+
+
 class TestQuickstartEndToEndV2(LedgerTestCase):
     """T018: specs/002-milestone-task-work-items/quickstart.md's five
     scenarios end to end, mirroring TestQuickstartEndToEnd's own

@@ -8,7 +8,7 @@
 
 ## Summary
 
-Add a `type` (`task` | `milestone`) and `parent_id` column to the existing `work_items` table, replace its flat `status` `CHECK` with a compound `(type, status)` `CHECK` covering both vocabularies, and add derived-query support for "qualifying mechanical evidence" (a done task) and "review readiness" (a milestone) — no new stored facts. Extend the existing guarded-transition pattern (`mark_done`/`mark_superseded`) with milestone-specific transitions (`mark_in_review`, `decline_review`, `accept_milestone`) and an archival precondition (`archive_work_item` refuses when a milestone still has unresolved children). Extend `generate_projection()` to filter to `type = 'task'` only. Bump `_SCHEMA_VERSION` to 2 with a forward migration for existing databases (`ALTER TABLE` to add columns, backfill `type = 'task'` for all pre-existing rows, replace the `CHECK` constraint via SQLite's table-rebuild pattern since SQLite cannot `ALTER` a `CHECK` in place). No new module, no new top-level dependency, no new CLI surface.
+Add a `type` (`task` | `milestone`) and `parent_id` column to the existing `work_items` table, replace its flat `status` `CHECK` with a compound `(type, status)` `CHECK` covering both vocabularies, and add derived-query support for "qualifying mechanical evidence" (a done task) and "review readiness" (a milestone) — no new stored facts. Extend the existing guarded-transition pattern (`mark_done`/`mark_superseded`) with milestone-specific transitions (`mark_in_review`, `decline_review`, `accept_milestone`) and two archival preconditions (`archive_work_item` refuses when a milestone still has unresolved children, and separately refuses to archive an attributed task while its parent milestone is still open or in review, since archival deletes the task's own evidence and could otherwise invalidate the parent's review-readiness underneath it). Extend `generate_projection()` to filter to `type = 'task'` only. Bump `_SCHEMA_VERSION` to 2 with a forward migration for existing databases (`ALTER TABLE` to add columns, backfill `type = 'task'` for all pre-existing rows, replace the `CHECK` constraint via SQLite's table-rebuild pattern since SQLite cannot `ALTER` a `CHECK` in place). No new module, no new top-level dependency, no new CLI surface.
 
 ## Technical Context
 
@@ -76,14 +76,16 @@ src/bindle/
                            # migration from v1, new derived-query helpers
                            # (mechanical evidence, review readiness), new guarded
                            # transitions (mark_in_review, decline_review,
-                           # accept_milestone), archival precondition for
-                           # milestones with unresolved children, projection
-                           # filtered to type='task'
+                           # accept_milestone), archival preconditions for
+                           # milestones with unresolved children and for
+                           # attributed tasks whose parent is still
+                           # open/review, projection filtered to type='task'
 
 tests/
 └── test_work_ledger.py   # EXTENDED — existing 8 test classes unchanged;
                            # new test classes for type/parent_id, milestone
                            # lifecycle, review readiness, milestone archival,
+                           # task-archival parent-lifecycle preconditions,
                            # projection type-filtering, and v1→v2 migration
 ```
 

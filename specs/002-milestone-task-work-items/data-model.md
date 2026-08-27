@@ -119,42 +119,71 @@ All three follow 001's existing guarded-conditional-`UPDATE` pattern (`mark_done
 
 No trigger, no transition-graph table — the `WHERE`-clause precondition on each statement is the entire enforcement mechanism, identical in kind to 001's existing `mark_done`/`mark_superseded`.
 
-## Archival — milestone precondition and `parent_id` survival
+## Archival — milestone precondition, task-parent-lifecycle precondition, and `parent_id` survival
 
-001's archival transaction (`data-model.md`, "Archival") is extended with one precondition, evaluated before the transaction begins, and one addition to what a milestone's thinned row preserves:
+001's archival transaction (`data-model.md`, "Archival") is extended with two preconditions, each evaluated atomically with the mutation itself, and one addition to what a milestone's thinned row preserves:
 
-The unresolved-child precondition (milestones only) is embedded directly in
-the guarded `UPDATE`'s own `WHERE` clause, inside the same `BEGIN IMMEDIATE`
-transaction as the mutation itself — mirroring the "Enter review" transition's
-own inline `<review-readiness condition>` above (FR-010), not evaluated by a
-separate statement beforehand. A pre-transaction check-then-act pair would
-leave a race window in which a concurrent writer could insert a new open
-child, or reopen/re-review a resolved one, between the check and the
+1. **Unresolved-child precondition (milestones only, FR-015)**: refuse when any child (`parent_id` naming the item being archived) has a status outside `('done', 'superseded')` — a child is always a `task`, which per FR-005 can never itself be `accepted`, so that value does not appear in this check (001-era code and an earlier draft of this feature both listed it in error; see "Decision: milestone archival precondition" in `research.md`).
+2. **Parent-lifecycle precondition (tasks with a `parent_id` only, FR-015a)**: refuse when the item being archived is a task naming a `parent_id` whose milestone is currently `open` or `review`. Archiving a task deletes that task's own evidence rows (the `DELETE FROM work_item_evidence` below) — doing so while the parent is still `open`/`review` can silently invalidate the parent's review-readiness, or the evidence that justified an already-in-flight review, without the parent's own row ever recording that anything changed. Permitted once the parent reaches `accepted`/`superseded` (its child set can never change again after that point) or when the task has no `parent_id` at all (001's original, parent-independent behavior, unchanged).
+
+Both preconditions are embedded directly in the guarded `UPDATE`'s own `WHERE`
+clause, inside the same `BEGIN IMMEDIATE` transaction as the mutation itself —
+mirroring the "Enter review" transition's own inline `<review-readiness
+condition>` above (FR-010), not evaluated by a separate statement beforehand.
+A pre-transaction check-then-act pair would leave a race window in which a
+concurrent writer could insert a new open child (or reopen/re-review a
+resolved one), or transition the parent milestone, between the check and the
 mutation — this closes that window the same way `mark_in_review` closes its
-own:
+own. The parent-lifecycle precondition's `EXISTS` subquery is correlated
+against the row being updated's own `parent_id`; because the subquery's own
+`FROM work_items p` shares that column name, the `UPDATE` target MUST be
+aliased (`UPDATE work_items AS wi ...`) and every outer reference qualified
+(`wi.parent_id`, not bare `parent_id`) — otherwise the unqualified name
+resolves to the subquery's own inner table instead of the outer row, silently
+matching nothing:
 
 ```sql
 BEGIN IMMEDIATE;
-UPDATE work_items
+UPDATE work_items AS wi
   SET title = NULL, description = NULL, source_kind = NULL, source_locator = NULL,
       source_promoted_by = NULL, created_at = NULL,
       archived_at = :now, updated_at = :now
-  WHERE id = :id AND status IN ('done', 'accepted', 'superseded')
-    AND archived_at IS NULL
+  WHERE wi.id = :id AND wi.status IN ('done', 'accepted', 'superseded')
+    AND wi.archived_at IS NULL
     AND NOT EXISTS (
       SELECT 1 FROM work_items c
       WHERE c.parent_id = :id
-        AND c.status NOT IN ('done', 'accepted', 'superseded')
+        AND c.status NOT IN ('done', 'superseded')
+    )
+    AND (
+      wi.parent_id IS NULL
+      OR EXISTS (
+        SELECT 1 FROM work_items p
+        WHERE p.id = wi.parent_id AND p.status IN ('accepted', 'superseded')
+      )
     );
 -- If the UPDATE matches no row (nonexistent id, not yet terminal, already
--- archived, or — for a milestone — an unresolved child at the moment this
--- statement runs), archive_work_item returns False and the DELETEs below
--- are skipped entirely.
+-- archived, an unresolved child at the moment this statement runs, or an
+-- attributed task whose parent is still open/review), archive_work_item
+-- returns False and the DELETEs below are skipped entirely.
 DELETE FROM work_item_evidence WHERE work_item_id = :id;
 DELETE FROM work_item_blocked_by WHERE work_item_id = :id;
 DELETE FROM work_item_claims WHERE work_item_id = :id;
 COMMIT;
 ```
+
+**Concurrency**: a concurrent `accept_milestone(parent)` racing
+`archive_work_item(child)` always serializes to one of exactly two valid
+outcomes, never to archival succeeding against a parent that remains `open`
+or `review`. SQLite permits only one writer at a time regardless of
+transaction shape — `accept_milestone`'s single guarded `UPDATE` is already
+atomic under `connect()`'s autocommit mode, exactly like this method's own
+`BEGIN IMMEDIATE` — so either `archive_work_item`'s `BEGIN IMMEDIATE`
+acquires the write lock first and observes the parent as still `review`
+(refused; `accept_milestone` then proceeds and succeeds afterward), or
+`accept_milestone`'s `UPDATE` commits first and `archive_work_item`'s
+subsequent `BEGIN IMMEDIATE` observes the already-`accepted` parent
+(archival succeeds).
 
 **What survives archival forever, extended**: `id`, `type`, `status`, `superseded_by`, `archived_at` — `type` is added to 001's existing surviving set specifically so a child's `parent_id` reference, once resolved, can still report *what kind* of thing it was attributed to; `status` already survived and now additionally carries a milestone's terminal value (`accepted`/`superseded`) exactly as it already carried a task's. **`parent_id` on a *child* row is never touched by its *parent's* archival** — the transaction above only ever mutates the identified item's own row (`WHERE id = :id`), so a task's `parent_id` column is untouched regardless of whether the milestone it names is later archived; only the *milestone's own* row is thinned. Resolving a task's `parent_id` after its milestone is archived is therefore the same single-row lookup 001's `blocked_by` resolution already uses, now also reading the survived `type` column when useful for display.
 
