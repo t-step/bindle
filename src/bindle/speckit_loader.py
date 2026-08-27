@@ -72,7 +72,8 @@ _SENTENCE_BOUNDARY_RE = re.compile(r"(.+?[.!?])(?:\s|$)")
 
 
 class TasksFileError(RuntimeError):
-    """Raised when a feature directory's `tasks.md` is missing or empty.
+    """Raised when a feature directory's `tasks.md` is missing, empty, or
+    malformed in a way that stops the whole load.
 
     spec.md's Edge Cases: "Loading is invoked against a feature directory
     whose tasks.md does not exist, or exists but is empty — the operation
@@ -81,6 +82,34 @@ class TasksFileError(RuntimeError):
     non-empty but contains zero parseable task lines (T004) — from a
     caller's perspective this is the same "nothing to load, and here is
     why" outcome as a missing or genuinely empty file.
+
+    Also raised when the same Spec Kit task id (e.g. `T003`) is declared
+    by more than one task line in the same `tasks.md` — parsing task
+    lines into a dict keyed by task id would otherwise let a later line
+    silently overwrite an earlier one with no indication either the
+    duplicate or the choice of winner ever happened. Reported before any
+    work item is created or resynced, so a file with a duplicate id loads
+    nothing rather than partially loading and silently discarding one
+    line's content.
+    """
+
+
+class SourceIdentityConflictError(RuntimeError):
+    """Raised when a task's deterministic work-item id collides with an
+    existing row whose recorded provenance is not this same Spec Kit
+    task's own (`source_kind = 'speckit_task'`, `source_locator` equal to
+    this feature/task's own `{feature_dir}/tasks.md#{task_id}`).
+
+    A primary-key collision on the deterministic id is only safe to treat
+    as "this exact task was already loaded before" — and therefore safe
+    to resync — when the existing row's provenance actually matches. An id
+    can otherwise collide with an unrelated `adhoc`/`plan`-sourced item, or
+    with a `speckit_task` item loaded from a different locator, since
+    nothing in the schema itself prevents an id from being reused for a
+    different purpose. Treating that as an idempotent reload would resync
+    (and on a future reload, keep resyncing) a work item this loader does
+    not actually own. Raised instead, before any mutation of the
+    conflicting row — the existing row is left byte-for-byte unchanged.
     """
 
 
@@ -216,9 +245,16 @@ def load_feature(
     Reference"). `tasks.md` is read from
     `os.path.join(ledger.repo_root, feature_dir, "tasks.md")`.
 
-    Raises `TasksFileError` when `tasks.md` does not exist, is empty, or
-    contains zero parseable task lines (spec.md's Edge Cases, T004) —
-    reported clearly rather than silently producing zero work items.
+    Raises `TasksFileError` when `tasks.md` does not exist, is empty,
+    contains zero parseable task lines (spec.md's Edge Cases, T004), or
+    declares the same Spec Kit task id more than once — each reported
+    clearly rather than silently producing zero work items, or silently
+    letting one line's content overwrite another's.
+
+    Raises `SourceIdentityConflictError` when a task line's deterministic
+    id collides with an existing row whose provenance is not this same
+    Spec Kit task's own — see that error's docstring. The existing row is
+    never mutated in this case.
 
     Two passes within this one invocation (research.md's "Decision:
     dependency loading order within one feature directory"), so a
@@ -227,12 +263,17 @@ def load_feature(
 
     Pass 1 — for each parsed task line, attempt `create_work_item()`. A
     collision on the deterministic, source-derived `id` (a primary-key
-    `sqlite3.IntegrityError`) means this task was already loaded by a
-    prior invocation; in that case, the loader compares the existing
-    row's `title`/`description` against the freshly parsed values and
-    calls `resync_declarative_fields()` only when they actually differ —
-    never unconditionally — so reloading an unchanged `tasks.md` leaves
-    every existing row byte-for-byte unchanged (FR-006, SC-002), while a
+    `sqlite3.IntegrityError`) means either this task was already loaded by
+    a prior invocation of this same loader, or the id was reused by
+    something else entirely — the loader first confirms the existing
+    row's `source_kind`/`source_locator` actually match this task's own
+    before treating the collision as an idempotent reload (raising
+    `SourceIdentityConflictError` otherwise). Once provenance is
+    confirmed, the loader compares the existing row's `title`/
+    `description` against the freshly parsed values and calls
+    `resync_declarative_fields()` only when they actually differ — never
+    unconditionally — so reloading an unchanged `tasks.md` leaves every
+    existing row byte-for-byte unchanged (FR-006, SC-002), while a
     genuinely edited line's declarative text is re-synced on the next
     reload (FR-007). `status`, claims, and evidence are never read or
     written by this loader at all — `resync_declarative_fields()` itself
@@ -262,6 +303,7 @@ def load_feature(
     feature_dir_name = os.path.basename(os.path.normpath(feature_dir))
 
     parsed: dict[str, ParsedTaskLine] = {}
+    first_seen_at: dict[str, int] = {}
     skipped: list[SkippedLine] = []
     for line_number, raw_line in enumerate(lines, start=1):
         outcome = _parse_line(raw_line)
@@ -277,7 +319,16 @@ def load_feature(
             )
             continue
         assert outcome.task is not None
-        parsed[outcome.task.task_id] = outcome.task
+        task_id = outcome.task.task_id
+        if task_id in parsed:
+            raise TasksFileError(
+                f"{feature_dir}: tasks.md at {tasks_path!r} declares task "
+                f"{task_id} more than once (line {first_seen_at[task_id]} "
+                f"and line {line_number}); duplicate task ids are not "
+                "loadable"
+            )
+        parsed[task_id] = outcome.task
+        first_seen_at[task_id] = line_number
 
     if not parsed:
         raise TasksFileError(
@@ -308,7 +359,22 @@ def load_feature(
             if not _is_duplicate_key_error(exc):
                 raise
             existing = ledger.get_work_item(item_id)
-            if existing is not None and (
+            if existing is None:
+                continue
+            if (
+                existing.source_kind != "speckit_task"
+                or existing.source_locator != source_locator
+            ):
+                raise SourceIdentityConflictError(
+                    f"{item_id!r} already exists with source_kind="
+                    f"{existing.source_kind!r}, source_locator="
+                    f"{existing.source_locator!r}; this load's own task "
+                    f"{task.task_id!r} from {feature_dir!r} expects "
+                    f"source_kind='speckit_task', source_locator="
+                    f"{source_locator!r} — refusing to treat this as a "
+                    "reload of the same source"
+                )
+            if (
                 existing.title != task.title
                 or existing.description != task.description
             ):

@@ -353,6 +353,109 @@ class TestLoadFeatureUnparseableLineAndMissingFile(SpeckitLoaderTestCase):
             speckit_loader.load_feature(self.ledger, feature_dir)
 
 
+class TestLoadFeatureSourceIdentityConflict(SpeckitLoaderTestCase):
+    """A task line's deterministic id can collide with an existing row
+    that was never loaded by this Spec Kit task at all -- an unrelated
+    adhoc item reusing the same id, or a speckit_task item recorded
+    against a different source_locator. The loader must not treat this as
+    an idempotent reload: it must raise SourceIdentityConflictError and
+    leave the colliding row -- and every other existing row -- completely
+    unmutated."""
+
+    def test_collision_with_unrelated_adhoc_item_raises_and_does_not_mutate(
+        self,
+    ):
+        feature_dir = self.write_tasks_md(
+            "specs/001-example-feature",
+            "- [ ] T001 Set up the project scaffolding.\n",
+        )
+        colliding_id = "speckit:001-example-feature:T001"
+        self.ledger.create_work_item(
+            id=colliding_id,
+            title="An unrelated, manually created adhoc item.",
+            source_kind="adhoc",
+            source_locator="manually created, not from Spec Kit",
+        )
+        # A second, pre-existing work item with nothing to do with this
+        # collision at all -- proof the conflict does not leak mutation
+        # beyond the colliding row.
+        self.ledger.create_work_item(
+            id="unrelated-item",
+            title="Some other work item entirely.",
+            source_kind="adhoc",
+            source_locator="elsewhere",
+        )
+
+        before_colliding = self.ledger.get_work_item(colliding_id)
+        before_unrelated = self.ledger.get_work_item("unrelated-item")
+
+        with self.assertRaises(speckit_loader.SourceIdentityConflictError):
+            speckit_loader.load_feature(self.ledger, feature_dir)
+
+        self.assertEqual(
+            self.ledger.get_work_item(colliding_id), before_colliding
+        )
+        self.assertEqual(
+            self.ledger.get_work_item("unrelated-item"), before_unrelated
+        )
+
+    def test_collision_with_speckit_task_from_different_locator_raises(self):
+        feature_dir = self.write_tasks_md(
+            "specs/001-example-feature",
+            "- [ ] T001 Set up the project scaffolding.\n",
+        )
+        colliding_id = "speckit:001-example-feature:T001"
+        # Same source_kind, but a source_locator naming a different
+        # feature/task -- not this loader's own source.
+        self.ledger.create_work_item(
+            id=colliding_id,
+            title="A different speckit task with the same derived id.",
+            source_kind="speckit_task",
+            source_locator="specs/999-other-feature/tasks.md#T001",
+        )
+        before = self.ledger.get_work_item(colliding_id)
+
+        with self.assertRaises(speckit_loader.SourceIdentityConflictError):
+            speckit_loader.load_feature(self.ledger, feature_dir)
+
+        self.assertEqual(self.ledger.get_work_item(colliding_id), before)
+
+
+class TestLoadFeatureDuplicateTaskId(SpeckitLoaderTestCase):
+    """A tasks.md that declares the same Spec Kit task id on more than one
+    line must not silently let the later line's parsed content overwrite
+    the earlier one's -- reported explicitly as a load-stopping
+    TasksFileError naming both conflicting line numbers, with zero work
+    items created from any line in the file."""
+
+    def test_duplicate_task_id_raises_with_line_numbers_and_creates_nothing(
+        self,
+    ):
+        content = (
+            "- [ ] T001 First occurrence of this task id.\n"
+            "- [ ] T002 An unrelated, unambiguous task.\n"
+            "- [ ] T001 Second, conflicting occurrence of the same id.\n"
+        )
+        feature_dir = self.write_tasks_md("specs/001-example-feature", content)
+
+        with self.assertRaises(speckit_loader.TasksFileError) as ctx:
+            speckit_loader.load_feature(self.ledger, feature_dir)
+
+        message = str(ctx.exception)
+        self.assertIn("T001", message)
+        self.assertIn("line 1", message)
+        self.assertIn("line 3", message)
+
+        # The whole load stopped during parsing, before pass 1 ever ran --
+        # not even the unambiguous T002 line was loaded.
+        self.assertIsNone(
+            self.ledger.get_work_item("speckit:001-example-feature:T001")
+        )
+        self.assertIsNone(
+            self.ledger.get_work_item("speckit:001-example-feature:T002")
+        )
+
+
 class TestLoadFeatureUnresolvedDependency(SpeckitLoaderTestCase):
     """spec.md Edge Cases: a task line names a dependency on a Spec Kit
     task id that does not exist anywhere in the same tasks.md — the
