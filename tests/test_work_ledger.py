@@ -1,3 +1,4 @@
+import inspect
 import os
 import sqlite3
 import subprocess
@@ -70,8 +71,8 @@ class TestSchemaBootstrap(LedgerTestCase):
         conn1 = work_ledger.connect(self.repo_root)
         conn1.execute(
             "INSERT INTO work_items "
-            "(id, status, source_kind, source_locator, created_at, updated_at) "
-            "VALUES ('WI-1', 'open', 'adhoc', 'x', ?, ?)",
+            "(id, type, status, source_kind, source_locator, created_at, updated_at) "
+            "VALUES ('WI-1', 'task', 'open', 'adhoc', 'x', ?, ?)",
             (_NOW, _NOW),
         )
         conn1.close()
@@ -98,8 +99,8 @@ class TestSchemaBootstrap(LedgerTestCase):
         try:
             conn.execute(
                 "INSERT INTO work_items "
-                "(id, status, source_kind, source_locator, created_at, updated_at) "
-                "VALUES ('WI-1', 'open', 'adhoc', 'x', ?, ?)",
+                "(id, type, status, source_kind, source_locator, created_at, updated_at) "
+                "VALUES ('WI-1', 'task', 'open', 'adhoc', 'x', ?, ?)",
                 (_NOW, _NOW),
             )
             with self.assertRaises(sqlite3.IntegrityError):
@@ -115,8 +116,8 @@ class TestSchemaBootstrap(LedgerTestCase):
         try:
             conn.execute(
                 "INSERT INTO work_items "
-                "(id, status, source_kind, source_locator, created_at, updated_at) "
-                "VALUES ('WI-1', 'open', 'adhoc', 'x', ?, ?)",
+                "(id, type, status, source_kind, source_locator, created_at, updated_at) "
+                "VALUES ('WI-1', 'task', 'open', 'adhoc', 'x', ?, ?)",
                 (_NOW, _NOW),
             )
             with self.assertRaises(sqlite3.IntegrityError):
@@ -1561,6 +1562,810 @@ class TestQuickstartEndToEnd(LedgerTestCase):
         # Acceptance Scenario 3.
         self.assertEqual(self.ledger.get_work_item("WI-6").status, "open")
         self.assertTrue(self.ledger.is_claimed("WI-6"))
+
+
+# ============================================================================
+# specs/002-milestone-task-work-items: milestone/task work-item model.
+# ============================================================================
+
+# The exact version-1 schema (specs/001-durable-work-ledger/data-model.md),
+# frozen here verbatim so TestSchemaMigrationV1ToV2 can construct a real
+# pre-migration database independent of whatever work_ledger._SCHEMA_STATEMENTS
+# currently contains.
+_V1_WORK_ITEMS_SQL = """
+CREATE TABLE work_items (
+  id                TEXT PRIMARY KEY,
+  title             TEXT,
+  status            TEXT NOT NULL CHECK (status IN ('open', 'done', 'superseded')),
+  superseded_by     TEXT REFERENCES work_items(id),
+  source_kind       TEXT CHECK (source_kind IN ('speckit_task', 'plan', 'adhoc')),
+  source_locator    TEXT,
+  source_promoted_by TEXT,
+  created_at        TEXT,
+  updated_at        TEXT NOT NULL,
+  archived_at       TEXT,
+  CHECK (
+    (status = 'superseded' AND superseded_by IS NOT NULL) OR
+    (status != 'superseded' AND superseded_by IS NULL)
+  )
+)
+"""
+
+_V1_OTHER_TABLES_SQL = (
+    """
+    CREATE TABLE work_item_blocked_by (
+      work_item_id      TEXT NOT NULL REFERENCES work_items(id),
+      blocked_on_id     TEXT NOT NULL REFERENCES work_items(id),
+      PRIMARY KEY (work_item_id, blocked_on_id),
+      CHECK (work_item_id != blocked_on_id)
+    )
+    """,
+    """
+    CREATE TABLE work_item_claims (
+      work_item_id      TEXT PRIMARY KEY REFERENCES work_items(id),
+      owner             TEXT NOT NULL,
+      claimed_at        TEXT NOT NULL,
+      worktree_path     TEXT,
+      branch            TEXT
+    )
+    """,
+    """
+    CREATE TABLE work_item_evidence (
+      evidence_id       INTEGER PRIMARY KEY,
+      work_item_id      TEXT NOT NULL REFERENCES work_items(id),
+      kind              TEXT NOT NULL CHECK (kind IN ('branch', 'commit', 'pull_request', 'other')),
+      value             TEXT NOT NULL,
+      recorded_at       TEXT NOT NULL,
+      note              TEXT
+    )
+    """,
+)
+
+
+class TestSchemaMigrationV1ToV2(LedgerTestCase):
+    """T005: an existing version-1 database migrates forward to v2
+    automatically and safely (research.md's "Decision: schema migration
+    from version 1 to version 2")."""
+
+    def _create_v1_database(self, rows=()):
+        db_path = work_ledger.ledger_path(self.repo_root)
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute(_V1_WORK_ITEMS_SQL)
+            for statement in _V1_OTHER_TABLES_SQL:
+                conn.execute(statement)
+            for row_id in rows:
+                conn.execute(
+                    "INSERT INTO work_items "
+                    "(id, title, status, source_kind, source_locator, created_at, updated_at) "
+                    "VALUES (?, ?, 'open', 'adhoc', ?, ?, ?)",
+                    (row_id, f"Item {row_id}", f"loc-{row_id}", _NOW, _NOW),
+                )
+            conn.execute("PRAGMA user_version = 1")
+            conn.commit()
+        finally:
+            conn.close()
+
+    def test_existing_v1_database_migrates_to_v2_on_open(self):
+        self._create_v1_database(rows=["WI-1", "WI-2"])
+
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            self.assertEqual(
+                conn.execute("PRAGMA user_version").fetchone()[0],
+                work_ledger._SCHEMA_VERSION,
+            )
+            cols = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(work_items)").fetchall()
+            }
+            self.assertTrue({"type", "parent_id", "description"} <= cols)
+        finally:
+            conn.close()
+
+    def test_v1_rows_are_backfilled_as_type_task_with_no_parent(self):
+        self._create_v1_database(rows=["WI-1"])
+
+        item = work_ledger.WorkLedger(self.repo_root).get_work_item("WI-1")
+        self.assertEqual(item.type, "task")
+        self.assertIsNone(item.parent_id)
+        self.assertEqual(item.status, "open")
+        self.assertEqual(item.title, "Item WI-1")
+
+    def test_compound_check_is_enforced_after_migration(self):
+        self._create_v1_database()
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            with self.assertRaises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO work_items (id, type, status, updated_at) "
+                    "VALUES (?, 'milestone', 'done', ?)",
+                    ("M-bad", _NOW),
+                )
+        finally:
+            conn.close()
+
+    def test_migration_crash_mid_rebuild_leaves_v1_database_intact(self):
+        self._create_v1_database(rows=["WI-1"])
+
+        real_create_sql = work_ledger._work_items_create_sql
+
+        def broken(table_name):
+            if table_name == "work_items_new":
+                return "CREATE TABLE this is not valid sql"
+            return real_create_sql(table_name)
+
+        work_ledger._work_items_create_sql = broken
+        try:
+            with self.assertRaises(sqlite3.OperationalError):
+                work_ledger.connect(self.repo_root)
+        finally:
+            work_ledger._work_items_create_sql = real_create_sql
+
+        # Inspect on a raw connection, bypassing work_ledger.connect
+        # entirely, so this inspection does not re-trigger the fault.
+        raw_conn = sqlite3.connect(work_ledger.ledger_path(self.repo_root))
+        try:
+            self.assertEqual(raw_conn.execute("PRAGMA user_version").fetchone()[0], 1)
+            cols = {
+                row[1]
+                for row in raw_conn.execute("PRAGMA table_info(work_items)").fetchall()
+            }
+            self.assertNotIn("type", cols)
+            row = raw_conn.execute(
+                "SELECT id FROM work_items WHERE id = 'WI-1'"
+            ).fetchone()
+            self.assertEqual(row[0], "WI-1")
+        finally:
+            raw_conn.close()
+
+        # A subsequent, ordinary open (fault removed) migrates fully.
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            self.assertEqual(
+                conn.execute("PRAGMA user_version").fetchone()[0],
+                work_ledger._SCHEMA_VERSION,
+            )
+        finally:
+            conn.close()
+        item = work_ledger.WorkLedger(self.repo_root).get_work_item("WI-1")
+        self.assertEqual(item.type, "task")
+
+
+class TestWorkItemTypeAndParent(LedgerTestCase):
+    """T006: type immutability (no mutator exists), parent_id creation
+    validation (FR-002/FR-003), and type-aware blocking resolution across
+    every type combination."""
+
+    def test_type_has_no_mutator_in_the_public_api(self):
+        public_methods = [
+            name
+            for name in dir(work_ledger.WorkLedger)
+            if not name.startswith("_")
+            and callable(getattr(work_ledger.WorkLedger, name))
+        ]
+        for name in public_methods:
+            if name == "create_work_item":
+                continue
+            params = inspect.signature(getattr(work_ledger.WorkLedger, name)).parameters
+            self.assertNotIn("type", params, f"{name} must not accept a type parameter")
+
+    def test_task_with_nonexistent_parent_is_rejected_atomically(self):
+        with self.assertRaises(ValueError):
+            self.ledger.create_work_item(
+                id="T-1",
+                title="Task",
+                source_kind="adhoc",
+                source_locator="x",
+                parent_id="does-not-exist",
+            )
+        self.assertIsNone(self.ledger.get_work_item("T-1"))
+
+    def test_task_with_task_typed_parent_is_rejected_atomically(self):
+        self.ledger.create_work_item(
+            id="T-parent", title="P", source_kind="adhoc", source_locator="x"
+        )
+        with self.assertRaises(ValueError):
+            self.ledger.create_work_item(
+                id="T-child",
+                title="C",
+                source_kind="adhoc",
+                source_locator="y",
+                parent_id="T-parent",
+            )
+        self.assertIsNone(self.ledger.get_work_item("T-child"))
+
+    def test_task_with_valid_milestone_parent_is_created(self):
+        self.ledger.create_work_item(
+            id="M-1", title="M", source_kind="adhoc", source_locator="x", type="milestone"
+        )
+        self.ledger.create_work_item(
+            id="T-1",
+            title="T",
+            source_kind="adhoc",
+            source_locator="y",
+            parent_id="M-1",
+        )
+        item = self.ledger.get_work_item("T-1")
+        self.assertEqual(item.type, "task")
+        self.assertEqual(item.parent_id, "M-1")
+
+    def test_milestone_with_parent_id_is_rejected_by_schema_check(self):
+        self.ledger.create_work_item(
+            id="M-1", title="M", source_kind="adhoc", source_locator="x", type="milestone"
+        )
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.ledger.create_work_item(
+                id="M-2",
+                title="M2",
+                source_kind="adhoc",
+                source_locator="y",
+                type="milestone",
+                parent_id="M-1",
+            )
+
+    def test_mark_done_on_a_milestone_violates_the_compound_check(self):
+        self.ledger.create_work_item(
+            id="M-1", title="M", source_kind="adhoc", source_locator="x", type="milestone"
+        )
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.ledger.mark_done("M-1")
+        self.assertEqual(self.ledger.get_work_item("M-1").status, "open")
+
+    def test_type_aware_blocking_resolution_task_on_milestone(self):
+        self.ledger.create_work_item(
+            id="M-1", title="M", source_kind="adhoc", source_locator="x", type="milestone"
+        )
+        self.ledger.create_work_item(
+            id="T-1",
+            title="T",
+            source_kind="adhoc",
+            source_locator="y",
+            blocked_by=["M-1"],
+        )
+        self.assertTrue(self.ledger.is_blocked("T-1"))
+
+        # Force M-1 to its terminal state directly, isolating resolution
+        # semantics from review-readiness/transition mechanics (mirroring
+        # 001's own T022 direct-fixture-construction precedent).
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            conn.execute("UPDATE work_items SET status = 'accepted' WHERE id = 'M-1'")
+        finally:
+            conn.close()
+        self.assertFalse(self.ledger.is_blocked("T-1"))
+
+    def test_type_aware_blocking_resolution_milestone_on_task(self):
+        self.ledger.create_work_item(
+            id="T-1", title="T", source_kind="adhoc", source_locator="x"
+        )
+        self.ledger.create_work_item(
+            id="M-1",
+            title="M",
+            source_kind="adhoc",
+            source_locator="y",
+            type="milestone",
+            blocked_by=["T-1"],
+        )
+        self.assertTrue(self.ledger.is_blocked("M-1"))
+        self.assertTrue(self.ledger.mark_done("T-1"))
+        self.assertFalse(self.ledger.is_blocked("M-1"))
+
+    def test_milestone_review_state_does_not_resolve_a_dependent(self):
+        self.ledger.create_work_item(
+            id="M-1", title="M", source_kind="adhoc", source_locator="x", type="milestone"
+        )
+        self.ledger.create_work_item(
+            id="T-1",
+            title="T",
+            source_kind="adhoc",
+            source_locator="y",
+            blocked_by=["M-1"],
+        )
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            conn.execute("UPDATE work_items SET status = 'review' WHERE id = 'M-1'")
+        finally:
+            conn.close()
+        self.assertTrue(self.ledger.is_blocked("T-1"))
+
+
+class TestMilestoneTaskAttribution(LedgerTestCase):
+    """T007 (User Story 1): a milestone and its attributed tasks survive
+    a fresh ledger handle, and every 001-defined behavior (claim,
+    evidence) works identically against a milestone row."""
+
+    def test_attribution_survives_a_fresh_ledger_handle(self):
+        self.ledger.create_work_item(
+            id="M-1",
+            title="Ship the thing",
+            source_kind="plan",
+            source_locator="plans/x",
+            type="milestone",
+        )
+        self.ledger.create_work_item(
+            id="T-1",
+            title="Do part 1",
+            source_kind="plan",
+            source_locator="plans/x#1",
+            parent_id="M-1",
+        )
+        self.ledger.create_work_item(
+            id="T-2",
+            title="Do part 2",
+            source_kind="plan",
+            source_locator="plans/x#2",
+            parent_id="M-1",
+        )
+
+        fresh = work_ledger.WorkLedger(self.repo_root)
+        m1 = fresh.get_work_item("M-1")
+        t1 = fresh.get_work_item("T-1")
+        t2 = fresh.get_work_item("T-2")
+        self.assertEqual(m1.type, "milestone")
+        self.assertIsNone(m1.parent_id)
+        self.assertEqual(t1.parent_id, "M-1")
+        self.assertEqual(t2.parent_id, "M-1")
+
+    def test_001_behaviors_work_identically_against_a_milestone_row(self):
+        self.ledger.create_work_item(
+            id="M-1", title="M", source_kind="adhoc", source_locator="x", type="milestone"
+        )
+
+        self.assertTrue(self.ledger.claim("M-1", "reviewer-1"))
+        self.assertFalse(self.ledger.claim("M-1", "reviewer-2"))
+        self.assertTrue(self.ledger.is_claimed("M-1"))
+
+        self.ledger.add_evidence("M-1", "other", "decision-record-link")
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            evidence = conn.execute(
+                "SELECT kind, value FROM work_item_evidence WHERE work_item_id = 'M-1'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(evidence, ("other", "decision-record-link"))
+
+        self.ledger.release_claim("M-1", "reviewer-1")
+        self.assertFalse(self.ledger.is_claimed("M-1"))
+
+
+class TestQualifyingMechanicalEvidence(LedgerTestCase):
+    """T009 (User Story 2): has_qualifying_evidence is a pure, read-only
+    derived predicate; mark_done's own behavior/signature is unchanged
+    from 001."""
+
+    def test_done_task_without_evidence_does_not_qualify(self):
+        self.ledger.create_work_item(
+            id="T-1", title="T", source_kind="adhoc", source_locator="x"
+        )
+        self.assertTrue(self.ledger.mark_done("T-1"))
+        self.assertFalse(self.ledger.has_qualifying_evidence("T-1"))
+
+    def test_done_task_with_any_evidence_kind_qualifies(self):
+        for kind, value in (
+            ("branch", "b"),
+            ("commit", "c"),
+            ("pull_request", "p"),
+            ("other", "o"),
+        ):
+            with self.subTest(kind=kind):
+                item_id = f"T-{kind}"
+                self.ledger.create_work_item(
+                    id=item_id, title="T", source_kind="adhoc", source_locator="x"
+                )
+                self.assertFalse(self.ledger.has_qualifying_evidence(item_id))
+                self.ledger.add_evidence(item_id, kind, value)
+                self.assertTrue(self.ledger.has_qualifying_evidence(item_id))
+
+    def test_evidence_recorded_before_done_and_mark_done_is_unaffected(self):
+        self.ledger.create_work_item(
+            id="T-1", title="T", source_kind="adhoc", source_locator="x"
+        )
+        self.ledger.add_evidence("T-1", "commit", "abc123")
+        self.assertTrue(self.ledger.mark_done("T-1"))
+        self.assertTrue(self.ledger.has_qualifying_evidence("T-1"))
+
+
+class TestMilestoneReviewReadiness(LedgerTestCase):
+    """T012 (User Story 3): is_review_ready is correct across
+    child-state combinations (SC-002); mark_in_review is a guarded,
+    single-winner transition (SC-003); claim() works against a milestone
+    with no code changes needed."""
+
+    def _milestone_with_children(self, n):
+        self.ledger.create_work_item(
+            id="M-1", title="M", source_kind="adhoc", source_locator="x", type="milestone"
+        )
+        for i in range(n):
+            self.ledger.create_work_item(
+                id=f"T-{i}",
+                title=f"T{i}",
+                source_kind="adhoc",
+                source_locator=f"y{i}",
+                parent_id="M-1",
+            )
+        return [f"T-{i}" for i in range(n)]
+
+    def test_empty_milestone_is_never_review_ready(self):
+        self.ledger.create_work_item(
+            id="M-1", title="M", source_kind="adhoc", source_locator="x", type="milestone"
+        )
+        self.assertFalse(self.ledger.is_review_ready("M-1"))
+
+    def test_review_ready_requires_every_child_resolved_and_evidenced(self):
+        children = self._milestone_with_children(2)
+        self.assertFalse(self.ledger.is_review_ready("M-1"))
+
+        self.assertTrue(self.ledger.mark_done(children[0]))
+        self.assertFalse(self.ledger.is_review_ready("M-1"))
+
+        self.ledger.add_evidence(children[0], "commit", "abc")
+        self.assertFalse(self.ledger.is_review_ready("M-1"))
+
+        self.assertTrue(self.ledger.mark_done(children[1]))
+        self.ledger.add_evidence(children[1], "branch", "feature/x")
+        self.assertTrue(self.ledger.is_review_ready("M-1"))
+
+    def test_superseded_child_counts_as_resolved_without_evidence(self):
+        children = self._milestone_with_children(2)
+        self.assertTrue(self.ledger.mark_done(children[0]))
+        self.ledger.add_evidence(children[0], "commit", "abc")
+        self.assertTrue(self.ledger.mark_superseded(children[1], children[0]))
+        self.assertTrue(self.ledger.is_review_ready("M-1"))
+
+    def test_five_children_all_resolved_and_evidenced_is_ready(self):
+        children = self._milestone_with_children(5)
+        for child in children[:4]:
+            self.assertTrue(self.ledger.mark_done(child))
+            self.ledger.add_evidence(child, "commit", f"sha-{child}")
+        self.assertFalse(self.ledger.is_review_ready("M-1"))
+
+        self.assertTrue(self.ledger.mark_done(children[4]))
+        self.ledger.add_evidence(children[4], "commit", "sha-last")
+        self.assertTrue(self.ledger.is_review_ready("M-1"))
+
+    def test_blocked_milestone_is_not_review_ready_even_with_resolved_children(self):
+        self.ledger.create_work_item(
+            id="Blocker", title="B", source_kind="adhoc", source_locator="z"
+        )
+        children = self._milestone_with_children(1)
+        self.ledger.add_blocked_by("M-1", "Blocker")
+        self.assertTrue(self.ledger.mark_done(children[0]))
+        self.ledger.add_evidence(children[0], "commit", "abc")
+        self.assertFalse(self.ledger.is_review_ready("M-1"))
+
+        self.assertTrue(self.ledger.mark_done("Blocker"))
+        self.assertTrue(self.ledger.is_review_ready("M-1"))
+
+    def test_mark_in_review_succeeds_only_when_ready_and_open(self):
+        children = self._milestone_with_children(1)
+        self.assertFalse(self.ledger.mark_in_review("M-1"))
+
+        self.assertTrue(self.ledger.mark_done(children[0]))
+        self.ledger.add_evidence(children[0], "commit", "abc")
+        self.assertTrue(self.ledger.is_review_ready("M-1"))
+        self.assertTrue(self.ledger.mark_in_review("M-1"))
+        self.assertEqual(self.ledger.get_work_item("M-1").status, "review")
+
+        self.assertFalse(self.ledger.mark_in_review("M-1"))
+
+    def test_concurrent_mark_in_review_has_exactly_one_winner(self):
+        children = self._milestone_with_children(1)
+        self.assertTrue(self.ledger.mark_done(children[0]))
+        self.ledger.add_evidence(children[0], "commit", "abc")
+
+        results = []
+
+        def attempt():
+            results.append(self.ledger.mark_in_review("M-1"))
+
+        threads = [threading.Thread(target=attempt) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(sum(1 for r in results if r), 1)
+        self.assertEqual(self.ledger.get_work_item("M-1").status, "review")
+
+    def test_claim_works_against_a_milestone_in_review(self):
+        children = self._milestone_with_children(1)
+        self.assertTrue(self.ledger.mark_done(children[0]))
+        self.ledger.add_evidence(children[0], "commit", "abc")
+        self.assertTrue(self.ledger.mark_in_review("M-1"))
+
+        self.assertTrue(self.ledger.claim("M-1", "reviewer-1"))
+        self.assertFalse(self.ledger.claim("M-1", "reviewer-2"))
+
+
+class TestMilestoneDeclineAndAccept(LedgerTestCase):
+    """T014 (User Story 4): decline_review/accept_milestone are guarded
+    transitions; declining never mutates a child task's record; a new
+    corrective task is accepted normally and readiness recomputes."""
+
+    def _ready_milestone(self):
+        self.ledger.create_work_item(
+            id="M-1", title="M", source_kind="adhoc", source_locator="x", type="milestone"
+        )
+        self.ledger.create_work_item(
+            id="T-1",
+            title="T1",
+            source_kind="adhoc",
+            source_locator="y",
+            parent_id="M-1",
+        )
+        self.assertTrue(self.ledger.mark_done("T-1"))
+        self.ledger.add_evidence("T-1", "commit", "abc")
+        self.assertTrue(self.ledger.mark_in_review("M-1"))
+
+    def test_decline_review_leaves_child_records_byte_identical(self):
+        self._ready_milestone()
+        before = self.ledger.get_work_item("T-1")
+
+        self.assertTrue(self.ledger.decline_review("M-1"))
+        self.assertEqual(self.ledger.get_work_item("M-1").status, "open")
+
+        after = self.ledger.get_work_item("T-1")
+        self.assertEqual(before, after)
+
+    def test_corrective_task_recomputes_readiness(self):
+        self._ready_milestone()
+        self.assertTrue(self.ledger.decline_review("M-1"))
+
+        self.ledger.create_work_item(
+            id="T-2",
+            title="Fix flagged issue",
+            source_kind="adhoc",
+            source_locator="z",
+            parent_id="M-1",
+        )
+        self.assertFalse(self.ledger.is_review_ready("M-1"))
+
+        self.assertTrue(self.ledger.mark_done("T-2"))
+        self.ledger.add_evidence("T-2", "commit", "def")
+        self.assertTrue(self.ledger.is_review_ready("M-1"))
+        self.assertTrue(self.ledger.mark_in_review("M-1"))
+
+    def test_accept_milestone_fails_when_not_in_review(self):
+        self.ledger.create_work_item(
+            id="M-1", title="M", source_kind="adhoc", source_locator="x", type="milestone"
+        )
+        self.assertFalse(self.ledger.accept_milestone("M-1"))
+        self.assertEqual(self.ledger.get_work_item("M-1").status, "open")
+
+    def test_accept_milestone_transitions_review_to_accepted(self):
+        self._ready_milestone()
+        self.assertTrue(self.ledger.accept_milestone("M-1"))
+        self.assertEqual(self.ledger.get_work_item("M-1").status, "accepted")
+        self.assertFalse(self.ledger.accept_milestone("M-1"))
+
+    def test_no_public_method_accepts_rationale_text(self):
+        for name in ("decline_review", "accept_milestone", "mark_in_review"):
+            params = inspect.signature(getattr(work_ledger.WorkLedger, name)).parameters
+            self.assertNotIn("rationale", params)
+            self.assertNotIn("reason", params)
+
+
+class TestProjectionExcludesMilestones(LedgerTestCase):
+    """T017 (User Story 5, SC-005): no milestone row ever appears in a
+    generated projection, under any status/claim combination; a task
+    blocked by a milestone is projected as ineligible while the
+    milestone itself never appears."""
+
+    def test_no_milestone_appears_in_projection_open_or_superseded(self):
+        self.ledger.create_work_item(
+            id="M-open", title="M", source_kind="adhoc", source_locator="o", type="milestone"
+        )
+        self.ledger.create_work_item(
+            id="M-other", title="M", source_kind="adhoc", source_locator="p", type="milestone"
+        )
+        self.assertTrue(self.ledger.mark_superseded("M-other", "M-open"))
+
+        by_id = {p.id for p in self.ledger.generate_projection()}
+        self.assertNotIn("M-open", by_id)
+        self.assertNotIn("M-other", by_id)
+
+    def test_no_milestone_appears_in_projection_review_or_accepted(self):
+        self.ledger.create_work_item(
+            id="M-1", title="M", source_kind="adhoc", source_locator="x", type="milestone"
+        )
+        self.ledger.create_work_item(
+            id="T-1", title="T", source_kind="adhoc", source_locator="y", parent_id="M-1"
+        )
+        self.assertTrue(self.ledger.mark_done("T-1"))
+        self.ledger.add_evidence("T-1", "commit", "abc")
+        self.assertTrue(self.ledger.mark_in_review("M-1"))
+
+        by_id = {p.id for p in self.ledger.generate_projection()}
+        self.assertNotIn("M-1", by_id)
+
+        self.assertTrue(self.ledger.accept_milestone("M-1"))
+        by_id = {p.id for p in self.ledger.generate_projection()}
+        self.assertNotIn("M-1", by_id)
+
+    def test_claimed_milestone_still_excluded(self):
+        self.ledger.create_work_item(
+            id="M-1", title="M", source_kind="adhoc", source_locator="x", type="milestone"
+        )
+        self.assertTrue(self.ledger.claim("M-1", "reviewer"))
+        by_id = {p.id for p in self.ledger.generate_projection()}
+        self.assertNotIn("M-1", by_id)
+
+    def test_task_blocked_by_milestone_is_projected_ineligible_milestone_absent(self):
+        self.ledger.create_work_item(
+            id="M-1", title="M", source_kind="adhoc", source_locator="x", type="milestone"
+        )
+        self.ledger.create_work_item(
+            id="T-1",
+            title="T",
+            source_kind="adhoc",
+            source_locator="y",
+            blocked_by=["M-1"],
+        )
+
+        by_id = {p.id: p for p in self.ledger.generate_projection()}
+        self.assertNotIn("M-1", by_id)
+        self.assertIn("T-1", by_id)
+        self.assertFalse(by_id["T-1"].eligible)
+
+    def test_projection_determinism_unchanged_with_milestones_present(self):
+        self.ledger.create_work_item(
+            id="M-1", title="M", source_kind="adhoc", source_locator="x", type="milestone"
+        )
+        self.ledger.create_work_item(
+            id="T-1", title="T", source_kind="adhoc", source_locator="y", parent_id="M-1"
+        )
+        first = self.ledger.generate_projection()
+        second = self.ledger.generate_projection()
+        self.assertEqual(first, second)
+
+
+class TestMilestoneArchival(LedgerTestCase):
+    """T017 (SC-006/SC-007): archiving a milestone with an unresolved
+    child is refused and leaves the row untouched; archiving succeeds
+    once every child is resolved; a child's parent_id still resolves the
+    archived milestone's surviving type/status afterward."""
+
+    def _accepted_milestone_with_one_child(self):
+        self.ledger.create_work_item(
+            id="M-1", title="M", source_kind="adhoc", source_locator="x", type="milestone"
+        )
+        self.ledger.create_work_item(
+            id="T-1", title="T", source_kind="adhoc", source_locator="y", parent_id="M-1"
+        )
+        self.assertTrue(self.ledger.mark_done("T-1"))
+        self.ledger.add_evidence("T-1", "commit", "abc")
+        self.assertTrue(self.ledger.mark_in_review("M-1"))
+        self.assertTrue(self.ledger.accept_milestone("M-1"))
+
+    def test_archiving_milestone_with_unresolved_child_is_refused(self):
+        self._accepted_milestone_with_one_child()
+        self.ledger.create_work_item(
+            id="T-2", title="T2", source_kind="adhoc", source_locator="z", parent_id="M-1"
+        )
+        before = self.ledger.get_work_item("M-1")
+
+        self.assertFalse(self.ledger.archive_work_item("M-1"))
+        after = self.ledger.get_work_item("M-1")
+        self.assertEqual(before, after)
+
+    def test_archiving_succeeds_once_every_child_resolved(self):
+        self._accepted_milestone_with_one_child()
+
+        self.assertTrue(self.ledger.archive_work_item("M-1"))
+        item = self.ledger.get_work_item("M-1")
+        self.assertEqual(item.status, "accepted")
+        self.assertIsNotNone(item.archived_at)
+        self.assertIsNone(item.title)
+        self.assertIsNone(item.description)
+
+    def test_child_parent_id_resolves_archived_milestones_surviving_type_and_status(
+        self,
+    ):
+        self._accepted_milestone_with_one_child()
+        self.assertTrue(self.ledger.archive_work_item("M-1"))
+
+        t1 = self.ledger.get_work_item("T-1")
+        self.assertEqual(t1.parent_id, "M-1")
+
+        parent = self.ledger.get_work_item("M-1")
+        self.assertEqual(parent.type, "milestone")
+        self.assertEqual(parent.status, "accepted")
+
+        self.ledger.create_work_item(
+            id="T-2",
+            title="T2",
+            source_kind="adhoc",
+            source_locator="z",
+            blocked_by=["M-1"],
+        )
+        self.assertFalse(self.ledger.is_blocked("T-2"))
+
+
+class TestQuickstartEndToEndV2(LedgerTestCase):
+    """T018: specs/002-milestone-task-work-items/quickstart.md's five
+    scenarios end to end, mirroring TestQuickstartEndToEnd's own
+    convention."""
+
+    def test_quickstart_v2_scenarios_1_through_5(self):
+        # -- Scenario 1 ---------------------------------------------------
+        self.ledger.create_work_item(
+            id="M-1",
+            title="Ship the milestone/task model",
+            source_kind="plan",
+            source_locator="plans/active/x",
+            type="milestone",
+        )
+        self.ledger.create_work_item(
+            id="T-1",
+            title="Write data-model.md",
+            source_kind="plan",
+            source_locator="plans/active/x#1",
+            parent_id="M-1",
+        )
+        self.ledger.create_work_item(
+            id="T-2",
+            title="Implement schema v2",
+            source_kind="plan",
+            source_locator="plans/active/x#2",
+            parent_id="M-1",
+        )
+        self.assertEqual(self.ledger.get_work_item("T-1").parent_id, "M-1")
+        self.assertIsNone(self.ledger.get_work_item("M-1").parent_id)
+
+        with self.assertRaises(ValueError):
+            self.ledger.create_work_item(
+                id="T-3",
+                title="Bad parent",
+                source_kind="plan",
+                source_locator="x",
+                parent_id="T-1",
+            )
+        self.assertIsNone(self.ledger.get_work_item("T-3"))
+
+        # -- Scenario 2 ---------------------------------------------------
+        self.assertTrue(self.ledger.mark_done("T-1"))
+        self.assertFalse(self.ledger.has_qualifying_evidence("T-1"))
+        self.ledger.add_evidence("T-1", "commit", "abc123")
+        self.assertTrue(self.ledger.has_qualifying_evidence("T-1"))
+
+        # -- Scenario 3 ---------------------------------------------------
+        self.assertFalse(self.ledger.is_review_ready("M-1"))
+        self.assertTrue(self.ledger.mark_done("T-2"))
+        self.ledger.add_evidence("T-2", "pull_request", "https://example/pr/1")
+        self.assertTrue(self.ledger.is_review_ready("M-1"))
+        self.assertTrue(self.ledger.mark_in_review("M-1"))
+        self.assertTrue(self.ledger.claim("M-1", "reviewer-1"))
+        self.assertFalse(self.ledger.claim("M-1", "reviewer-2"))
+
+        # -- Scenario 4 ---------------------------------------------------
+        snapshot_t1 = self.ledger.get_work_item("T-1")
+        snapshot_t2 = self.ledger.get_work_item("T-2")
+        self.ledger.release_claim("M-1", "reviewer-1")
+        self.assertTrue(self.ledger.decline_review("M-1"))
+        self.ledger.create_work_item(
+            id="T-4",
+            title="Fix flagged issue",
+            source_kind="plan",
+            source_locator="plans/active/x#4",
+            parent_id="M-1",
+        )
+        self.assertEqual(self.ledger.get_work_item("T-1"), snapshot_t1)
+        self.assertEqual(self.ledger.get_work_item("T-2"), snapshot_t2)
+        self.assertFalse(self.ledger.is_review_ready("M-1"))
+
+        # -- Scenario 5 ---------------------------------------------------
+        self.assertTrue(self.ledger.mark_done("T-4"))
+        self.ledger.add_evidence("T-4", "commit", "def456")
+        projection = self.ledger.generate_projection()
+        ids = {p.id for p in projection}
+        self.assertNotIn("M-1", ids)
+        self.assertTrue({"T-1", "T-2", "T-4"} <= ids)
+        second_projection = self.ledger.generate_projection()
+        self.assertEqual(projection, second_projection)
 
 
 if __name__ == "__main__":

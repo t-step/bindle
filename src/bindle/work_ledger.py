@@ -12,6 +12,14 @@ one small SQLite database at the repository's Git common directory
 sees the same ledger. This module is never a scheduler, a dependency/DAG
 solver, a daemon, or a Symphony adapter.
 
+specs/002-milestone-task-work-items/ (data-model.md, research.md) extends
+this schema (v2) with `type` (`task` | `milestone`) and `parent_id` on
+`work_items`, so a milestone (a human acceptance unit) can group one or
+more child tasks (execution units) without becoming a second table or a
+generalized workflow engine — see that feature's data-model.md for the
+full compound-CHECK schema and its research.md for why `in_progress`/
+`planned`/`active` were deliberately not introduced.
+
 `WorkLedger` is a thin, stateless-except-for-`repo_root` wrapper: every
 method opens its own short-lived connection, does its work, and closes it
 (research.md, "Decision: connection lifecycle") — no long-lived connection
@@ -42,16 +50,33 @@ _LEDGER_FILE_NAME = "ledger.sqlite3"
 # PRAGMA user_version — see research.md's "Decision: schema versioning and
 # migration ownership". Bump this and add an explicit migration step keyed
 # by the version it moves *from* when the schema next changes.
-_SCHEMA_VERSION = 1
+#
+# v2 (specs/002-milestone-task-work-items/research.md, "Decision: schema
+# migration from version 1 to version 2"): adds `type`/`parent_id`/
+# `description` to `work_items` and replaces its flat status CHECK with a
+# compound (type, status) CHECK. A version-1 database is migrated forward
+# by `_migrate_v1_to_v2`, never left behind.
+_SCHEMA_VERSION = 2
 
-# data-model.md's "Schema overview", verbatim.
-_SCHEMA_STATEMENTS = (
+
+def _work_items_create_sql(table_name: str) -> str:
+    """The `work_items` (v2) `CREATE TABLE` body, parameterized by table name.
+
+    Used both for fresh initialization (`table_name="work_items"`) and for
+    the v1->v2 table-rebuild migration (`table_name="work_items_new"`,
+    later renamed) — one definition, so the two paths can never drift
+    apart. specs/002-milestone-task-work-items/data-model.md's "Schema
+    overview", verbatim, aside from the parameterized name.
     """
-    CREATE TABLE work_items (
+    return f"""
+    CREATE TABLE {table_name} (
       id                TEXT PRIMARY KEY,
+      type              TEXT NOT NULL CHECK (type IN ('task', 'milestone')),
+      parent_id         TEXT REFERENCES {table_name}(id),
       title             TEXT,
-      status            TEXT NOT NULL CHECK (status IN ('open', 'done', 'superseded')),
-      superseded_by     TEXT REFERENCES work_items(id),
+      description       TEXT,
+      status            TEXT NOT NULL,
+      superseded_by     TEXT REFERENCES {table_name}(id),
       source_kind       TEXT CHECK (source_kind IN ('speckit_task', 'plan', 'adhoc')),
       source_locator    TEXT,
       source_promoted_by TEXT,
@@ -61,9 +86,21 @@ _SCHEMA_STATEMENTS = (
       CHECK (
         (status = 'superseded' AND superseded_by IS NOT NULL) OR
         (status != 'superseded' AND superseded_by IS NULL)
+      ),
+      CHECK (
+        (type = 'task' AND status IN ('open', 'done', 'superseded')) OR
+        (type = 'milestone' AND status IN ('open', 'review', 'accepted', 'superseded'))
+      ),
+      CHECK (
+        (type = 'milestone' AND parent_id IS NULL) OR (type = 'task')
       )
     )
-    """,
+    """
+
+
+# data-model.md's "Schema overview" (v2).
+_SCHEMA_STATEMENTS = (
+    _work_items_create_sql("work_items"),
     """
     CREATE TABLE work_item_blocked_by (
       work_item_id      TEXT NOT NULL REFERENCES work_items(id),
@@ -131,10 +168,70 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             # value here is always the fixed internal constant above, never
             # caller-provided input.
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+    elif version == 1:
+        _migrate_v1_to_v2(conn)
     elif version != _SCHEMA_VERSION:
         raise SchemaVersionError(
             f"ledger at schema version {version}, expected {_SCHEMA_VERSION}"
         )
+
+
+def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
+    """Migrate an existing version-1 database to version 2 in place.
+
+    specs/002-milestone-task-work-items/research.md's "Decision: schema
+    migration from version 1 to version 2": SQLite cannot `ALTER` a `CHECK`
+    constraint or add `NOT NULL` to an existing column, so installing v2's
+    compound `(type, status)` and milestone-`parent_id` CHECKs requires the
+    standard SQLite table-rebuild sequence, not a plain `ALTER TABLE`.
+
+    `PRAGMA foreign_keys` cannot be changed inside a transaction (a no-op
+    if attempted with a transaction open) and SQLite's own guidance for
+    this rebuild pattern is to disable foreign key enforcement for its
+    duration — `work_item_blocked_by`/`work_item_claims`/
+    `work_item_evidence` all hold live `REFERENCES work_items(id)` rows
+    that would otherwise be checked against the intermediate DROP — then
+    re-enable it and verify with `PRAGMA foreign_key_check` before
+    returning, so this method never leaves the database in a state where
+    referential integrity was silently skipped rather than verified.
+
+    Every pre-existing row is backfilled to `type = 'task'` with
+    `parent_id` left `NULL` — the only sensible reading of a v1 item, which
+    had no milestone concept to attribute it to (research.md's "Decision:
+    schema migration...", "Alternatives considered"). Wrapped in one
+    transaction (mirroring `_ensure_schema`'s own fresh-bootstrap
+    atomicity) so a crash mid-migration leaves the database at its
+    original, fully-functional version-1 state, never a partially
+    migrated one.
+    """
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        with _transaction(conn):
+            conn.execute("ALTER TABLE work_items ADD COLUMN type TEXT")
+            conn.execute("ALTER TABLE work_items ADD COLUMN parent_id TEXT")
+            conn.execute("ALTER TABLE work_items ADD COLUMN description TEXT")
+            conn.execute("UPDATE work_items SET type = 'task' WHERE type IS NULL")
+            conn.execute(_work_items_create_sql("work_items_new"))
+            conn.execute(
+                "INSERT INTO work_items_new "
+                "(id, type, parent_id, title, description, status, superseded_by, "
+                "source_kind, source_locator, source_promoted_by, created_at, "
+                "updated_at, archived_at) "
+                "SELECT id, type, parent_id, title, description, status, superseded_by, "
+                "source_kind, source_locator, source_promoted_by, created_at, "
+                "updated_at, archived_at "
+                "FROM work_items"
+            )
+            conn.execute("DROP TABLE work_items")
+            conn.execute("ALTER TABLE work_items_new RENAME TO work_items")
+            conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+        integrity_violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if integrity_violations:
+            raise SchemaVersionError(
+                f"v1->v2 migration left dangling foreign keys: {integrity_violations}"
+            )
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 def connect(repo_root: str) -> sqlite3.Connection:
@@ -310,14 +407,24 @@ class WorkItem:
     """One row of `work_items`, in full or thinned-by-archival form.
 
     Field presence/absence follows data-model.md's "Work Item" table
-    exactly: an archived item has `title`, `source_kind`, `source_locator`,
-    `source_promoted_by`, and `created_at` cleared to `None`, while `id`,
-    `status`, `superseded_by`, `updated_at`, and `archived_at` remain
-    populated as appropriate.
+    exactly: an archived item has `title`, `description`, `source_kind`,
+    `source_locator`, `source_promoted_by`, and `created_at` cleared to
+    `None`, while `id`, `type`, `status`, `superseded_by`, `updated_at`,
+    and `archived_at` remain populated as appropriate.
+
+    `type` (`task` | `milestone`) and `parent_id` (a task's owning
+    milestone; always `None` for a milestone) are specs/002's additions —
+    see that feature's data-model.md. `parent_id` is never cleared by
+    archival of the item that *holds* it (a child's own row is untouched
+    by its parent's archival); it is only ever cleared by nothing at all,
+    since this model has no operation that reassigns or removes it.
     """
 
     id: str
+    type: str
+    parent_id: str | None
     title: str | None
+    description: str | None
     status: str
     superseded_by: str | None
     source_kind: str | None
@@ -365,7 +472,10 @@ class ProjectedWorkItem:
 
 _WORK_ITEM_COLUMNS = (
     "id",
+    "type",
+    "parent_id",
     "title",
+    "description",
     "status",
     "superseded_by",
     "source_kind",
@@ -379,6 +489,74 @@ _WORK_ITEM_COLUMNS = (
 
 def _row_to_work_item(row: tuple) -> WorkItem:
     return WorkItem(*row)
+
+
+# specs/002-milestone-task-work-items/data-model.md's "Dependency
+# resolution — generalized to be type-aware": whether a referenced item
+# (aliased `dep` in every query below) still counts as blocking, given its
+# `type` and `status` — a task resolves at `done`/`superseded`; a milestone
+# resolves at `accepted`/`superseded` (its `review`/`open` states do not
+# resolve a dependency, unlike a task's `open`). A dangling reference
+# (`dep.id IS NULL`) is conservatively still blocking, unchanged from 001.
+#
+# Shared by `is_blocked`, `list_available_work_items`, `is_review_ready`,
+# and `generate_projection` specifically so this predicate is defined
+# exactly once — specs/002's task-composition analysis (S4's "Risk /
+# uncertainty") flagged that `generate_projection`'s own inline eligibility
+# subquery would otherwise duplicate this rule and risk drifting from it.
+_STILL_BLOCKING_CONDITION = """(
+                      dep.id IS NULL OR NOT (
+                        (dep.type = 'task' AND dep.status IN ('done', 'superseded'))
+                        OR (dep.type = 'milestone' AND dep.status IN ('accepted', 'superseded'))
+                      )
+                    )"""
+
+
+def _review_ready_sql(id_expr: str) -> str:
+    """A boolean SQL expression: is the milestone named by `id_expr`
+    review-ready (specs/002 data-model.md's "Review readiness")?
+
+    `id_expr` is a literal SQL fragment substituted directly into the
+    query text — always one of exactly two fixed internal literals, never
+    caller-supplied data: `"?"` for a standalone bind-parameter query
+    (`is_review_ready`, bound three times to the same `work_item_id`), or
+    `"work_items.id"` for a correlated reference when this condition is
+    embedded inside `mark_in_review`'s own `UPDATE ... WHERE` clause.
+
+    That second form exists because FR-010 requires the transition into
+    `review` to be permitted only when review-ready **at the moment of
+    the same atomic update** — a separate `is_review_ready()` pre-check
+    followed by a second `mark_in_review()` call would leave a race
+    window between the two statements in which readiness could change.
+    Embedding this condition directly in the guarded `UPDATE`'s `WHERE`
+    clause closes that window: the row-count of one atomic statement is
+    the only arbitration mechanism, exactly like every other guarded
+    transition in this module.
+    """
+    return f"""(
+        NOT EXISTS (
+          SELECT 1 FROM work_item_blocked_by e
+          LEFT JOIN work_items dep ON dep.id = e.blocked_on_id
+          WHERE e.work_item_id = {id_expr}
+            AND {_STILL_BLOCKING_CONDITION}
+        )
+        AND EXISTS (
+          SELECT 1 FROM work_items c WHERE c.parent_id = {id_expr}
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM work_items c
+          WHERE c.parent_id = {id_expr}
+            AND NOT (
+              c.status = 'superseded'
+              OR (
+                c.status = 'done'
+                AND EXISTS (
+                  SELECT 1 FROM work_item_evidence ev WHERE ev.work_item_id = c.id
+                )
+              )
+            )
+        )
+      )"""
 
 
 class WorkLedger:
@@ -406,6 +584,9 @@ class WorkLedger:
         source_locator: str,
         source_promoted_by: str | None = None,
         blocked_by: Sequence[str] = (),
+        type: str = "task",
+        parent_id: str | None = None,
+        description: str | None = None,
     ) -> None:
         """Create a Work Item — the only operation that creates one (FR-002/FR-003).
 
@@ -414,18 +595,52 @@ class WorkLedger:
         transaction (research.md's "Create a work item, optionally with
         initial `blocked_by` edges" mutation) — all-or-nothing, so an item
         is never recorded with only some of its declared dependencies.
+
+        `type` defaults to `"task"` (backward-compatible with every 001
+        caller). specs/002-milestone-task-work-items FR-002/FR-003: a
+        `parent_id`, when given, MUST name an existing `type='milestone'`
+        row — checked here (a plain `REFERENCES` foreign key cannot express
+        "must be a milestone," only "must exist") and raised as `ValueError`
+        before any row is written; a `type='milestone'` row naming a
+        `parent_id` is instead rejected by the schema's own `CHECK`
+        (`sqlite3.IntegrityError`), since that restriction needs no
+        cross-row lookup. This check does not need to run inside the same
+        transaction as the `INSERT` below for correctness: `type` is
+        immutable once set and no operation in this model ever deletes a
+        row, so a `parent_id` found valid here cannot be invalidated by a
+        concurrent actor before the `INSERT` that follows.
         """
         now = _now()
         insert_item = (
             "INSERT INTO work_items "
-            "(id, title, status, source_kind, source_locator, source_promoted_by, "
-            "created_at, updated_at) "
-            "VALUES (?, ?, 'open', ?, ?, ?, ?, ?)"
+            "(id, type, parent_id, title, description, status, source_kind, "
+            "source_locator, source_promoted_by, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)"
         )
-        params = (id, title, source_kind, source_locator, source_promoted_by, now, now)
+        params = (
+            id,
+            type,
+            parent_id,
+            title,
+            description,
+            source_kind,
+            source_locator,
+            source_promoted_by,
+            now,
+            now,
+        )
 
         conn = self._connect()
         try:
+            if parent_id is not None:
+                parent_row = conn.execute(
+                    "SELECT type FROM work_items WHERE id = ?", (parent_id,)
+                ).fetchone()
+                if parent_row is None or parent_row[0] != "milestone":
+                    raise ValueError(
+                        f"parent_id {parent_id!r} does not name an existing "
+                        "milestone work item"
+                    )
             if not blocked_by:
                 conn.execute(insert_item, params)
                 return
@@ -495,23 +710,23 @@ class WorkLedger:
     def is_blocked(self, work_item_id: str) -> bool:
         """Whether `work_item_id` is currently blocked (T015).
 
-        data-model.md's "Derived facts" → "Blocked", exactly: any
-        `blocked_by` row for this item that resolves to an `open`
-        dependency, or to no row at all (a dangling reference, treated
+        data-model.md's "Derived facts" → "Blocked", generalized by
+        specs/002 to be type-aware (`_STILL_BLOCKING_CONDITION`): any
+        `blocked_by` row for this item whose referenced item has not
+        reached *its own type's* resolved terminal state — `done`/
+        `superseded` for a task, `accepted`/`superseded` for a milestone —
+        or resolves to no row at all (a dangling reference, treated
         conservatively as still blocking per FR-021), counts as blocking.
-        A dependency resolved as `done` or `superseded` — whether still
-        active or archived-and-thinned, since `status` is never cleared by
-        archival — does not block.
         """
         conn = self._connect()
         try:
             row = conn.execute(
-                """
+                f"""
                 SELECT EXISTS (
                   SELECT 1 FROM work_item_blocked_by e
                   LEFT JOIN work_items dep ON dep.id = e.blocked_on_id
                   WHERE e.work_item_id = ?
-                    AND (dep.id IS NULL OR dep.status = 'open')
+                    AND {_STILL_BLOCKING_CONDITION}
                 )
                 """,
                 (work_item_id,),
@@ -548,7 +763,7 @@ class WorkLedger:
         conn = self._connect()
         try:
             rows = conn.execute(
-                """
+                f"""
                 SELECT id FROM work_items wi
                 WHERE wi.status = 'open'
                   AND NOT EXISTS (
@@ -558,7 +773,7 @@ class WorkLedger:
                     SELECT 1 FROM work_item_blocked_by e
                     LEFT JOIN work_items dep ON dep.id = e.blocked_on_id
                     WHERE e.work_item_id = wi.id
-                      AND (dep.id IS NULL OR dep.status = 'open')
+                      AND {_STILL_BLOCKING_CONDITION}
                   )
                 ORDER BY wi.id
                 """
@@ -606,6 +821,109 @@ class WorkLedger:
                 "UPDATE work_items SET status = 'superseded', superseded_by = ?, "
                 "updated_at = ? WHERE id = ? AND status = 'open'",
                 (superseded_by, _now(), work_item_id),
+            )
+            return cursor.rowcount == 1
+        finally:
+            conn.close()
+
+    # -- specs/002: milestone review lifecycle ------------------------
+
+    def is_review_ready(self, work_item_id: str) -> bool:
+        """Whether the milestone `work_item_id` is ready for human review.
+
+        specs/002-milestone-task-work-items data-model.md's "Review
+        readiness": true iff (a) the milestone itself is not blocked
+        (`_STILL_BLOCKING_CONDITION`); (b) it has at least one child task
+        (`parent_id` naming it) — an empty milestone is never review-ready;
+        and (c) every child is `superseded`, or `done` with at least one
+        recorded evidence pointer. Purely derived — never stored — exactly
+        mirroring `list_available_work_items`'s own "Available to start"
+        precedent. Meaningful only for a `type='milestone'` row; a task has
+        no children by construction, so this would always report `False`
+        for one (harmless, but callers should only ask it of a milestone).
+
+        `mark_in_review` embeds this exact same condition (via
+        `_review_ready_sql`) directly in its own atomic guarded `UPDATE`
+        rather than relying on a caller to call this method first and then
+        separately attempt the transition — this method exists for callers
+        that want to inspect readiness without attempting a transition
+        (e.g. deciding whether to bother), not as the sole enforcement of
+        FR-010's guarantee.
+        """
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                f"SELECT {_review_ready_sql('?')}",
+                (work_item_id, work_item_id, work_item_id),
+            ).fetchone()
+            return bool(row[0])
+        finally:
+            conn.close()
+
+    def mark_in_review(self, work_item_id: str) -> bool:
+        """Transition milestone `work_item_id` from `open` to `review`.
+
+        FR-010: permitted only when the milestone is currently `open` AND
+        review-ready **at the moment of this same atomic update** — the
+        readiness condition (`_review_ready_sql`) is embedded directly in
+        this `UPDATE`'s own `WHERE` clause, not checked separately
+        beforehand, so there is no window between "checked ready" and
+        "transitioned" in which another actor's change to a child task
+        could invalidate the decision. Mirrors `mark_done`/
+        `mark_superseded`'s single-winner-transition shape otherwise:
+        returns `True` iff exactly one row was updated; `False` if the
+        item does not exist, is not a milestone, is not currently `open`,
+        or is not (or no longer) review-ready.
+        """
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                f"""
+                UPDATE work_items SET status = 'review', updated_at = ?
+                WHERE id = ? AND type = 'milestone' AND status = 'open'
+                  AND {_review_ready_sql('work_items.id')}
+                """,
+                (_now(), work_item_id),
+            )
+            return cursor.rowcount == 1
+        finally:
+            conn.close()
+
+    def decline_review(self, work_item_id: str) -> bool:
+        """Transition milestone `work_item_id` from `review` back to `open`.
+
+        "Changes requested" (spec.md User Story 4): touches no child task's
+        status, evidence, or identity — only this milestone's own row.
+        Same guarded-`UPDATE` shape as `mark_in_review`. Returns `True` iff
+        exactly one row was updated; `False` if the item does not exist,
+        is not a milestone, or is not currently `review`.
+        """
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                "UPDATE work_items SET status = 'open', updated_at = ? "
+                "WHERE id = ? AND type = 'milestone' AND status = 'review'",
+                (_now(), work_item_id),
+            )
+            return cursor.rowcount == 1
+        finally:
+            conn.close()
+
+    def accept_milestone(self, work_item_id: str) -> bool:
+        """Transition milestone `work_item_id` from `review` to `accepted`.
+
+        `accepted` is the milestone's terminal-success state, playing the
+        same role `done` plays for a task (FR-005). Same guarded-`UPDATE`
+        shape as `mark_in_review`/`decline_review`. Returns `True` iff
+        exactly one row was updated; `False` if the item does not exist,
+        is not a milestone, or is not currently `review`.
+        """
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                "UPDATE work_items SET status = 'accepted', updated_at = ? "
+                "WHERE id = ? AND type = 'milestone' AND status = 'review'",
+                (_now(), work_item_id),
             )
             return cursor.rowcount == 1
         finally:
@@ -744,6 +1062,26 @@ class WorkLedger:
                 "VALUES (?, ?, ?, ?, ?)",
                 (work_item_id, kind, value, _now(), note),
             )
+        finally:
+            conn.close()
+
+    def has_qualifying_evidence(self, work_item_id: str) -> bool:
+        """Whether `work_item_id` carries "qualifying mechanical evidence."
+
+        specs/002-milestone-task-work-items data-model.md: true iff at
+        least one row exists in `work_item_evidence` for it, of any of the
+        four existing kinds. Purely derived, read-only — does not gate or
+        change `mark_done`'s existing behavior (evidence remains optional
+        to record, per 001 FR-008); consumed only by `is_review_ready`'s
+        computation for a task's parent milestone.
+        """
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT EXISTS (SELECT 1 FROM work_item_evidence WHERE work_item_id = ?)",
+                (work_item_id,),
+            ).fetchone()
+            return bool(row[0])
         finally:
             conn.close()
 
@@ -956,10 +1294,13 @@ class WorkLedger:
     def generate_projection(self) -> list[ProjectedWorkItem]:
         """Generate a disposable, coordinator-facing projection (FR-013/FR-014).
 
-        Per contracts/coordinator-projection.md: considers only
-        non-active-archived items (`WHERE archived_at IS NULL` — an
-        archived item is a permanent Tombstone for dependency resolution,
-        not a coordinator-facing work item any more). For each such item,
+        Per contracts/coordinator-projection.md, extended by specs/002's
+        contracts/coordinator-projection-v2.md: considers only
+        non-archived (`WHERE archived_at IS NULL`) **task** rows
+        (`AND wi.type = 'task'`) — no milestone work item is ever included,
+        regardless of its status, claim, or blocking state (FR-017). This
+        is a `WHERE` predicate, not a post-filter a caller could bypass by
+        reading the table directly. For each such item,
         `terminal` is `True` iff `status` is `done` or `superseded`, and
         `eligible` reflects the same Available-to-start computation User
         Story 2 already defines (data-model.md's "Available to start"),
@@ -1007,7 +1348,7 @@ class WorkLedger:
         conn = self._connect()
         try:
             rows = conn.execute(
-                """
+                f"""
                 SELECT
                   wi.id,
                   wi.title,
@@ -1021,11 +1362,12 @@ class WorkLedger:
                       SELECT 1 FROM work_item_blocked_by e
                       LEFT JOIN work_items dep ON dep.id = e.blocked_on_id
                       WHERE e.work_item_id = wi.id
-                        AND (dep.id IS NULL OR dep.status = 'open')
+                        AND {_STILL_BLOCKING_CONDITION}
                     )
                   ) AS eligible
                 FROM work_items wi
                 WHERE wi.archived_at IS NULL
+                  AND wi.type = 'task'
                 ORDER BY wi.id
                 """
             ).fetchall()
@@ -1046,46 +1388,59 @@ class WorkLedger:
     def archive_work_item(self, id: str) -> bool:
         """Archive a terminal work item in place (T038, FR-020/FR-021, SC-008).
 
-        data-model.md's "Archival" transaction, verbatim: thins a `done`
-        or `superseded` row's non-essential columns to `NULL`, stamps
-        `archived_at`, and — in the same transaction — deletes this
-        item's own Evidence Pointers, its own declared `blocked_by`
-        edges (never edges other items declare against it, since those
-        continue to resolve against this row's untouched `id`/`status`/
-        `superseded_by`), and any lingering claim row (defensive; no
-        claim is expected to remain). `id`, `status`, and `superseded_by`
-        are never cleared, so any other item's blocking evaluation
-        naming this id keeps resolving exactly as before archival
-        (research.md's "Decision: retention"; data-model.md's "Dependency
-        resolution").
+        data-model.md's "Archival" transaction: thins a terminal row's
+        non-essential columns to `NULL`, stamps `archived_at`, and — in the
+        same transaction — deletes this item's own Evidence Pointers, its
+        own declared `blocked_by` edges (never edges other items declare
+        against it, since those continue to resolve against this row's
+        untouched `id`/`type`/`status`/`superseded_by`), and any lingering
+        claim row (defensive; no claim is expected to remain). `id`,
+        `type`, `status`, and `superseded_by` are never cleared, so any
+        other item's blocking evaluation — or a task's `parent_id`
+        resolution, per specs/002 — naming this id keeps resolving exactly
+        as before archival (research.md's "Decision: retention";
+        data-model.md's "Dependency resolution"). A task's terminal set is
+        `done`/`superseded`; a milestone's is `accepted`/`superseded`
+        (specs/002 FR-005) — both are accepted here.
+
+        specs/002-milestone-task-work-items FR-015: archiving a
+        `type='milestone'` row is refused outright — before opening any
+        transaction, leaving the row completely untouched — while any
+        child (`parent_id` naming it) has a status outside
+        `('done', 'accepted', 'superseded')`. This precondition query is
+        harmless for a task (which has no children by construction) and so
+        is not conditioned on `type` here.
 
         Returns `True` iff the `UPDATE` actually matched a row — i.e.
-        `id` exists and was, at the moment this ran, `done` or
-        `superseded` and not yet archived. Returns `False` if `id` does
-        not exist, is currently `open`, or is already archived — a true,
-        guarded no-op, not an error, mirroring `mark_done`/
-        `mark_superseded`'s own "guarded transition returns whether it
-        applied" convention: when the `UPDATE` does not match, the
-        cleanup `DELETE`s below are skipped entirely, so an `open` (or
-        nonexistent, or already-archived) item's evidence, claim, and
-        self-declared `blocked_by` edges are left completely untouched.
-        Re-running this on an already-archived item is a true no-op: the
-        guard includes `AND archived_at IS NULL`, so once `archived_at`
-        has been set by a first successful archival, the `UPDATE` no
-        longer matches that row at all on a second call — `archived_at`
-        and `updated_at` are left exactly as the first archival set them,
-        never bumped forward to a later timestamp (data-model.md's
-        "`archived_at`... `NULL` until archived, then permanent").
+        `id` exists, was at the moment this ran in one of its type's
+        terminal statuses, was not yet archived, and (if a milestone) had
+        no unresolved child. Returns `False` otherwise — a true, guarded
+        no-op, not an error, mirroring `mark_done`/`mark_superseded`'s own
+        "guarded transition returns whether it applied" convention: when
+        the `UPDATE` does not match, the cleanup `DELETE`s below are
+        skipped entirely. Re-running this on an already-archived item is a
+        true no-op: the guard includes `AND archived_at IS NULL`, so
+        `archived_at`/`updated_at` are left exactly as the first archival
+        set them, never bumped forward (data-model.md's "`archived_at`...
+        `NULL` until archived, then permanent").
         """
         now = _now()
         conn = self._connect()
         try:
+            has_unresolved_children = conn.execute(
+                "SELECT EXISTS (SELECT 1 FROM work_items c WHERE c.parent_id = ? "
+                "AND c.status NOT IN ('done', 'accepted', 'superseded'))",
+                (id,),
+            ).fetchone()[0]
+            if has_unresolved_children:
+                return False
             with _transaction(conn):
                 cursor = conn.execute(
-                    "UPDATE work_items SET title = NULL, source_kind = NULL, "
-                    "source_locator = NULL, source_promoted_by = NULL, "
+                    "UPDATE work_items SET title = NULL, description = NULL, "
+                    "source_kind = NULL, source_locator = NULL, "
+                    "source_promoted_by = NULL, "
                     "created_at = NULL, archived_at = ?, updated_at = ? "
-                    "WHERE id = ? AND status IN ('done', 'superseded') "
+                    "WHERE id = ? AND status IN ('done', 'accepted', 'superseded') "
                     "AND archived_at IS NULL",
                     (now, now, id),
                 )
