@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import threading
@@ -410,9 +411,43 @@ class TestClaimsEvidenceAndReconciliation(LedgerTestCase):
         self.assertEqual(results.count(False), thread_count - 1)
 
     def test_claim_against_nonexistent_item_raises_not_already_claimed(self):
+        # Asserts precise error classification (sqlite_errorcode), not
+        # message-text substring matching: a foreign-key violation (no
+        # such work_item_id) must be distinguishable from the
+        # primary-key violation claim() treats as an ordinary "already
+        # claimed" outcome.
         with self.assertRaises(sqlite3.IntegrityError) as ctx:
             self.ledger.claim("does-not-exist", "agent-A")
+        self.assertEqual(
+            ctx.exception.sqlite_errorcode, sqlite3.SQLITE_CONSTRAINT_FOREIGNKEY
+        )
+        self.assertNotEqual(
+            ctx.exception.sqlite_errorcode, sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY
+        )
         self.assertIn("FOREIGN KEY", str(ctx.exception))
+
+    def test_claim_collision_is_classified_as_primary_key_violation(self):
+        # The specific constraint claim() matches on to return False —
+        # verified directly, so a future change that widens the except
+        # clause to catch unrelated IntegrityErrors is caught here.
+        self._create("WI-1")
+        self.assertTrue(self.ledger.claim("WI-1", "agent-A"))
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            with self.assertRaises(sqlite3.IntegrityError) as ctx:
+                conn.execute(
+                    "INSERT INTO work_item_claims "
+                    "(work_item_id, owner, claimed_at) VALUES (?, ?, ?)",
+                    ("WI-1", "agent-B", work_ledger._now()),
+                )
+        finally:
+            conn.close()
+        self.assertEqual(
+            ctx.exception.sqlite_errorcode, sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY
+        )
+        # And claim() itself, going through its own except clause,
+        # returns False rather than raising for this exact case.
+        self.assertFalse(self.ledger.claim("WI-1", "agent-C"))
 
     def test_release_claim_is_idempotent_and_owner_scoped(self):
         self._create("WI-1")
@@ -658,6 +693,97 @@ class TestClaimsEvidenceAndReconciliation(LedgerTestCase):
         self.assertEqual(cycles, {"WI-A", "WI-B"})
 
 
+def _run_git(args, cwd):
+    result = subprocess.run(
+        ["git", *args], cwd=cwd, capture_output=True, text=True, check=True
+    )
+    return result.stdout
+
+
+class TestReconcileBranchExistence(unittest.TestCase):
+    """Regression for the bug where reconcile()'s stale_claim query only
+    ever selected rows with `worktree_path IS NOT NULL`, so a claim
+    recorded with only a `branch` (no `worktree_path`) could never be
+    reported stale, no matter how long that branch had been gone
+    (FR-009, data-model.md's "Staleness", tasks.md's T027). Uses a real
+    temporary Git repository (rather than mocking the branch check) so
+    the assertions exercise the actual `git show-ref` semantics
+    `_local_branch_exists` relies on."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo_root = self.tmp.name
+        _run_git(["init", "-q"], self.repo_root)
+        _run_git(["config", "user.email", "test@example.com"], self.repo_root)
+        _run_git(["config", "user.name", "Test"], self.repo_root)
+        with open(os.path.join(self.repo_root, "README.md"), "w") as f:
+            f.write("x\n")
+        _run_git(["add", "README.md"], self.repo_root)
+        _run_git(["commit", "-q", "-m", "init"], self.repo_root)
+        self.ledger = work_ledger.WorkLedger(self.repo_root)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _create(self, item_id):
+        self.ledger.create_work_item(
+            id=item_id,
+            title=f"Item {item_id}",
+            source_kind="adhoc",
+            source_locator=f"loc-{item_id}",
+        )
+
+    def test_branch_only_claim_with_nonexistent_branch_is_reported_stale(self):
+        self._create("WI-1")
+        self.assertTrue(
+            self.ledger.claim(
+                "WI-1", "agent-A", branch="feature/nonexistent-branch-xyz"
+            )
+        )
+
+        findings = self.ledger.reconcile()
+        stale = [f for f in findings if f.finding == "stale_claim"]
+        self.assertEqual([f.item_id for f in stale], ["WI-1"])
+        self.assertIn("feature/nonexistent-branch-xyz", stale[0].detail)
+
+        # Reconciliation must remain read-only: the claim row survives.
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            row = conn.execute(
+                "SELECT owner FROM work_item_claims WHERE work_item_id = 'WI-1'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row, ("agent-A",))
+        # And it must continue to make the item unavailable.
+        self.assertNotIn("WI-1", self.ledger.list_available_work_items())
+
+    def test_branch_only_claim_with_existing_branch_is_not_stale(self):
+        _run_git(["branch", "feature/real-branch"], self.repo_root)
+        self._create("WI-2")
+        self.assertTrue(
+            self.ledger.claim("WI-2", "agent-B", branch="feature/real-branch")
+        )
+
+        findings = self.ledger.reconcile()
+        stale = [f for f in findings if f.finding == "stale_claim"]
+        self.assertEqual(stale, [])
+
+    def test_checked_out_branch_of_the_ledger_repo_itself_is_not_stale(self):
+        # Confirms the check discriminates using the real current branch
+        # (main or master, whichever `git init` used), not by always
+        # returning True/False.
+        current_branch = _run_git(
+            ["symbolic-ref", "--short", "HEAD"], self.repo_root
+        ).strip()
+        self._create("WI-3")
+        self.assertTrue(self.ledger.claim("WI-3", "agent-C", branch=current_branch))
+
+        findings = self.ledger.reconcile()
+        stale = [f for f in findings if f.finding == "stale_claim"]
+        self.assertEqual(stale, [])
+
+
 class TestCoordinatorProjection(LedgerTestCase):
     """User Story 4 (T034-T037): a generated, disposable coordinator-facing
     projection (contracts/coordinator-projection.md), never a second
@@ -724,6 +850,41 @@ class TestCoordinatorProjection(LedgerTestCase):
 
         self.assertEqual(before, after)
         self.assertEqual(self.ledger.list_work_items(), self.ledger.list_work_items())
+
+    def test_projection_opens_exactly_one_connection_and_query(self):
+        # Regression for the bug where generate_projection() called
+        # list_available_work_items() (its own connection) and then
+        # opened a *second* connection to read id/title/status — a claim
+        # landing in the gap between the two reads could produce a
+        # stale eligible=True for an item already claimed by the time
+        # the call returned. The fix derives both facts from one SELECT
+        # on one connection, which this test asserts directly (by
+        # instrumentation) rather than only by absence-of-flakiness.
+        self._create("WI-1")
+
+        connect_count = 0
+        executed_queries = []
+        real_connect = self.ledger._connect
+
+        def counting_connect():
+            nonlocal connect_count
+            connect_count += 1
+            conn = real_connect()
+            # sqlite3.Connection.execute is a read-only C-level attribute
+            # (cannot be monkeypatched directly) — set_trace_callback is
+            # the supported way to observe every SQL statement actually
+            # executed on this connection.
+            conn.set_trace_callback(executed_queries.append)
+            return conn
+
+        self.ledger._connect = counting_connect
+        try:
+            self.ledger.generate_projection()
+        finally:
+            self.ledger._connect = real_connect
+
+        self.assertEqual(connect_count, 1)
+        self.assertEqual(len(executed_queries), 1)
 
     def test_coordination_facts_available_without_ever_generating_projection(self):
         # T037 (Acceptance Scenario 4.3): every user-facing coordination
@@ -886,6 +1047,44 @@ class TestArchival(LedgerTestCase):
 
     def test_archiving_nonexistent_item_returns_false(self):
         self.assertFalse(self.ledger.archive_work_item("does-not-exist"))
+
+    # -- Archiving a non-terminal item must not delete its related rows --
+
+    def test_archiving_open_item_leaves_evidence_claim_and_edges_untouched(self):
+        # Regression for the bug where the guarded UPDATE not matching
+        # (item still `open`) did not stop the three cleanup DELETEs from
+        # running unconditionally, silently destroying an open item's
+        # evidence, claim, and self-declared blocked_by edge even though
+        # archive_work_item() correctly reported `False`.
+        self._create("blocker")  # A's own blocked_by target
+        self._create("A", blocked_by=["blocker"])
+        self.ledger.add_evidence("A", "branch", "feature/example")
+        self.assertTrue(self.ledger.claim("A", "agent-A"))
+
+        before = self.ledger.get_work_item("A")
+
+        self.assertFalse(self.ledger.archive_work_item("A"))
+
+        after = self.ledger.get_work_item("A")
+        self.assertEqual(after, before)
+
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            evidence_count = conn.execute(
+                "SELECT COUNT(*) FROM work_item_evidence WHERE work_item_id = 'A'"
+            ).fetchone()[0]
+            claim_row = conn.execute(
+                "SELECT owner FROM work_item_claims WHERE work_item_id = 'A'"
+            ).fetchone()
+            edge_row = conn.execute(
+                "SELECT 1 FROM work_item_blocked_by "
+                "WHERE work_item_id = 'A' AND blocked_on_id = 'blocker'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(evidence_count, 1)
+        self.assertEqual(claim_row, ("agent-A",))
+        self.assertIsNotNone(edge_row)
 
     # -- Re-archiving an already-archived item is safe, not corrupting ----
 

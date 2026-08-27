@@ -28,6 +28,7 @@ import dataclasses
 import datetime
 import os
 import sqlite3
+import subprocess
 from collections.abc import Sequence
 
 
@@ -149,6 +150,31 @@ def connect(repo_root: str) -> sqlite3.Connection:
 
 def _now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def _local_branch_exists(repo_root: str, branch: str) -> bool:
+    """Whether `branch` currently exists as a local ref in `repo_root`.
+
+    Mirrors `src/bindle/repo.py`'s narrow `_run_git`/`_git` git-shell-out
+    convention rather than introducing a general-purpose shell
+    abstraction — a single, read-only `git show-ref` invocation, run with
+    `cwd=repo_root` (the ledger's own Git-common-directory-resolved
+    `repo_root`, never the invoking worktree, per research.md's "Decision:
+    storage location"). Used by `reconcile()`'s `stale_claim` check
+    (FR-009) for a claim that recorded a `branch` — this deliberately
+    does not use `repo.py`'s own `_git` helper, since that helper raises
+    on any nonzero exit and a missing branch is an expected, ordinary
+    outcome here, not an error condition to raise on. `git show-ref
+    --verify --quiet` is read-only: it never creates, moves, or deletes a
+    ref, preserving reconcile()'s own read-only contract.
+    """
+    result = subprocess.run(
+        ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
 
 
 @contextlib.contextmanager
@@ -502,10 +528,20 @@ class WorkLedger:
         expected "already claimed" outcome, never surfaced as an error.
         A `work_item_id` that does not reference any row in `work_items`
         at all raises a *different* `sqlite3.IntegrityError` (a
-        foreign-key violation, not a uniqueness violation) and is
-        re-raised rather than swallowed into a `False` return — SQLite's
-        own error messages distinguish the two ("UNIQUE constraint
-        failed" vs. "FOREIGN KEY constraint failed").
+        foreign-key violation, not a primary-key violation) and is
+        re-raised rather than swallowed into a `False` return.
+
+        The two cases are distinguished by `exc.sqlite_errorcode`
+        (Python 3.11+, this repository's minimum), not by matching
+        substrings of `str(exc)` — message text is not a stable API and
+        is fragile to SQLite version wording changes. `work_item_claims`
+        conflicts on its own `PRIMARY KEY (work_item_id)` (verified
+        empirically against this schema:
+        `sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY`, not the generic
+        `SQLITE_CONSTRAINT_UNIQUE`), so only that specific code is
+        treated as "already claimed" — any other `IntegrityError`
+        (including a foreign-key violation for a nonexistent
+        `work_item_id`) propagates unchanged.
         """
         conn = self._connect()
         try:
@@ -517,7 +553,7 @@ class WorkLedger:
             )
             return True
         except sqlite3.IntegrityError as exc:
-            if "UNIQUE constraint failed" in str(exc):
+            if exc.sqlite_errorcode == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY:
                 return False
             raise
         finally:
@@ -609,43 +645,68 @@ class WorkLedger:
         """Run a read-only Reconciliation Report (FR-010).
 
         Compares recorded ledger state against observed repository state
-        (currently: claim `worktree_path` existence) and internal
-        consistency (claim row-shape, whole-database integrity, dangling
-        blocking edges, duplicate sources, blocking cycles), per
-        data-model.md's "Reconciliation Report". Every query below is a
-        `SELECT`; this method never opens a write transaction and never
-        mutates `work_items`, `work_item_claims`, `work_item_blocked_by`,
-        or `work_item_evidence` — finding a claim stale or corrupt does
-        not, by itself, change whether an item is computed as available
-        (research.md's "Decision: claim safety").
+        (claim `worktree_path` existence, and claim `branch` existence as
+        a local ref — FR-009, checked via a single read-only `git
+        show-ref` shelled out against `self.repo_root`, never a mutating
+        Git command) and internal consistency (claim row-shape,
+        whole-database integrity, dangling blocking edges, duplicate
+        sources, blocking cycles), per data-model.md's "Reconciliation
+        Report". Every query below is a `SELECT`, and the one Git
+        invocation is read-only; this method never opens a write
+        transaction and never mutates `work_items`, `work_item_claims`,
+        `work_item_blocked_by`, or `work_item_evidence` — finding a claim
+        stale or corrupt does not, by itself, change whether an item is
+        computed as available (research.md's "Decision: claim safety").
 
         Scoped to the five finding types this slice has explicit task
         coverage for: `stale_claim`, `corrupt_claim`, `dangling_blocker`,
         `duplicate_source`, and `cycle_detected`. `dangling_evidence`
         (data-model.md's Reconciliation Report field list names it as a
-        possible finding type) is deliberately not implemented here — it
-        would require Git-branch-existence checking this module does not
-        otherwise perform, and is out of scope for this slice.
+        possible finding type) is deliberately not implemented here —
+        checking whether an Evidence Pointer's own `branch`/`commit`
+        value still resolves is a distinct check from the claim-branch
+        existence check above (it would need to validate arbitrary
+        commit SHAs and PR references too, not just local branch refs),
+        and remains out of scope for this slice.
         """
         findings: list[ReconciliationFinding] = []
         conn = self._connect()
         try:
             # stale_claim: a recorded worktree_path that no longer exists
-            # as a directory. A claim with worktree_path IS NULL is not
-            # checked by this signal — this module does not shell out to
-            # Git to check branch-only existence (data-model.md's
-            # "Staleness": a documented, acknowledged gap, not an
-            # omission).
-            for work_item_id, worktree_path in conn.execute(
-                "SELECT work_item_id, worktree_path FROM work_item_claims "
-                "WHERE worktree_path IS NOT NULL"
+            # as a directory, or (FR-009, data-model.md's "Staleness") a
+            # recorded branch that no longer exists as a local ref. Every
+            # claim row is inspected — including a branch-only claim
+            # (branch set, worktree_path NULL), which the worktree check
+            # alone would otherwise never flag. When both are recorded,
+            # the worktree is checked first (the more common case); either
+            # signal being stale produces exactly one `stale_claim`
+            # finding for that claim, never two, so a caller never has to
+            # reconcile duplicate/contradictory findings for one row. The
+            # branch check ("Explicitly not solved by this model" in
+            # data-model.md's "Staleness" section) is unrelated to this
+            # fix — that documented gap is specifically about a claim
+            # whose worktree/branch still exists but whose owner simply
+            # stopped working, which no absence-based check can detect.
+            for work_item_id, worktree_path, branch in conn.execute(
+                "SELECT work_item_id, worktree_path, branch FROM work_item_claims "
+                "WHERE worktree_path IS NOT NULL OR branch IS NOT NULL"
             ).fetchall():
-                if not os.path.isdir(worktree_path):
+                if worktree_path is not None and not os.path.isdir(worktree_path):
                     findings.append(
                         ReconciliationFinding(
                             item_id=work_item_id,
                             finding="stale_claim",
                             detail=f"worktree_path {worktree_path!r} does not exist",
+                        )
+                    )
+                elif branch is not None and not _local_branch_exists(
+                    self.repo_root, branch
+                ):
+                    findings.append(
+                        ReconciliationFinding(
+                            item_id=work_item_id,
+                            finding="stale_claim",
+                            detail=f"branch {branch!r} does not exist",
                         )
                     )
 
@@ -759,23 +820,54 @@ class WorkLedger:
         archived item is a permanent Tombstone for dependency resolution,
         not a coordinator-facing work item any more). For each such item,
         `terminal` is `True` iff `status` is `done` or `superseded`, and
-        `eligible` reflects `list_available_work_items()` — the same
-        Available-to-start computation User Story 2 already defines, so a
-        blocked or claimed item is never presented as eligible even
+        `eligible` reflects the same Available-to-start computation User
+        Story 2 already defines (data-model.md's "Available to start"),
+        so a blocked or claimed item is never presented as eligible even
         though an unsophisticated coordinator adapter (Symphony's shipped
         `local` tracker, per the contract's load-bearing finding) would
-        not otherwise re-check blocking itself. Purely a read: opens only
-        `SELECT` connections, and never mutates the ledger. Deterministic
-        for unchanged ledger state — ordered by `id` — so regenerating it
-        twice produces an equal (`==`) list (spec.md SC-005, Acceptance
-        Scenario 4.2).
+        not otherwise re-check blocking itself.
+
+        Derived from **one** `SELECT`, on **one** connection, rather than
+        calling `list_available_work_items()` (its own connection) and
+        then opening a second connection to read `id`/`title`/`status`:
+        two separate reads left a window in which a claim could land
+        between them, producing a stale `eligible=True` for an item that
+        was, by the time this call returned, already claimed. Expressing
+        eligibility inline as `NOT EXISTS` claim/blocking subqueries in
+        the same statement that selects `id`/`title`/`status` (mirroring
+        data-model.md's "Available to start" query shape) makes that race
+        structurally impossible — both facts are computed from the same
+        SQLite snapshot in the same query, not two racing ones.
+
+        Purely a read: opens exactly one `SELECT` connection, and never
+        mutates the ledger. Deterministic for unchanged ledger state —
+        ordered by `id` — so regenerating it twice produces an equal
+        (`==`) list (spec.md SC-005, Acceptance Scenario 4.2).
         """
-        eligible_ids = set(self.list_available_work_items())
         conn = self._connect()
         try:
             rows = conn.execute(
-                "SELECT id, title, status FROM work_items "
-                "WHERE archived_at IS NULL ORDER BY id"
+                """
+                SELECT
+                  wi.id,
+                  wi.title,
+                  wi.status,
+                  (
+                    wi.status = 'open'
+                    AND NOT EXISTS (
+                      SELECT 1 FROM work_item_claims c WHERE c.work_item_id = wi.id
+                    )
+                    AND NOT EXISTS (
+                      SELECT 1 FROM work_item_blocked_by e
+                      LEFT JOIN work_items dep ON dep.id = e.blocked_on_id
+                      WHERE e.work_item_id = wi.id
+                        AND (dep.id IS NULL OR dep.status = 'open')
+                    )
+                  ) AS eligible
+                FROM work_items wi
+                WHERE wi.archived_at IS NULL
+                ORDER BY wi.id
+                """
             ).fetchall()
         finally:
             conn.close()
@@ -784,7 +876,7 @@ class WorkLedger:
                 id=row[0],
                 title=row[1],
                 terminal=row[2] in ("done", "superseded"),
-                eligible=row[0] in eligible_ids,
+                eligible=bool(row[3]),
             )
             for row in rows
         ]
@@ -810,13 +902,17 @@ class WorkLedger:
         Returns `True` iff the `UPDATE` actually matched a row — i.e.
         `id` exists and was, at the moment this ran, `done` or
         `superseded`. Returns `False` if `id` does not exist or is
-        currently `open` — a guarded no-op, not an error, mirroring
-        `mark_done`/`mark_superseded`'s own "guarded transition returns
-        whether it applied" convention. Re-running this on an
-        already-archived item is idempotent in effect: the `WHERE status
-        IN (...)` guard still matches (archival never changes `status`),
-        so the `UPDATE` re-sets already-`NULL` columns and the `DELETE`s
-        affect zero rows — no error, no corruption either way.
+        currently `open` — a true, guarded no-op, not an error,
+        mirroring `mark_done`/`mark_superseded`'s own "guarded transition
+        returns whether it applied" convention: when the `UPDATE` does
+        not match, the cleanup `DELETE`s below are skipped entirely, so
+        an `open` (or nonexistent) item's evidence, claim, and
+        self-declared `blocked_by` edges are left completely untouched.
+        Re-running this on an already-archived item is idempotent in
+        effect: the `WHERE status IN (...)` guard still matches (archival
+        never changes `status`), so the `UPDATE` re-sets already-`NULL`
+        columns and the `DELETE`s affect zero rows — no error, no
+        corruption either way.
         """
         now = _now()
         conn = self._connect()
@@ -830,18 +926,19 @@ class WorkLedger:
                     (now, now, id),
                 )
                 archived = cursor.rowcount == 1
-                conn.execute(
-                    "DELETE FROM work_item_evidence WHERE work_item_id = ?",
-                    (id,),
-                )
-                conn.execute(
-                    "DELETE FROM work_item_blocked_by WHERE work_item_id = ?",
-                    (id,),
-                )
-                conn.execute(
-                    "DELETE FROM work_item_claims WHERE work_item_id = ?",
-                    (id,),
-                )
+                if archived:
+                    conn.execute(
+                        "DELETE FROM work_item_evidence WHERE work_item_id = ?",
+                        (id,),
+                    )
+                    conn.execute(
+                        "DELETE FROM work_item_blocked_by WHERE work_item_id = ?",
+                        (id,),
+                    )
+                    conn.execute(
+                        "DELETE FROM work_item_claims WHERE work_item_id = ?",
+                        (id,),
+                    )
             return archived
         finally:
             conn.close()
