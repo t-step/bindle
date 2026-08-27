@@ -1,12 +1,21 @@
 # Durable work ledger (001): task generation and composition handoff
 
-Date: 2026-08-26. Status: **task generation and task-composition analysis
-complete; no implementation code written under this plan yet.** This
-document exists so a fresh session (no memory of the session that produced
-`specs/001-durable-work-ledger/tasks.md`) can resume implementation of
-`specs/001-durable-work-ledger/` without re-deriving the task graph, without
-re-running task-composition analysis, and without reopening decisions
-already settled in `research.md`/`data-model.md`/`plan.md`.
+Date: 2026-08-26. Status: **superseded by completion.** The S1-S7
+composition and waves recorded below were executed by a later session on
+this same date, following this handoff exactly (no reopened decisions, T022
+resolved as recorded here). All 43 tasks in `specs/001-durable-work-ledger/
+tasks.md` are implemented and verified (`src/bindle/work_ledger.py`,
+`tests/test_work_ledger.py`, `bash scripts/check.sh` passing) as of commits
+`aace54f` (S1-S2), `3547ec1` (S3-S4), `97a7f07` (S5-S6), `583503c`/`169952d`
+(S7) on `spec/work-ledger-task-generation`. This document is retained,
+unedited below, as the historical record of the composition analysis and
+the T022 resolution — not as an open resumption point. This document
+originally existed so a fresh session (no memory of the session that
+produced `specs/001-durable-work-ledger/tasks.md`) could resume
+implementation of `specs/001-durable-work-ledger/` without re-deriving the
+task graph, without re-running task-composition analysis, and without
+reopening decisions already settled in `research.md`/`data-model.md`/
+`plan.md`.
 
 ## Outcome
 
