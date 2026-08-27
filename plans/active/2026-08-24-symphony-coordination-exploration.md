@@ -411,3 +411,56 @@ runtime state" categories are not yet amended either — `specs/001-durable-work
 a distinct fourth category, not cleanly "configuration," "disposable
 cache," or "explicit export") for that future decision to close explicitly,
 rather than leaving a future session to notice the mismatch on its own.
+
+## Addendum (2026-08-26, persistence-model correction): Bindle's own ledger is SQLite-backed, superseding this section's own "Not SQLite" bullet above
+
+Status: **the "durable implementation-work model specified" addendum above is
+superseded only on the single point flagged below; everything else in that
+addendum, and in this plan's own "Settled direction"/"Work" sections, is
+unchanged.** Recorded in place, without editing the original addendum text,
+per this repository's own decision-history convention of superseding rather
+than rewriting (mirrored elsewhere in this same plan's "Evidence" section,
+which corrects the "Settled direction" SQLite bullet the same way).
+
+The addendum immediately above states, of Bindle's own durable work-item
+model: "stored as plain per-item files at the repository's Git common
+directory, untracked... **Not SQLite**." That bullet was accurate to
+`specs/001-durable-work-ledger/`'s content at the time this addendum was
+written (2026-08-26, earlier the same day), and remains an accurate record
+of what was decided then. It no longer describes the specification's
+current content: `specs/001-durable-work-ledger/research.md`'s "Decision:
+storage format" was revised the same day, overriding the plain-file design
+in favor of a small SQLite database, once the desired properties were
+clarified to include direct SQL queryability and straightforward
+transactional atomicity for mutations touching multiple related facts (the
+original plain-file decision's own text is preserved there, unedited, as
+historical record).
+
+**This is still a wholly separate SQLite usage from this plan's own
+"Settled direction" bullet** ("a repository-scoped local SQLite database
+replaces Linear as Symphony's tracker") and from that bullet's own
+already-recorded correction in this plan's "Evidence" section (Symphony's
+actual shipped local tracker is JSON, not SQLite). Three distinct
+possibilities now exist in this repository's own planning material, and
+none of them should be conflated with either of the others:
+
+1. Symphony's own tracker storage, reached through Symphony's
+   `SymphonyElixir.Tracker` adapter behaviour — confirmed JSON
+   (`.symphony/local_tracker.json`) for the `local` adapter Symphony
+   actually ships, per D037 and this plan's own "Evidence" section; a
+   possible future `sqlite` tracker adapter remains unbuilt and
+   unconfirmed, exactly as this plan's "Settled direction" bullet already,
+   if now inaccurately, describes.
+2. Bindle's own durable work-item ledger, reached only through Bindle's
+   own code (`specs/001-durable-work-ledger/`) — now SQLite-backed, per
+   this correction.
+3. The retired `feat/local-orchestration` branch's own experimental SQLite
+   table, mined for reusable findings and then deleted (see this plan's
+   "Why now" section) — historical only, not a live component of any
+   kind.
+
+**Not decided by this correction**: this remains specification, not
+adoption, exactly as the addendum above already states — the same
+`docs/DECISIONS.md`-entry-after-a-working-slice bar still governs, and
+nothing about this persistence-format correction moves that bar earlier or
+later.
