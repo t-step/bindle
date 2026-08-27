@@ -214,6 +214,23 @@ class ReconciliationFinding:
     detail: str
 
 
+@dataclasses.dataclass(frozen=True)
+class ProjectedWorkItem:
+    """Coordinator-facing projection of one Work Item (contracts/coordinator-projection.md).
+
+    Deliberately coordinator-agnostic: no Symphony-specific field names,
+    no `active_states`/`terminal_states` strings (those are a specific
+    external WORKFLOW.md's configuration this module never sees) — a
+    future Symphony-specific adapter maps `terminal`/`eligible` onto
+    whatever strings its own configuration declares.
+    """
+
+    id: str
+    title: str | None
+    terminal: bool
+    eligible: bool
+
+
 _WORK_ITEM_COLUMNS = (
     "id",
     "title",
@@ -731,3 +748,100 @@ class WorkLedger:
         finally:
             conn.close()
         return findings
+
+    # -- User Story 4: coordinator projection -------------------------
+
+    def generate_projection(self) -> list[ProjectedWorkItem]:
+        """Generate a disposable, coordinator-facing projection (FR-013/FR-014).
+
+        Per contracts/coordinator-projection.md: considers only
+        non-active-archived items (`WHERE archived_at IS NULL` — an
+        archived item is a permanent Tombstone for dependency resolution,
+        not a coordinator-facing work item any more). For each such item,
+        `terminal` is `True` iff `status` is `done` or `superseded`, and
+        `eligible` reflects `list_available_work_items()` — the same
+        Available-to-start computation User Story 2 already defines, so a
+        blocked or claimed item is never presented as eligible even
+        though an unsophisticated coordinator adapter (Symphony's shipped
+        `local` tracker, per the contract's load-bearing finding) would
+        not otherwise re-check blocking itself. Purely a read: opens only
+        `SELECT` connections, and never mutates the ledger. Deterministic
+        for unchanged ledger state — ordered by `id` — so regenerating it
+        twice produces an equal (`==`) list (spec.md SC-005, Acceptance
+        Scenario 4.2).
+        """
+        eligible_ids = set(self.list_available_work_items())
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT id, title, status FROM work_items "
+                "WHERE archived_at IS NULL ORDER BY id"
+            ).fetchall()
+        finally:
+            conn.close()
+        return [
+            ProjectedWorkItem(
+                id=row[0],
+                title=row[1],
+                terminal=row[2] in ("done", "superseded"),
+                eligible=row[0] in eligible_ids,
+            )
+            for row in rows
+        ]
+
+    # -- Polish: archival ----------------------------------------------
+
+    def archive_work_item(self, id: str) -> bool:
+        """Archive a terminal work item in place (T038, FR-020/FR-021, SC-008).
+
+        data-model.md's "Archival" transaction, verbatim: thins a `done`
+        or `superseded` row's non-essential columns to `NULL`, stamps
+        `archived_at`, and — in the same transaction — deletes this
+        item's own Evidence Pointers, its own declared `blocked_by`
+        edges (never edges other items declare against it, since those
+        continue to resolve against this row's untouched `id`/`status`/
+        `superseded_by`), and any lingering claim row (defensive; no
+        claim is expected to remain). `id`, `status`, and `superseded_by`
+        are never cleared, so any other item's blocking evaluation
+        naming this id keeps resolving exactly as before archival
+        (research.md's "Decision: retention"; data-model.md's "Dependency
+        resolution").
+
+        Returns `True` iff the `UPDATE` actually matched a row — i.e.
+        `id` exists and was, at the moment this ran, `done` or
+        `superseded`. Returns `False` if `id` does not exist or is
+        currently `open` — a guarded no-op, not an error, mirroring
+        `mark_done`/`mark_superseded`'s own "guarded transition returns
+        whether it applied" convention. Re-running this on an
+        already-archived item is idempotent in effect: the `WHERE status
+        IN (...)` guard still matches (archival never changes `status`),
+        so the `UPDATE` re-sets already-`NULL` columns and the `DELETE`s
+        affect zero rows — no error, no corruption either way.
+        """
+        now = _now()
+        conn = self._connect()
+        try:
+            with _transaction(conn):
+                cursor = conn.execute(
+                    "UPDATE work_items SET title = NULL, source_kind = NULL, "
+                    "source_locator = NULL, source_promoted_by = NULL, "
+                    "created_at = NULL, archived_at = ?, updated_at = ? "
+                    "WHERE id = ? AND status IN ('done', 'superseded')",
+                    (now, now, id),
+                )
+                archived = cursor.rowcount == 1
+                conn.execute(
+                    "DELETE FROM work_item_evidence WHERE work_item_id = ?",
+                    (id,),
+                )
+                conn.execute(
+                    "DELETE FROM work_item_blocked_by WHERE work_item_id = ?",
+                    (id,),
+                )
+                conn.execute(
+                    "DELETE FROM work_item_claims WHERE work_item_id = ?",
+                    (id,),
+                )
+            return archived
+        finally:
+            conn.close()

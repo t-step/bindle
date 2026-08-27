@@ -629,5 +629,260 @@ class TestClaimsEvidenceAndReconciliation(LedgerTestCase):
         self.assertEqual(cycles, {"WI-A", "WI-B"})
 
 
+class TestCoordinatorProjection(LedgerTestCase):
+    """User Story 4 (T034-T037): a generated, disposable coordinator-facing
+    projection (contracts/coordinator-projection.md), never a second
+    durable store the ledger falls out of sync with (FR-013/FR-014)."""
+
+    def _create(self, id, blocked_by=()):
+        self.ledger.create_work_item(
+            id=id,
+            title=f"Item {id}",
+            source_kind="adhoc",
+            source_locator=f"plans/active/example.md#{id}",
+            blocked_by=blocked_by,
+        )
+
+    def test_blocked_item_is_not_eligible_in_projection(self):
+        # T035 (Acceptance Scenario 4.1): a still-blocked item must be
+        # withheld from eligibility by the projection step itself, even
+        # though nothing about the flat projection shape would otherwise
+        # stop an unsophisticated adapter (Symphony's shipped `local`
+        # tracker, per the contract) from treating it as dispatchable.
+        # This asserts against the *projection's* `eligible` field
+        # specifically, not merely `list_available_work_items()` again —
+        # that would only re-test S3, not this projection step.
+        self._create("blocker-open")
+        self._create("blocked", blocked_by=["blocker-open"])
+
+        projection = self.ledger.generate_projection()
+        by_id = {item.id: item for item in projection}
+
+        self.assertFalse(by_id["blocked"].eligible)
+        self.assertFalse(by_id["blocked"].terminal)
+        self.assertTrue(by_id["blocker-open"].eligible)
+
+    def test_projection_is_deterministic_and_performs_no_write(self):
+        # T036 (Acceptance Scenario 4.2, SC-005): regenerating a
+        # projection twice from the same, unchanged ledger state produces
+        # an equal result both times, and generating it performs no write
+        # to the ledger's own durable state.
+        self._create("blocker-open")
+        self._create("blocked", blocked_by=["blocker-open"])
+        self._create("done-item")
+        self.assertTrue(self.ledger.mark_done("done-item"))
+
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            before = conn.execute(
+                "SELECT * FROM work_items ORDER BY id"
+            ).fetchall()
+        finally:
+            conn.close()
+
+        first = self.ledger.generate_projection()
+        second = self.ledger.generate_projection()
+
+        self.assertEqual(first, second)
+
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            after = conn.execute(
+                "SELECT * FROM work_items ORDER BY id"
+            ).fetchall()
+        finally:
+            conn.close()
+
+        self.assertEqual(before, after)
+        self.assertEqual(self.ledger.list_work_items(), self.ledger.list_work_items())
+
+    def test_coordination_facts_available_without_ever_generating_projection(self):
+        # T037 (Acceptance Scenario 4.3): every user-facing coordination
+        # fact remains fully usable and correct even when
+        # generate_projection() is never called at all — no other method
+        # has a hidden dependency on projection state, since none exists.
+        self._create("blocker-open")
+        self._create("blocked", blocked_by=["blocker-open"])
+        self.assertTrue(self.ledger.claim("blocker-open", owner="agent-1"))
+        self.ledger.add_evidence("blocker-open", kind="branch", value="feature/x")
+
+        item = self.ledger.get_work_item("blocked")
+        self.assertEqual(item.status, "open")
+        self.assertTrue(self.ledger.is_blocked("blocked"))
+        self.assertTrue(self.ledger.is_claimed("blocker-open"))
+
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            evidence_rows = conn.execute(
+                "SELECT kind, value FROM work_item_evidence "
+                "WHERE work_item_id = ?",
+                ("blocker-open",),
+            ).fetchall()
+        finally:
+            conn.close()
+        self.assertEqual(evidence_rows, [("branch", "feature/x")])
+
+
+class TestArchival(LedgerTestCase):
+    """T038-T039: archiving a terminal work item thins its row in place
+    (data-model.md's "Archival") without ever breaking another item's
+    dependency resolution against it (FR-020, FR-021, SC-008)."""
+
+    def _create(self, item_id, **overrides):
+        kwargs = dict(
+            id=item_id,
+            title=f"Item {item_id}",
+            source_kind="adhoc",
+            source_locator=f"loc-{item_id}",
+        )
+        kwargs.update(overrides)
+        self.ledger.create_work_item(**kwargs)
+
+    # -- T039 (SC-008): archiving a satisfied prerequisite never turns a
+    # -- satisfied dependency into an unresolved/unknown one -------------
+
+    def test_archiving_satisfied_prerequisite_keeps_dependent_unblocked(self):
+        self._create("A")
+        self._create("B", blocked_by=["A"])
+
+        self.assertTrue(self.ledger.mark_done("A"))
+        self.assertFalse(self.ledger.is_blocked("B"))
+
+        self.assertTrue(self.ledger.archive_work_item("A"))
+
+        # Archival must not change the answer: still satisfied.
+        self.assertFalse(self.ledger.is_blocked("B"))
+        self.assertIn("B", self.ledger.list_available_work_items())
+
+    # -- Thinned-row shape: cleared columns vs. permanently retained ones -
+
+    def test_archived_done_item_is_thinned_but_keeps_identity_and_status(self):
+        self._create("A", source_promoted_by="agent-A")
+        self.assertTrue(self.ledger.mark_done("A"))
+
+        self.assertTrue(self.ledger.archive_work_item("A"))
+
+        item = self.ledger.get_work_item("A")
+        self.assertEqual(item.id, "A")
+        self.assertEqual(item.status, "done")
+        self.assertIsNone(item.superseded_by)
+        self.assertIsNotNone(item.archived_at)
+        self.assertIsNone(item.title)
+        self.assertIsNone(item.source_kind)
+        self.assertIsNone(item.source_locator)
+        self.assertIsNone(item.source_promoted_by)
+        self.assertIsNone(item.created_at)
+
+    def test_archived_superseded_item_keeps_superseded_by(self):
+        self._create("A")
+        self._create("B")
+        self.assertTrue(self.ledger.mark_superseded("A", "B"))
+
+        self.assertTrue(self.ledger.archive_work_item("A"))
+
+        item = self.ledger.get_work_item("A")
+        self.assertEqual(item.status, "superseded")
+        self.assertEqual(item.superseded_by, "B")
+        self.assertIsNotNone(item.archived_at)
+        self.assertIsNone(item.title)
+        self.assertIsNone(item.source_kind)
+        self.assertIsNone(item.source_locator)
+        self.assertIsNone(item.created_at)
+
+    # -- Evidence and any lingering claim are deleted at archival ---------
+
+    def test_archival_deletes_evidence_and_lingering_claim(self):
+        self._create("A")
+        self.ledger.add_evidence("A", "branch", "feature/example")
+        self.assertTrue(self.ledger.claim("A", "agent-A"))
+        # The model does not require a claim to be released before an
+        # item transitions to done — archival's own claim delete is
+        # explicitly defensive (data-model.md's "Archival").
+        self.assertTrue(self.ledger.mark_done("A"))
+
+        self.assertTrue(self.ledger.archive_work_item("A"))
+
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            evidence_count = conn.execute(
+                "SELECT COUNT(*) FROM work_item_evidence WHERE work_item_id = 'A'"
+            ).fetchone()[0]
+            claim_row = conn.execute(
+                "SELECT * FROM work_item_claims WHERE work_item_id = 'A'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(evidence_count, 0)
+        self.assertIsNone(claim_row)
+
+    # -- Only the archived item's own declared edges are deleted ----------
+
+    def test_archival_deletes_only_its_own_declared_edges(self):
+        self._create("C")  # A's own prerequisite, already done
+        self.assertTrue(self.ledger.mark_done("C"))
+        self._create("A", blocked_by=["C"])
+        self._create("B", blocked_by=["A"])  # an edge declared *against* A
+
+        self.assertTrue(self.ledger.mark_done("A"))
+        self.assertTrue(self.ledger.archive_work_item("A"))
+
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            rows = set(
+                conn.execute(
+                    "SELECT work_item_id, blocked_on_id FROM work_item_blocked_by"
+                ).fetchall()
+            )
+        finally:
+            conn.close()
+        # B's edge onto A — declared by another item against A — survives.
+        self.assertIn(("B", "A"), rows)
+        # A's own edge onto C — A's own declared dependency, moot once A
+        # is terminal and archived — is gone.
+        self.assertNotIn(("A", "C"), rows)
+
+        # And B's own blocking evaluation against archived A is unaffected.
+        self.assertFalse(self.ledger.is_blocked("B"))
+
+    # -- Archiving a non-terminal item is a guarded no-op ------------------
+
+    def test_archiving_open_item_is_a_no_op(self):
+        self._create("A")
+        before = self.ledger.get_work_item("A")
+
+        self.assertFalse(self.ledger.archive_work_item("A"))
+
+        after = self.ledger.get_work_item("A")
+        self.assertEqual(after, before)
+
+    def test_archiving_nonexistent_item_returns_false(self):
+        self.assertFalse(self.ledger.archive_work_item("does-not-exist"))
+
+    # -- Re-archiving an already-archived item is safe, not corrupting ----
+
+    def test_archiving_already_archived_item_is_idempotent(self):
+        self._create("A")
+        self.assertTrue(self.ledger.mark_done("A"))
+        self.assertTrue(self.ledger.archive_work_item("A"))
+        first = self.ledger.get_work_item("A")
+
+        # Whatever this implementation returns for a second archival
+        # attempt, it must not raise, and the thinned shape must be
+        # unchanged afterward.
+        second_result = self.ledger.archive_work_item("A")
+        self.assertIn(second_result, (True, False))
+
+        second = self.ledger.get_work_item("A")
+        self.assertEqual(second.id, first.id)
+        self.assertEqual(second.status, first.status)
+        self.assertEqual(second.superseded_by, first.superseded_by)
+        self.assertIsNone(second.title)
+        self.assertIsNone(second.source_kind)
+        self.assertIsNone(second.source_locator)
+        self.assertIsNone(second.source_promoted_by)
+        self.assertIsNone(second.created_at)
+        self.assertIsNotNone(second.archived_at)
+
+
 if __name__ == "__main__":
     unittest.main()

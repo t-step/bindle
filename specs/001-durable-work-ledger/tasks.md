@@ -138,13 +138,13 @@ Both are single files for this feature; most tasks below therefore target one of
 
 ### Implementation for User Story 4
 
-- [ ] T034 [US4] Implement `generate_projection()` in `src/bindle/work_ledger.py` (derives `id`, a coarse active/terminal classification, and computed eligibility from `list_available_work_items()`/`is_blocked()`/`is_claimed()`, per contracts/coordinator-projection.md; withholds any blocked or claimed item from eligibility; computes and persists no dispatch order, priority, or concurrency limit, per FR-015)
+- [x] T034 [US4] Implement `generate_projection()` in `src/bindle/work_ledger.py` (derives `id`, a coarse active/terminal classification, and computed eligibility from `list_available_work_items()`/`is_blocked()`/`is_claimed()`, per contracts/coordinator-projection.md; withholds any blocked or claimed item from eligibility; computes and persists no dispatch order, priority, or concurrency limit, per FR-015)
 
 ### Tests for User Story 4
 
-- [ ] T035 [US4] Test that a blocked work item is not presented as eligible in a generated projection, even though the illustrative target adapter would not otherwise re-check blocking itself (Acceptance Scenario 4.1) in `tests/test_work_ledger.py`
-- [ ] T036 [US4] Test that regenerating a projection twice from the same, unchanged ledger state produces an equivalent projection both times, and that generating a projection performs no write to the ledger (Acceptance Scenario 4.2, SC-005) in `tests/test_work_ledger.py`
-- [ ] T037 [US4] Test that every user-facing coordination fact (status, blocking, claim, evidence) remains fully available when no projection has ever been generated (Acceptance Scenario 4.3) in `tests/test_work_ledger.py`
+- [x] T035 [US4] Test that a blocked work item is not presented as eligible in a generated projection, even though the illustrative target adapter would not otherwise re-check blocking itself (Acceptance Scenario 4.1) in `tests/test_work_ledger.py`
+- [x] T036 [US4] Test that regenerating a projection twice from the same, unchanged ledger state produces an equivalent projection both times, and that generating a projection performs no write to the ledger (Acceptance Scenario 4.2, SC-005) in `tests/test_work_ledger.py`
+- [x] T037 [US4] Test that every user-facing coordination fact (status, blocking, claim, evidence) remains fully available when no projection has ever been generated (Acceptance Scenario 4.3) in `tests/test_work_ledger.py`
 
 **Checkpoint**: All four user stories are independently functional.
 
@@ -154,8 +154,8 @@ Both are single files for this feature; most tasks below therefore target one of
 
 **Purpose**: Archival, the remaining spec.md Edge Cases not owned by a single user story above, and an end-to-end quickstart pass.
 
-- [ ] T038 Implement `archive_work_item(id)` in `src/bindle/work_ledger.py` (single transaction thinning a `done`/`superseded` row in place to `id`/`status`/`superseded_by`/`archived_at`, deleting that item's own `blocked_by` edges, its evidence, and any lingering claim, per data-model.md's "Archival"; depends on T018, T023–T027, T038 itself touches T014's edges table and T026's evidence table)
-- [ ] T039 Test that archiving a satisfied prerequisite leaves every dependent item's blocked evaluation still correctly reporting it as satisfied (SC-008) in `tests/test_work_ledger.py`
+- [x] T038 Implement `archive_work_item(id)` in `src/bindle/work_ledger.py` (single transaction thinning a `done`/`superseded` row in place to `id`/`status`/`superseded_by`/`archived_at`, deleting that item's own `blocked_by` edges, its evidence, and any lingering claim, per data-model.md's "Archival"; depends on T018, T023–T027, T038 itself touches T014's edges table and T026's evidence table)
+- [x] T039 Test that archiving a satisfied prerequisite leaves every dependent item's blocked evaluation still correctly reporting it as satisfied (SC-008) in `tests/test_work_ledger.py`
 - [x] T040 Test that a `blocked_by` reference to an id that never validly identified a work item is reported unresolvable (`dangling_blocker`), and is distinguishable in reconciliation detail from a reference to an item that was genuinely completed and archived (SC-009) in `tests/test_work_ledger.py`
 - [x] T041 Test that two items promoted from the same underlying source are surfaced by reconciliation as `duplicate_source` rather than silently merged or rejected (spec.md Edge Case on duplicate promotion) in `tests/test_work_ledger.py`
 - [x] T042 Test that an indirect blocking cycle (`A blocked_by B`, `B blocked_by A`, via two independently-written edges) is detected by `reconcile()`'s `cycle_detected` finding (spec.md Edge Case on circular blocking) in `tests/test_work_ledger.py`
