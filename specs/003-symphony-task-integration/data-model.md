@@ -81,7 +81,11 @@ class ExternalProjectionRow:
     description: str | None
     status: str        # the raw status string: 'open' | 'done' | 'superseded'
     dispatchable: bool
-    created_at: str | None  # preserved verbatim from the canonical work item, never derived
+    created_at: str  # preserved verbatim from the canonical work item, never derived; v3's
+                      # CHECK (archived_at IS NOT NULL OR created_at IS NOT NULL) on
+                      # work_items structurally guarantees this for every archived_at IS
+                      # NULL row this query returns (research.md, "Decision: created_at
+                      # NOT NULL for live rows")
 ```
 
 Deterministic for unchanged ledger state (same `ORDER BY id` guarantee `generate_projection()` already provides).

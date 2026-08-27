@@ -56,17 +56,31 @@ _LEDGER_FILE_NAME = "ledger.sqlite3"
 # `description` to `work_items` and replaces its flat status CHECK with a
 # compound (type, status) CHECK. A version-1 database is migrated forward
 # by `_migrate_v1_to_v2`, never left behind.
-_SCHEMA_VERSION = 2
+#
+# v3 (specs/003-symphony-task-integration/research.md, "Decision: created_at
+# NOT NULL for live rows"): installs `CHECK (archived_at IS NOT NULL OR
+# created_at IS NOT NULL)` on `work_items` — the published Symphony
+# projection's `task_projection.created_at` is `NOT NULL`
+# (contracts/symphony-projection-v1.md) and is sourced verbatim from this
+# column, but v2's own `created_at TEXT` carried no such guarantee for a
+# live (non-archived) row. A version-2 database is migrated forward by
+# `_migrate_v2_to_v3`, which backfills any pre-existing live row's `NULL`
+# `created_at` from that row's own `updated_at` before installing the
+# constraint; a version-1 database reaches v3 via `_migrate_v1_to_v2`
+# followed by `_migrate_v2_to_v3`, never left at v2.
+_SCHEMA_VERSION = 3
 
 
 def _work_items_create_sql(table_name: str) -> str:
-    """The `work_items` (v2) `CREATE TABLE` body, parameterized by table name.
+    """The `work_items` (v3) `CREATE TABLE` body, parameterized by table name.
 
-    Used both for fresh initialization (`table_name="work_items"`) and for
-    the v1->v2 table-rebuild migration (`table_name="work_items_new"`,
-    later renamed) — one definition, so the two paths can never drift
-    apart. specs/002-milestone-task-work-items/data-model.md's "Schema
-    overview", verbatim, aside from the parameterized name.
+    Used for fresh initialization (`table_name="work_items"`) and for both
+    the v1->v2 and v2->v3 table-rebuild migrations
+    (`table_name="work_items_new"`, later renamed) — one definition, so
+    none of these paths can ever drift apart. specs/002-milestone-task-
+    work-items/data-model.md's "Schema overview", extended by specs/003-
+    symphony-task-integration/research.md's "Decision: created_at NOT NULL
+    for live rows" (the final CHECK below).
     """
     return f"""
     CREATE TABLE {table_name} (
@@ -93,6 +107,9 @@ def _work_items_create_sql(table_name: str) -> str:
       ),
       CHECK (
         (type = 'milestone' AND parent_id IS NULL) OR (type = 'task')
+      ),
+      CHECK (
+        archived_at IS NOT NULL OR created_at IS NOT NULL
       )
     )
     """
@@ -170,6 +187,8 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
     elif version == 1:
         _migrate_v1_to_v2(conn)
+    elif version == 2:
+        _migrate_v2_to_v3(conn)
     elif version != _SCHEMA_VERSION:
         raise SchemaVersionError(
             f"ledger at schema version {version}, expected {_SCHEMA_VERSION}"
@@ -198,11 +217,22 @@ def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
     Every pre-existing row is backfilled to `type = 'task'` with
     `parent_id` left `NULL` — the only sensible reading of a v1 item, which
     had no milestone concept to attribute it to (research.md's "Decision:
-    schema migration...", "Alternatives considered"). Wrapped in one
-    transaction (mirroring `_ensure_schema`'s own fresh-bootstrap
-    atomicity) so a crash mid-migration leaves the database at its
-    original, fully-functional version-1 state, never a partially
-    migrated one.
+    schema migration...", "Alternatives considered"). This function always
+    rebuilds straight to the current `_work_items_create_sql` shape (the
+    same shared definition fresh initialization uses) and stamps
+    `_SCHEMA_VERSION`, so a v1 database never stops at an intermediate,
+    no-longer-defined "v2-only" shape — it lands wherever `_ensure_schema`
+    currently considers latest, exactly like `_migrate_v2_to_v3` below.
+    Because that shared shape now includes v3's `CHECK (archived_at IS NOT
+    NULL OR created_at IS NOT NULL)` (research.md's "Decision: created_at
+    NOT NULL for live rows"), any pre-existing live row's `NULL`
+    `created_at` is backfilled from that row's own `updated_at` before the
+    rebuild reads it — the identical backfill `_migrate_v2_to_v3` performs,
+    needed here for exactly the same reason: nothing in v1's own schema
+    prevented that state either. Wrapped in one transaction (mirroring
+    `_ensure_schema`'s own fresh-bootstrap atomicity) so a crash
+    mid-migration leaves the database at its original, fully-functional
+    version-1 state, never a partially migrated one.
     """
     conn.execute("PRAGMA foreign_keys = OFF")
     try:
@@ -211,6 +241,10 @@ def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE work_items ADD COLUMN parent_id TEXT")
             conn.execute("ALTER TABLE work_items ADD COLUMN description TEXT")
             conn.execute("UPDATE work_items SET type = 'task' WHERE type IS NULL")
+            conn.execute(
+                "UPDATE work_items SET created_at = updated_at "
+                "WHERE created_at IS NULL AND archived_at IS NULL"
+            )
             conn.execute(_work_items_create_sql("work_items_new"))
             conn.execute(
                 "INSERT INTO work_items_new "
@@ -229,6 +263,65 @@ def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
         if integrity_violations:
             raise SchemaVersionError(
                 f"v1->v2 migration left dangling foreign keys: {integrity_violations}"
+            )
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
+def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
+    """Migrate an existing version-2 database to version 3 in place.
+
+    specs/003-symphony-task-integration/research.md's "Decision: created_at
+    NOT NULL for live rows": the published Symphony projection's
+    `task_projection.created_at` column is `NOT NULL`
+    (contracts/symphony-projection-v1.md) and is sourced verbatim from the
+    canonical `work_items.created_at` column — but v2's own `created_at
+    TEXT` carried no such guarantee for a live (`archived_at IS NULL`) row.
+    No exposed method can currently produce that state (every
+    `create_work_item()` call stamps `created_at` at insert time; the only
+    code that ever clears it is `archive_work_item()`, which requires
+    `archived_at` to become non-`NULL` in the same update), but the column
+    itself did not structurally prevent it — a hand-restored or externally
+    written ledger file could still carry a live row with `created_at IS
+    NULL`, which would then make `publish()`'s own `NOT NULL` insert into
+    `task_projection` fail. v3 closes that gap: this migration first
+    backfills any such row's `created_at` from that row's own `updated_at`
+    — the closest already-recorded, non-`NULL` timestamp already on the
+    row, never a value invented at migration time — then rebuilds the
+    table with `_work_items_create_sql`'s new `CHECK (archived_at IS NOT
+    NULL OR created_at IS NOT NULL)`, exactly mirroring
+    `_migrate_v1_to_v2`'s own table-rebuild pattern (SQLite cannot `ALTER`
+    a `CHECK` constraint onto an existing table). An already-archived row's
+    `created_at` (deliberately cleared by `archive_work_item`) is left
+    untouched — the backfill's own `WHERE ... AND archived_at IS NULL`
+    guard excludes it, and the new CHECK permits `created_at IS NULL`
+    exactly when `archived_at IS NOT NULL`.
+    """
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        with _transaction(conn):
+            conn.execute(
+                "UPDATE work_items SET created_at = updated_at "
+                "WHERE created_at IS NULL AND archived_at IS NULL"
+            )
+            conn.execute(_work_items_create_sql("work_items_new"))
+            conn.execute(
+                "INSERT INTO work_items_new "
+                "(id, type, parent_id, title, description, status, superseded_by, "
+                "source_kind, source_locator, source_promoted_by, created_at, "
+                "updated_at, archived_at) "
+                "SELECT id, type, parent_id, title, description, status, superseded_by, "
+                "source_kind, source_locator, source_promoted_by, created_at, "
+                "updated_at, archived_at "
+                "FROM work_items"
+            )
+            conn.execute("DROP TABLE work_items")
+            conn.execute("ALTER TABLE work_items_new RENAME TO work_items")
+            conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+        integrity_violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if integrity_violations:
+            raise SchemaVersionError(
+                f"v2->v3 migration left dangling foreign keys: {integrity_violations}"
             )
     finally:
         conn.execute("PRAGMA foreign_keys = ON")
@@ -490,7 +583,13 @@ class ExternalProjectionRow:
     from the canonical work item's own `created_at` column, never derived
     or synthesized at publish time — Symphony's dispatch ordering needs a
     real creation timestamp to rank simultaneously-eligible candidates,
-    not a value invented at export time.
+    not a value invented at export time. Typed `str`, never `str | None`:
+    this query is restricted to `archived_at IS NULL` rows, and v3's
+    `CHECK (archived_at IS NOT NULL OR created_at IS NOT NULL)`
+    (research.md's "Decision: created_at NOT NULL for live rows")
+    structurally guarantees every such row carries a non-`NULL`
+    `created_at` — exactly what `task_projection.created_at`'s own `NOT
+    NULL` column requires.
     """
 
     id: str
@@ -499,7 +598,7 @@ class ExternalProjectionRow:
     description: str | None
     status: str
     dispatchable: bool
-    created_at: str | None
+    created_at: str
 
 
 _WORK_ITEM_COLUMNS = (

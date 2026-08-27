@@ -1735,6 +1735,171 @@ class TestSchemaMigrationV1ToV2(LedgerTestCase):
         self.assertEqual(item.type, "task")
 
 
+# ============================================================================
+# specs/003-symphony-task-integration: created_at NOT NULL for live rows.
+# ============================================================================
+
+# The exact version-2 schema (as it existed on this branch before the v3
+# `CHECK (archived_at IS NOT NULL OR created_at IS NOT NULL)` fix), frozen
+# here verbatim — mirroring `_V1_WORK_ITEMS_SQL` above — so
+# TestSchemaMigrationV2ToV3 can construct a real pre-migration database
+# independent of whatever `work_ledger._work_items_create_sql` currently
+# produces.
+_V2_WORK_ITEMS_SQL = """
+CREATE TABLE work_items (
+  id                TEXT PRIMARY KEY,
+  type              TEXT NOT NULL CHECK (type IN ('task', 'milestone')),
+  parent_id         TEXT REFERENCES work_items(id),
+  title             TEXT,
+  description       TEXT,
+  status            TEXT NOT NULL,
+  superseded_by     TEXT REFERENCES work_items(id),
+  source_kind       TEXT CHECK (source_kind IN ('speckit_task', 'plan', 'adhoc')),
+  source_locator    TEXT,
+  source_promoted_by TEXT,
+  created_at        TEXT,
+  updated_at        TEXT NOT NULL,
+  archived_at       TEXT,
+  CHECK (
+    (status = 'superseded' AND superseded_by IS NOT NULL) OR
+    (status != 'superseded' AND superseded_by IS NULL)
+  ),
+  CHECK (
+    (type = 'task' AND status IN ('open', 'done', 'superseded')) OR
+    (type = 'milestone' AND status IN ('open', 'review', 'accepted', 'superseded'))
+  ),
+  CHECK (
+    (type = 'milestone' AND parent_id IS NULL) OR (type = 'task')
+  )
+)
+"""
+
+
+class TestSchemaMigrationV2ToV3(LedgerTestCase):
+    """specs/003-symphony-task-integration/research.md's "Decision:
+    created_at NOT NULL for live rows": an existing version-2 database —
+    including one holding a live (non-archived) row whose `created_at` is
+    already `NULL`, a state no exposed v2 method could produce but that
+    the v2 schema itself never structurally forbade — migrates forward to
+    version 3 automatically and safely, backfilling that row's
+    `created_at` from its own `updated_at` rather than failing or losing
+    data, and the new invariant is enforced from then on."""
+
+    def _create_v2_database(self, rows=(), legacy_null_created_at_rows=(), archived_rows=()):
+        db_path = work_ledger.ledger_path(self.repo_root)
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute(_V2_WORK_ITEMS_SQL)
+            for statement in _V1_OTHER_TABLES_SQL:
+                conn.execute(statement)
+            for row_id in rows:
+                conn.execute(
+                    "INSERT INTO work_items "
+                    "(id, type, status, source_kind, source_locator, created_at, updated_at) "
+                    "VALUES (?, 'task', 'open', 'adhoc', ?, ?, ?)",
+                    (row_id, f"loc-{row_id}", _NOW, _NOW),
+                )
+            # A real legacy/migrated case: a live task whose created_at is
+            # already NULL — unreachable via create_work_item()/
+            # archive_work_item(), but not something the v2 schema itself
+            # ever rejected, exactly the gap this migration closes.
+            for row_id, updated_at in legacy_null_created_at_rows:
+                conn.execute(
+                    "INSERT INTO work_items "
+                    "(id, type, status, source_kind, source_locator, created_at, updated_at) "
+                    "VALUES (?, 'task', 'open', 'adhoc', ?, NULL, ?)",
+                    (row_id, f"loc-{row_id}", updated_at),
+                )
+            # An archived row with created_at already NULL (archive_work_item's
+            # own deliberate data-minimization) — must be left untouched.
+            for row_id in archived_rows:
+                conn.execute(
+                    "INSERT INTO work_items "
+                    "(id, type, status, source_kind, source_locator, created_at, "
+                    "updated_at, archived_at) "
+                    "VALUES (?, 'task', 'done', NULL, NULL, NULL, ?, ?)",
+                    (row_id, _NOW, _NOW),
+                )
+            conn.execute("PRAGMA user_version = 2")
+            conn.commit()
+        finally:
+            conn.close()
+
+    def test_existing_v2_database_migrates_to_v3_on_open(self):
+        self._create_v2_database(rows=["WI-1"])
+
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            self.assertEqual(
+                conn.execute("PRAGMA user_version").fetchone()[0],
+                work_ledger._SCHEMA_VERSION,
+            )
+        finally:
+            conn.close()
+
+    def test_non_null_created_at_is_preserved_verbatim_across_migration(self):
+        self._create_v2_database(rows=["WI-1"])
+
+        item = work_ledger.WorkLedger(self.repo_root).get_work_item("WI-1")
+        self.assertEqual(item.created_at, _NOW)
+
+    def test_legacy_null_created_at_on_a_live_row_is_backfilled_from_updated_at(self):
+        legacy_updated_at = "2020-01-01T00:00:00Z"
+        self._create_v2_database(
+            legacy_null_created_at_rows=[("WI-legacy", legacy_updated_at)]
+        )
+
+        item = work_ledger.WorkLedger(self.repo_root).get_work_item("WI-legacy")
+        self.assertEqual(item.created_at, legacy_updated_at)
+        self.assertEqual(item.updated_at, legacy_updated_at)
+
+    def test_legacy_null_created_at_row_is_published_with_a_non_null_created_at(self):
+        # The exact failure this migration prevents: without the backfill,
+        # publish()'s own `task_projection.created_at TEXT NOT NULL`
+        # INSERT would raise sqlite3.IntegrityError against this row.
+        legacy_updated_at = "2020-01-01T00:00:00Z"
+        self._create_v2_database(
+            legacy_null_created_at_rows=[("WI-legacy", legacy_updated_at)]
+        )
+
+        ledger = work_ledger.WorkLedger(self.repo_root)
+        from bindle import symphony_projection
+
+        path = symphony_projection.publish(ledger)
+
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            created_at = conn.execute(
+                "SELECT created_at FROM task_projection WHERE id = ?", ("WI-legacy",)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(created_at, legacy_updated_at)
+
+    def test_archived_rows_null_created_at_is_left_untouched(self):
+        self._create_v2_database(archived_rows=["WI-archived"])
+
+        item = work_ledger.WorkLedger(self.repo_root).get_work_item("WI-archived")
+        self.assertIsNone(item.created_at)
+        self.assertIsNotNone(item.archived_at)
+
+    def test_new_check_rejects_a_live_row_with_null_created_at_after_migration(self):
+        self._create_v2_database(rows=["WI-1"])
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            with self.assertRaises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO work_items "
+                    "(id, type, status, created_at, updated_at, archived_at) "
+                    "VALUES (?, 'task', 'open', NULL, ?, NULL)",
+                    ("WI-bad", _NOW),
+                )
+        finally:
+            conn.close()
+
+
 class TestWorkItemTypeAndParent(LedgerTestCase):
     """T006: type immutability (no mutator exists), parent_id creation
     validation (FR-002/FR-003), and type-aware blocking resolution across
