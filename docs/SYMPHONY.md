@@ -80,6 +80,34 @@ managed by Bindle:
   directly (`./bin/symphony ./WORKFLOW.md`); it is not a daemon and does
   not background itself.
 
+## Scheduling boundary: only tasks are dispatchable
+
+Bindle's durable work ledger (`specs/001-durable-work-ledger/`, extended
+by `specs/002-milestone-task-work-items/`; adopted in `docs/DECISIONS.md`
+D038) distinguishes two work-item types: `task` (an execution unit) and
+`milestone` (a human acceptance unit grouping one or more child tasks).
+**Only `task` items are ever candidates for Symphony dispatch.** A
+`milestone` is never translated into, or represented as, a Symphony
+tracker entry — Bindle's own coordinator-facing projection
+(`WorkLedger.generate_projection()`) filters to `type = 'task'` by
+construction, so a milestone is structurally incapable of reaching
+Symphony's tracker regardless of its own status (`open`, `review`,
+`accepted`, `superseded`).
+
+This means Symphony itself needs no milestone concept, no review-state
+vocabulary, and no awareness of task-to-milestone attribution at all — it
+only ever sees ordinary tasks, exactly as if milestones did not exist.
+Bindle resolves blocking, claim, and milestone-attribution facts entirely
+on its own side of the seam before a task is ever projected; Symphony is
+asked only "is this task eligible, what is it, what execution metadata
+do I need" (`specs/001-durable-work-ledger/contracts/`, extended by
+`specs/002-milestone-task-work-items/contracts/coordinator-projection-v2.md`).
+Whether a milestone itself is *ready for review* is a separate, mechanically
+derived fact (`is_review_ready()`) computed from its children's own
+resolved status and evidence; whether it is actually *accepted* remains a
+human judgment recorded as an explicit transition, never inferred or
+automated from readiness alone (D038).
+
 ## Non-scope
 
 This document establishes a reference only. As of this reference, Bindle
@@ -88,11 +116,14 @@ does not:
 * install, build, configure, start, stop, or supervise Symphony;
 * invoke Symphony or exchange data with it;
 * create, read, or translate work items for any Symphony tracker,
-  including the local JSON tracker above;
-* introduce a SQLite schema, work-item model, or any coupling to
-  Symphony's tracker/storage — Bindle has not finalized its own durable
-  implementation/work-state model, and that decision is independent of
-  Symphony's own (JSON, not SQLite) local tracker;
+  including the local JSON tracker above — the Symphony-specific adapter
+  and field-name translation layer remain future work, deferred until a
+  first end-to-end integration is actually attempted;
+* couple its own SQLite work-item model (`docs/DECISIONS.md` D038,
+  `specs/001-durable-work-ledger/`, `specs/002-milestone-task-work-items/`)
+  to Symphony's tracker/storage in any way — that model was finalized
+  independently of, and remains structurally unrelated to, Symphony's own
+  (JSON, not SQLite) local tracker;
 * standardize a `bindle` command to launch or manage Symphony.
 
 `plans/active/2026-08-24-symphony-coordination-exploration.md` records the
