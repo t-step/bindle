@@ -132,6 +132,8 @@ Initial publication should be preview-first and approval-based.
 
 These labels define the stable product decomposition. Current status, sequencing, and active work live in PLAN.md.
 
+**Terminology note**: "Milestone" here always means one of this section's own M0–M4 project-roadmap labels below — a different, unrelated concept from a *milestone work item* in Bindle's durable work ledger (`specs/002-milestone-task-work-items/`; adopted in `docs/DECISIONS.md` D038), which is a human-acceptance unit grouping tasks inside the SQLite coordination ledger. Nothing in this section refers to that ledger concept; where this repository's other documentation means the ledger sense, it says "milestone work item" explicitly.
+
 ### M0: Workshop
 
 Establish repository instructions, toolchain policy, diagnostics, development conventions, and the boundaries required to build Bindle safely.
