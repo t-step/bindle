@@ -9,7 +9,10 @@ Keep Bindle's coordination boundary unambiguous after implementation of the dura
 ## Current facts
 
 * `specs/001-durable-work-ledger/` is implemented in `src/bindle/work_ledger.py` and verified by `tests/test_work_ledger.py`. All 43 implementation tasks are complete.
-* Bindle's durable coordination state is its own repository-scoped SQLite ledger under the Git common directory. This SQLite database belongs to Bindle, not to Symphony.
+* Bindle's durable coordination state is its own repository-scoped **SQLite ledger** under the Git common directory. SQLite is the current implementation and intended persistence model for this work.
+* The earlier plain per-item/file-based coordination design is **superseded and out**. Do not restore TOML-per-item records, separate claim files, tombstones, or Git/file-layout-based coordination as an alternative persistence path.
+* Git remains the workspace/history/evidence substrate. Branches, worktrees, commits, and repository state may be referenced by or reconciled against the ledger, but Git/file state is not the durable coordination store.
+* This SQLite database belongs to Bindle, not to Symphony.
 * The ledger owns a deliberately small set of orthogonal facts: work-item status, blocking edges, claims, evidence, and source provenance. It is not a scheduler, agent loop, workflow engine, or general DAG framework.
 * `WorkLedger.generate_projection()` produces a disposable, coordinator-agnostic current-state projection. The projection is derived from Bindle's ledger; coordinator storage is never authoritative for Bindle work state.
 * Symphony remains a referenced external coordinator candidate. The pinned fork's shipped `tracker.kind: local` adapter uses `.symphony/local_tracker.json`, not SQLite. Bindle has no current command, config, or runtime path that invokes Symphony.
@@ -22,7 +25,7 @@ The intended flow is:
 
 ```
 source artifact / decomposition decision
-        -> Bindle durable work ledger
+        -> Bindle SQLite work ledger
         -> disposable coordinator projection
         -> Symphony execution
         -> isolated agent workspace / Git evidence
@@ -33,6 +36,7 @@ Each arrow is a seam, not an invitation to collapse the neighboring systems into
 
 In particular:
 
+* Do **not** replace SQLite with the earlier file-based design. That persistence model is superseded.
 * Do **not** build or restore a Symphony-specific SQLite tracker merely because older planning material described one. That was an exploration-era assumption and is superseded.
 * Do **not** make Symphony's JSON tracker the durable Bindle work ledger. It is coordinator-owned execution state.
 * Do **not** make Spec Kit `tasks.md` the runtime ledger or automatically ingest every generated task. Promotion into durable work remains an explicit decomposition/promotion decision.
@@ -41,7 +45,7 @@ In particular:
 
 ## Next coordination work
 
-1. Record the durable work ledger adoption decision in `docs/DECISIONS.md`, including the bounded-coordination-state ownership category and the fact that its SQLite storage is Bindle-owned rather than Symphony-owned.
+1. Record the durable work ledger adoption decision in `docs/DECISIONS.md`, including the bounded-coordination-state ownership category, SQLite as the persistence model, and the explicit supersession of the earlier file-based design.
 2. Re-verify the pinned Symphony fork at the revision actually targeted for integration before changing either repository. Historical adapter details are evidence, not a standing API guarantee.
 3. Define the smallest Symphony-specific mapping from `ProjectedWorkItem` into the tracker surface Symphony actually exposes. Prefer an adapter/materialization seam over schema sharing.
 4. Prove one end-to-end execution path using Symphony itself: create/promote a Bindle work item, project it, dispatch it through Symphony, execute in an isolated workspace with the selected worker harness, record Git/evidence, and reconcile the result back against Bindle state.
