@@ -2,6 +2,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+import threading
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -379,6 +380,34 @@ class TestClaimsEvidenceAndReconciliation(LedgerTestCase):
                 self.assertFalse(
                     self.ledger.claim(item_id, f"owner-{attempt + 1}")
                 )
+
+    def test_concurrent_claim_attempts_have_exactly_one_winner(self):
+        # FR-018/SC-004a's actual concurrency guarantee: real threads
+        # racing against the same never-before-claimed item via SQLite's
+        # own primary-key constraint and single-writer serialization —
+        # not merely sequential calls, which the test above already
+        # covers at the Python-level contract only.
+        item_id = "WI-race"
+        self._create(item_id)
+
+        thread_count = 8
+        barrier = threading.Barrier(thread_count)
+        results = [None] * thread_count
+
+        def attempt(index):
+            barrier.wait()
+            results[index] = self.ledger.claim(item_id, f"owner-{index}")
+
+        threads = [
+            threading.Thread(target=attempt, args=(i,)) for i in range(thread_count)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(results.count(True), 1)
+        self.assertEqual(results.count(False), thread_count - 1)
 
     def test_claim_against_nonexistent_item_raises_not_already_claimed(self):
         with self.assertRaises(sqlite3.IntegrityError) as ctx:
