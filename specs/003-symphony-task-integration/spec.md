@@ -108,7 +108,7 @@ Having read the published projection and picked a dispatchable task, an external
 
 - **FR-013**: System MUST provide an operation that generates a published projection: a distinct, versioned, read-only artifact derived entirely from current canonical ledger state, separate from the existing internal `generate_projection()`/`ProjectedWorkItem` contract.
 - **FR-014**: The published projection MUST contain exactly one row per non-archived work item of type `task`, and MUST NOT contain a row for any work item of type `milestone`, under any status, claim, or blocking state.
-- **FR-015**: Each published row MUST carry: a stable id, a non-empty identifier suitable for external workspace naming, a title, a description, a direct human-readable status value, and a derived `dispatchable` boolean.
+- **FR-015**: Each published row MUST carry: a stable id, a non-empty identifier suitable for external workspace naming, a title, a description, a direct human-readable status value, a derived `dispatchable` boolean, and the canonical work item's own creation timestamp (`created_at`), preserved verbatim rather than derived or synthesized at publish time.
 - **FR-016**: `dispatchable` MUST be computed entirely inside Bindle as `type = 'task' AND status = 'open' AND NOT claimed AND NOT blocked`, identical in substance to the ledger's existing "available to start" computation, and MUST require no blocking, claim, or dependency evaluation by the external reader.
 - **FR-017**: The published projection MUST be a disposable, regenerable artifact: regenerating it from unchanged canonical ledger state MUST produce an equivalent result, and it MUST NOT be treated as, or required to serve as, the only record of any canonical fact.
 - **FR-018**: The published projection's shape MUST carry its own version identifier, independent of Bindle's internal ledger schema version (`_SCHEMA_VERSION`), discoverable by an external reader without inspecting Bindle's internal tables.
@@ -130,7 +130,7 @@ Having read the published projection and picked a dispatchable task, an external
 ### Key Entities
 
 - **Loaded Task Work Item**: An existing `work_items` row (type `task`) created by the loading operation, distinguished from any other task only by carrying `source_kind = 'speckit_task'` and a source identity that combines its originating feature directory and Spec Kit task id.
-- **Symphony Projection Row**: A row in the new published projection artifact — id, identifier, title, description, status, dispatchable — computed fresh at generation time and never itself a source of durable truth.
+- **Symphony Projection Row**: A row in the new published projection artifact — id, identifier, title, description, status, dispatchable, created_at — computed fresh at generation time and never itself a source of durable truth.
 - **Source Reference (Spec Kit)**: The pairing of a feature directory path and a Spec Kit task id that together give one Spec Kit task a stable identity across repeated loads.
 
 ## Success Criteria *(mandatory)*

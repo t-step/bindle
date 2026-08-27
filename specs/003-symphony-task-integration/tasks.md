@@ -59,7 +59,7 @@ None. No change to `work_items`' schema or `_SCHEMA_VERSION` is needed anywhere 
 
 ### Implementation for User Story 2
 
-- [x] T013 [US2] Add `generate_external_projection() -> list[ExternalProjectionRow]` and the `ExternalProjectionRow` dataclass (`id`, `identifier`, `title`, `description`, `status`, `dispatchable`) to `WorkLedger` in `src/bindle/work_ledger.py`, per `data-model.md`'s exact query — one `SELECT`, reusing the existing `_STILL_BLOCKING_CONDITION` fragment verbatim, filtered to `archived_at IS NULL AND type = 'task'`, `identifier` derived by replacing `:` with `-` in `id`.
+- [x] T013 [US2] Add `generate_external_projection() -> list[ExternalProjectionRow]` and the `ExternalProjectionRow` dataclass (`id`, `identifier`, `title`, `description`, `status`, `dispatchable`, `created_at`) to `WorkLedger` in `src/bindle/work_ledger.py`, per `data-model.md`'s exact query — one `SELECT`, reusing the existing `_STILL_BLOCKING_CONDITION` fragment verbatim, filtered to `archived_at IS NULL AND type = 'task'`, `identifier` derived by replacing `:` with `-` in `id`, `created_at` preserved verbatim from the canonical row.
 - [x] T014 [US2] Create `src/bindle/symphony_projection.py` with `publish(ledger: WorkLedger) -> str`: resolves the export path as `{ledger.repo_root}/.bindle-work/symphony-projection.sqlite3` (mirroring `ledger_path()`'s own convention), opens/creates that file, drops and recreates `task_projection` inside one transaction from `generate_external_projection()`'s current result, sets `PRAGMA user_version = 1`, and returns the resolved path. Depends on: T013.
 
 ### Tests for User Story 2

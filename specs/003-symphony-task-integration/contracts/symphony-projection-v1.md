@@ -22,6 +22,7 @@ One table, `task_projection`:
 | `description` | `TEXT` | no | Human-readable description text. |
 | `status` | `TEXT` | yes | One of `open`, `done`, `superseded` — the task's status, exposed directly as a readable value (never as a pair of booleans an external reader must reconstruct from). |
 | `dispatchable` | `INTEGER` (`0` or `1`) | yes | Whether this task may currently be claimed and started: `status = 'open' AND` not claimed `AND` not blocked, computed entirely inside Bindle. |
+| `created_at` | `TEXT` | yes | The canonical work item's own creation timestamp, preserved verbatim — never derived or synthesized at publish time. Symphony's own dispatch ordering ranks simultaneously-eligible candidates by `(priority_rank, created_at, identifier)`; without a real value here that ordering would silently collapse to alphabetical-by-`identifier`. |
 
 ## Guarantees
 
@@ -30,9 +31,10 @@ One table, `task_projection`:
 - **Disposable and regenerable.** Two publishes from an unchanged ledger produce an equivalent `task_projection` table (SC-006). This file is never the only record of any fact it contains — every value here is derivable again from the canonical ledger at any time (FR-017).
 - **No write path for external callers.** This file is opened read-only by convention for every consumer other than Bindle's own publish operation; nothing in this contract grants or implies write access.
 - **No delivery/acknowledgment guarantee.** Exactly like the existing internal projection contract, this is a snapshot at generation time, not an event stream — a status change that happens after generation is simply not reflected until the next publish.
+- **Publish is atomic; never torn.** `publish()` rewrites the whole `task_projection` table and `PRAGMA user_version` inside one SQLite transaction against the existing file. Adversarially verified (research.md's "Decision: publish atomicity mechanism") under concurrent reads, a mid-transaction failure, and a hard process kill before commit: a reader never observes a partial table, a missing table, or a schema/version mismatch. **An external reader MUST wrap its own schema-version check and row read in one transaction** (e.g. `BEGIN` ... `PRAGMA user_version` ... `SELECT ... FROM task_projection` ... `COMMIT`) — two separate, unwrapped autocommit statements can otherwise observe two different publish generations, since each such statement is its own implicit transaction. A long-lived open reader transaction can, in the current default journal mode, cause a concurrent `publish()` to fail with "database is locked" after a 5-second timeout — a liveness consideration, not an atomicity one; keep reader transactions short.
 
 ## What this contract does not do
 
 - It does not choose a dispatch order, priority, or concurrency limit — no such column exists, and none is planned to be added without a separate, explicit decision.
-- It does not translate into Symphony's own tracker format (`.symphony/local_tracker.json`) — that adapter, if built, is separate future work outside this feature's scope (`docs/SYMPHONY.md`).
+- It does not translate into any Symphony-side tracker format. A future Symphony-side `Tracker` adapter, if built, would read this artifact and map its rows onto `Tracker.Issue` directly — that adapter is separate future work outside this feature's scope (`docs/SYMPHONY.md`) and is unrelated to Symphony's own separate, standalone local tracker (`.symphony/local_tracker.json`).
 - It does not assume Symphony, or any particular external reader, is installed or running — this file and its guarantees hold with zero external consumer present.

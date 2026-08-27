@@ -86,14 +86,22 @@ class TestPublish(LedgerTestCase):
             ]
             self.assertEqual(
                 columns,
-                ["id", "identifier", "title", "description", "status", "dispatchable"],
+                [
+                    "id",
+                    "identifier",
+                    "title",
+                    "description",
+                    "status",
+                    "dispatchable",
+                    "created_at",
+                ],
             )
 
             rows = {
                 row[0]: row
                 for row in conn.execute(
-                    "SELECT id, identifier, title, description, status, dispatchable "
-                    "FROM task_projection"
+                    "SELECT id, identifier, title, description, status, "
+                    "dispatchable, created_at FROM task_projection"
                 ).fetchall()
             }
         finally:
@@ -109,6 +117,7 @@ class TestPublish(LedgerTestCase):
         self.assertEqual(rows["T-open"][5], 1)
         self.assertEqual(rows["T-open"][1], "T-open")  # no ':' to replace
         self.assertEqual(rows["T-open"][2], "Title T-open")
+        self.assertIsNotNone(rows["T-open"][6])  # created_at preserved
 
         # T-blocker is itself open/unclaimed/unblocked, so it remains
         # dispatchable even though it blocks another task.
@@ -141,6 +150,21 @@ class TestPublish(LedgerTestCase):
         self.assertEqual(values["T-blocked"], 0)
         for value in values.values():
             self.assertIn(value, (0, 1))
+
+    def test_created_at_is_preserved_verbatim_in_the_published_row(self):
+        self._create_task("T-1")
+        canonical_created_at = self.ledger.get_work_item("T-1").created_at
+        path = symphony_projection.publish(self.ledger)
+
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            published_created_at = conn.execute(
+                "SELECT created_at FROM task_projection WHERE id = ?", ("T-1",)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertIsNotNone(canonical_created_at)
+        self.assertEqual(published_created_at, canonical_created_at)
 
     def test_identifier_replaces_colon_for_speckit_style_ids(self):
         self._create_task(

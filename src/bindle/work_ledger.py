@@ -486,7 +486,11 @@ class ExternalProjectionRow:
     itself. `identifier` (FR-015) is a non-empty, workspace-name-safe
     derivation of `id` (research.md's "Decision: identifier derivation
     for external workspace naming") — deterministic, never a second,
-    independently-assigned identity.
+    independently-assigned identity. `created_at` is preserved verbatim
+    from the canonical work item's own `created_at` column, never derived
+    or synthesized at publish time — Symphony's dispatch ordering needs a
+    real creation timestamp to rank simultaneously-eligible candidates,
+    not a value invented at export time.
     """
 
     id: str
@@ -495,6 +499,7 @@ class ExternalProjectionRow:
     description: str | None
     status: str
     dispatchable: bool
+    created_at: str | None
 
 
 _WORK_ITEM_COLUMNS = (
@@ -1507,10 +1512,12 @@ class WorkLedger:
         not a post-filter, so no milestone work item can ever appear here
         regardless of its own status, claim, or blocking state (FR-014,
         SC-007). `dispatchable` is computed inline, in the same single
-        `SELECT` that reads `id`/`title`/`description`/`status`, for the
-        same "one snapshot, not two" reason `generate_projection()`'s own
-        docstring already explains in detail — see there rather than
-        repeating it here.
+        `SELECT` that reads `id`/`title`/`description`/`status`/
+        `created_at`, for the same "one snapshot, not two" reason
+        `generate_projection()`'s own docstring already explains in
+        detail — see there rather than repeating it here. `created_at` is
+        read straight off the canonical row, never derived: this query is
+        the only place it is read, so there is nothing to keep in sync.
 
         `identifier` (FR-015) is derived purely from `id` by replacing
         every `:` with `-` (research.md's "Decision: identifier derivation
@@ -1534,6 +1541,7 @@ class WorkLedger:
                   wi.title,
                   wi.description,
                   wi.status,
+                  wi.created_at,
                   (
                     wi.status = 'open'
                     AND NOT EXISTS (
@@ -1560,7 +1568,8 @@ class WorkLedger:
                 title=row[1],
                 description=row[2],
                 status=row[3],
-                dispatchable=bool(row[4]),
+                created_at=row[4],
+                dispatchable=bool(row[5]),
             )
             for row in rows
         ]

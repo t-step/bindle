@@ -146,11 +146,12 @@ This document establishes a reference only. Even with the published
 projection and write surface above, Bindle still does not:
 
 * install, build, configure, start, stop, or supervise Symphony;
-* build a Symphony-specific tracker adapter or translate its published
-  projection into Symphony's own local JSON tracker format
-  (`.symphony/local_tracker.json`) — that adapter, if built, remains
-  future work, deferred until a first end-to-end integration is actually
-  attempted;
+* build a Symphony-specific tracker adapter — that adapter, if built,
+  remains future work, deferred until a first end-to-end integration is
+  actually attempted, and would read the published projection and map
+  its rows onto `Tracker.Issue` directly, never translate into Symphony's
+  own separate, standalone local tracker format
+  (`.symphony/local_tracker.json`), which is unrelated;
 * make its published SQLite projection a second copy of, or a
   replacement for, Symphony's own tracker/storage — the projection is a
   disposable, regenerable read model derived from Bindle's own canonical

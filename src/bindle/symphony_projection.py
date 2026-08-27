@@ -19,8 +19,11 @@ adds two things on top of the existing, unchanged internal ledger
    beyond these named operations (FR-020-FR-024).
 
 This module is never a Symphony adapter: it does not install, start, stop,
-or otherwise supervise Symphony, and it does not translate into Symphony's
-own local tracker format (`.symphony/local_tracker.json`) — see
+or otherwise supervise Symphony. A future Symphony-side `Tracker` adapter
+would read this published artifact and map its rows onto `Tracker.Issue`
+directly — that adapter is separate future work and is unrelated to
+Symphony's own standalone local tracker format (`.symphony/local_tracker.json`),
+which this module never reads, writes, or translates into — see
 docs/SYMPHONY.md.
 """
 
@@ -49,7 +52,8 @@ CREATE TABLE task_projection (
   title        TEXT,
   description  TEXT,
   status       TEXT NOT NULL,
-  dispatchable INTEGER NOT NULL
+  dispatchable INTEGER NOT NULL,
+  created_at   TEXT NOT NULL
 )
 """
 
@@ -87,6 +91,13 @@ def publish(ledger: WorkLedger) -> str:
     Bindle's code ever opens it for writing, and Bindle's own internal
     code never reads it back (data-model.md's "Regeneration") — it exists
     solely for an external reader.
+
+    This in-place transaction, rather than a write-to-temp-then-rename,
+    was adversarially verified (research.md's "Decision: publish
+    atomicity mechanism") to give a concurrent reader the guarantee that
+    actually matters — never a torn or schema/version-inconsistent
+    projection, including under a hard process kill before commit — so
+    it is retained deliberately, not for lack of consideration.
     """
     export_path = projection_path(ledger.repo_root)
     os.makedirs(os.path.dirname(export_path), exist_ok=True)
@@ -100,8 +111,8 @@ def publish(ledger: WorkLedger) -> str:
             conn.execute(_CREATE_TASK_PROJECTION_SQL)
             conn.executemany(
                 "INSERT INTO task_projection "
-                "(id, identifier, title, description, status, dispatchable) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(id, identifier, title, description, status, dispatchable, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [
                     (
                         row.id,
@@ -110,6 +121,7 @@ def publish(ledger: WorkLedger) -> str:
                         row.description,
                         row.status,
                         int(row.dispatchable),
+                        row.created_at,
                     )
                     for row in rows
                 ],

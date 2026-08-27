@@ -57,6 +57,7 @@ SELECT
   wi.title,
   wi.description,
   wi.status,
+  wi.created_at,
   (
     wi.status = 'open'
     AND NOT EXISTS (SELECT 1 FROM work_item_claims c WHERE c.work_item_id = wi.id)
@@ -80,6 +81,7 @@ class ExternalProjectionRow:
     description: str | None
     status: str        # the raw status string: 'open' | 'done' | 'superseded'
     dispatchable: bool
+    created_at: str | None  # preserved verbatim from the canonical work item, never derived
 ```
 
 Deterministic for unchanged ledger state (same `ORDER BY id` guarantee `generate_projection()` already provides).
@@ -101,7 +103,8 @@ CREATE TABLE task_projection (
   title        TEXT,
   description  TEXT,
   status       TEXT NOT NULL,
-  dispatchable INTEGER NOT NULL  -- SQLite boolean convention: 0 or 1
+  dispatchable INTEGER NOT NULL,  -- SQLite boolean convention: 0 or 1
+  created_at   TEXT NOT NULL      -- preserved verbatim from the canonical work item
 )
 ```
 

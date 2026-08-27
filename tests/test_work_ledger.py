@@ -2486,6 +2486,13 @@ class TestGenerateExternalProjection(LedgerTestCase):
         second = self.ledger.generate_external_projection()
         self.assertEqual(first, second)
 
+    def test_created_at_is_preserved_verbatim_from_the_canonical_item(self):
+        self._create_task("T-1")
+        canonical = self.ledger.get_work_item("T-1")
+        by_id = {row.id: row for row in self.ledger.generate_external_projection()}
+        self.assertIsNotNone(canonical.created_at)
+        self.assertEqual(by_id["T-1"].created_at, canonical.created_at)
+
 
 class TestAvailableWorkItemsExcludesMilestones(LedgerTestCase):
     """FR-017a: `list_available_work_items()` reports only `type='task'`
