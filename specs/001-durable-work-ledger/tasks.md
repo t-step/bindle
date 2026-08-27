@@ -159,7 +159,7 @@ Both are single files for this feature; most tasks below therefore target one of
 - [x] T040 Test that a `blocked_by` reference to an id that never validly identified a work item is reported unresolvable (`dangling_blocker`), and is distinguishable in reconciliation detail from a reference to an item that was genuinely completed and archived (SC-009) in `tests/test_work_ledger.py`
 - [x] T041 Test that two items promoted from the same underlying source are surfaced by reconciliation as `duplicate_source` rather than silently merged or rejected (spec.md Edge Case on duplicate promotion) in `tests/test_work_ledger.py`
 - [x] T042 Test that an indirect blocking cycle (`A blocked_by B`, `B blocked_by A`, via two independently-written edges) is detected by `reconcile()`'s `cycle_detected` finding (spec.md Edge Case on circular blocking) in `tests/test_work_ledger.py`
-- [ ] T043 Run quickstart.md Scenarios 1–5 end-to-end as a single integration test tying together creation, availability, claim/reconcile/override, and projection generation in `tests/test_work_ledger.py`
+- [x] T043 Run quickstart.md Scenarios 1–5 end-to-end as a single integration test tying together creation, availability, claim/reconcile/override, and projection generation in `tests/test_work_ledger.py`
 
 ---
 

@@ -884,5 +884,232 @@ class TestArchival(LedgerTestCase):
         self.assertIsNotNone(second.archived_at)
 
 
+class TestQuickstartEndToEnd(LedgerTestCase):
+    """T043: quickstart.md Scenarios 1-5, end to end, as one coherent pass
+    over creation, availability/blocking/archival, claim/reconcile/
+    override, concurrent claim arbitration, and projection generation.
+
+    quickstart.md's own Scenario 3 step 1 ("Claim WI-1 from worktree A")
+    presumes WI-1 is still an active, claimable item — but Scenario 2's
+    own step 5 already archives WI-1 (`done`, thinned). The two top-level
+    scenarios are independent narrative illustrations sharing conceptual
+    item names, not one strictly cumulative object timeline (quickstart.md
+    itself marks several steps "New" as hypothetical continuations, not a
+    single unbroken state machine). This test therefore carries Scenario
+    1 and 2's own item ids (`WI-1`..`WI-3`) forward only within those two
+    scenarios, and introduces fresh ids for Scenarios 3-5 — preserving
+    every behavior quickstart.md actually specifies without forcing a
+    contradiction quickstart.md itself doesn't resolve.
+    """
+
+    def test_quickstart_scenarios_1_through_5(self):
+        # -- Scenario 1: decompose and recover (User Story 1) -----------
+        self.ledger.create_work_item(
+            id="WI-1",
+            title="write research.md",
+            source_kind="plan",
+            source_locator="specs/001-durable-work-ledger/plan.md",
+        )
+        self.ledger.create_work_item(
+            id="WI-2",
+            title="write data-model.md",
+            source_kind="plan",
+            source_locator="specs/001-durable-work-ledger/plan.md",
+        )
+        self.ledger.create_work_item(
+            id="WI-3",
+            title="write quickstart.md",
+            source_kind="plan",
+            source_locator="specs/001-durable-work-ledger/plan.md",
+        )
+
+        # A fresh WorkLedger handle over the same repo_root stands in for
+        # "a fresh reader with no memory of the creating session."
+        fresh = work_ledger.WorkLedger(self.repo_root)
+        listed = {item.id: item for item in fresh.list_work_items()}
+        self.assertEqual(set(listed), {"WI-1", "WI-2", "WI-3"})
+        for item_id in ("WI-1", "WI-2", "WI-3"):
+            self.assertEqual(listed[item_id].status, "open")
+            self.assertEqual(
+                listed[item_id].source_locator,
+                "specs/001-durable-work-ledger/plan.md",
+            )
+
+        # -- Scenario 2: availability, including across archival --------
+        # (User Story 2)
+        self.ledger.add_blocked_by("WI-2", "WI-1")
+
+        self.assertFalse(self.ledger.is_blocked("WI-1"))
+        self.assertTrue(self.ledger.is_blocked("WI-2"))
+        self.assertFalse(self.ledger.is_blocked("WI-3"))
+
+        available = set(self.ledger.list_available_work_items())
+        self.assertEqual(available, {"WI-1", "WI-3"})
+
+        self.assertTrue(self.ledger.mark_done("WI-1"))
+        self.assertFalse(self.ledger.is_blocked("WI-2"))
+        self.assertIn("WI-2", self.ledger.list_available_work_items())
+
+        # Archiving the now-satisfied prerequisite must not change the
+        # answer (SC-008) — resolved via the same single-table lookup,
+        # whether WI-1's row is active or thinned.
+        self.assertTrue(self.ledger.archive_work_item("WI-1"))
+        self.assertFalse(self.ledger.is_blocked("WI-2"))
+        self.assertIn("WI-2", self.ledger.list_available_work_items())
+
+        # A dangling blocker (a typo'd id that never validly identified a
+        # work item) is only reachable, in the normal write path, via a
+        # connection that ran without foreign keys enabled — the
+        # misconfiguration research.md itself names as the practical
+        # trigger. Confirm it is reported distinctly from WI-1's
+        # thinned-but-resolvable, satisfied case above (SC-009).
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            conn.execute("PRAGMA foreign_keys = OFF")
+            conn.execute(
+                "INSERT INTO work_item_blocked_by (work_item_id, blocked_on_id) "
+                "VALUES ('WI-2', 'WI-0-never-existed')"
+            )
+        finally:
+            conn.close()
+
+        self.assertTrue(self.ledger.is_blocked("WI-2"))  # dangling -> still blocking
+        findings = self.ledger.reconcile()
+        dangling = [f for f in findings if f.finding == "dangling_blocker"]
+        self.assertEqual([f.item_id for f in dangling], ["WI-2"])
+        self.assertIn("WI-0-never-existed", dangling[0].detail)
+        # WI-1's satisfied, archived dependency must not itself be
+        # reported dangling.
+        self.assertNotIn("WI-1", [f.item_id for f in findings if f.finding == "dangling_blocker"])
+
+        # -- Scenario 3: claim across worktrees; detect and recover a ---
+        # -- stale claim (User Story 3) ----------------------------------
+        self.ledger.create_work_item(
+            id="WI-4", title="Task A", source_kind="adhoc", source_locator="adhoc-a"
+        )
+        self.ledger.create_work_item(
+            id="WI-5", title="Task B", source_kind="adhoc", source_locator="adhoc-b"
+        )
+
+        worktree_a = tempfile.mkdtemp()
+        worktree_b = tempfile.mkdtemp()
+        self.addCleanup(lambda: os.path.isdir(worktree_b) and os.rmdir(worktree_b))
+
+        self.assertTrue(
+            self.ledger.claim("WI-4", "agent-A", worktree_path=worktree_a)
+        )
+        self.assertTrue(
+            self.ledger.claim("WI-5", "agent-B", worktree_path=worktree_b)
+        )
+
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            rows = {
+                row[0]: row[1]
+                for row in conn.execute(
+                    "SELECT work_item_id, owner FROM work_item_claims"
+                ).fetchall()
+            }
+        finally:
+            conn.close()
+        self.assertEqual(rows, {"WI-4": "agent-A", "WI-5": "agent-B"})
+
+        # Worktree A disappears without releasing its claim; worktree B
+        # remains, so WI-5's claim must NOT be reported stale.
+        os.rmdir(worktree_a)
+
+        findings = self.ledger.reconcile()
+        stale = [f for f in findings if f.finding == "stale_claim"]
+        self.assertEqual([f.item_id for f in stale], ["WI-4"])
+        # Reconciliation must not mutate the claim or the item's
+        # computed availability.
+        self.assertNotIn("WI-4", self.ledger.list_available_work_items())
+
+        # Explicit recovery: override-release on the stale-claim
+        # evidence, then a fresh, ordinary claim attempt.
+        self.ledger.override_release_claim("WI-4", note="worktree deleted")
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            leftover = conn.execute(
+                "SELECT * FROM work_item_claims WHERE work_item_id = 'WI-4'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNone(leftover)  # override does not itself grant a claim
+        self.assertTrue(self.ledger.claim("WI-4", "agent-C"))
+
+        # An Evidence Pointer remains a historical observation, unaffected
+        # by anything that happens to the branch it names afterward.
+        self.ledger.add_evidence("WI-5", "branch", "agent-b-wi5")
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            evidence = conn.execute(
+                "SELECT kind, value FROM work_item_evidence WHERE work_item_id = 'WI-5'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(evidence, ("branch", "agent-b-wi5"))
+
+        # -- Scenario 4: concurrent claim race on the same item ----------
+        # (User Story 3, FR-018)
+        self.ledger.create_work_item(
+            id="WI-6", title="Task C", source_kind="adhoc", source_locator="adhoc-c"
+        )
+        self.assertTrue(self.ledger.claim("WI-6", "agent-D"))
+        self.assertFalse(self.ledger.claim("WI-6", "agent-E"))
+        self.assertFalse(self.ledger.claim("WI-6", "agent-F"))
+
+        # -- Scenario 5: generate a coordinator projection ---------------
+        # (User Story 4)
+        self.ledger.create_work_item(
+            id="WI-7", title="Blocker", source_kind="adhoc", source_locator="adhoc-g"
+        )
+        self.ledger.create_work_item(
+            id="WI-8",
+            title="Blocked",
+            source_kind="adhoc",
+            source_locator="adhoc-h",
+            blocked_by=["WI-7"],
+        )
+
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            before = conn.execute("SELECT * FROM work_items ORDER BY id").fetchall()
+        finally:
+            conn.close()
+
+        first_projection = self.ledger.generate_projection()
+        by_id = {item.id: item for item in first_projection}
+        self.assertTrue(by_id["WI-7"].eligible)
+        self.assertFalse(by_id["WI-8"].eligible)
+        self.assertFalse(by_id["WI-8"].terminal)
+        # WI-4's claim (Scenario 3) also withholds eligibility.
+        self.assertFalse(by_id["WI-4"].eligible)
+        # WI-1, archived in Scenario 2, is not part of the projection at
+        # all (archived items are a permanent tombstone, not a
+        # coordinator-facing item).
+        self.assertNotIn("WI-1", by_id)
+
+        second_projection = self.ledger.generate_projection()
+        self.assertEqual(first_projection, second_projection)
+
+        # Generating a projection (twice) performed no write to the
+        # ledger's own durable state.
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            after = conn.execute("SELECT * FROM work_items ORDER BY id").fetchall()
+        finally:
+            conn.close()
+        self.assertEqual(before, after)
+
+        # Every coordination fact used throughout this test (creation,
+        # blocking, archival, claim, reconciliation, evidence) was
+        # determined entirely without this projection step ever having
+        # run until this final scenario — confirming User Story 4's own
+        # Acceptance Scenario 3.
+        self.assertEqual(self.ledger.get_work_item("WI-6").status, "open")
+        self.assertTrue(self.ledger.is_claimed("WI-6"))
+
+
 if __name__ == "__main__":
     unittest.main()
