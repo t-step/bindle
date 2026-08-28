@@ -146,6 +146,7 @@ class MilestoneReviewView:
     review_ready: bool
     not_ready_reason: list[str]
     is_blocked: bool
+    blocking_ids: list[str]
     claim: ClaimInfo | None
     children: list[ChildTaskView]
 
@@ -172,14 +173,20 @@ def review_milestone(ledger: WorkLedger, work_item_id: str) -> ReviewResult:
     predicate. `not_ready_reason` is a subset of `{"blocked",
     "no_children"}` plus one entry per outstanding child id — empty
     whenever `review_ready` is `True` (data-model.md's
-    `MilestoneReviewView`).
+    `MilestoneReviewView`). When the milestone itself is blocked,
+    `blocking_ids` names the specific still-blocking dependency ids
+    (spec.md Acceptance Scenario US1.4: "identifies the blocking
+    dependency") — `is_blocked` is derived from it (`bool(blocking_ids)`)
+    rather than a second, separately-read boolean, so the two can never
+    disagree with each other.
     """
     item, guard_reason = _resolve_milestone(ledger, work_item_id)
     if item is None:
         return ReviewResult(ok=False, reason=guard_reason, view=None)
 
     review_ready = ledger.is_review_ready(work_item_id)
-    is_blocked = ledger.is_blocked(work_item_id)
+    blocking_ids = ledger.list_blocking(work_item_id)
+    is_blocked = bool(blocking_ids)
     children = [
         wi for wi in ledger.list_work_items() if wi.parent_id == work_item_id
     ]
@@ -217,6 +224,7 @@ def review_milestone(ledger: WorkLedger, work_item_id: str) -> ReviewResult:
         review_ready=review_ready,
         not_ready_reason=not_ready_reason,
         is_blocked=is_blocked,
+        blocking_ids=blocking_ids,
         claim=ledger.get_claim(work_item_id),
         children=child_views,
     )

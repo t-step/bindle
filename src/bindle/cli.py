@@ -833,20 +833,33 @@ def _cmd_skills_remove(args: argparse.Namespace) -> int:
     return 0 if outcome.ok else 1
 
 
-def _format_not_ready_reason(reasons: list[str]) -> str:
+def _format_not_ready_reason(reasons: list[str], blocking_ids: list[str]) -> str:
     # milestone_review.MilestoneReviewView.not_ready_reason is a flat
     # subset of {"blocked", "no_children"} plus one entry per outstanding
     # child id — render the two fixed tokens as-is and group every
     # remaining entry (a child id) under one "outstanding: ..." clause.
+    # When blocked, name the specific still-blocking dependency ids
+    # (spec.md Acceptance Scenario US1.4: "identifies the blocking
+    # dependency") rather than just the "blocked" token.
     parts = []
     if "blocked" in reasons:
-        parts.append("blocked")
+        parts.append(
+            "blocked by: " + ", ".join(blocking_ids) if blocking_ids else "blocked"
+        )
     if "no_children" in reasons:
         parts.append("no_children")
     outstanding = [r for r in reasons if r not in ("blocked", "no_children")]
     if outstanding:
         parts.append("outstanding: " + ", ".join(outstanding))
     return ", ".join(parts)
+
+
+def _format_evidence_pointer(pointer) -> str:
+    # spec.md FR-003/User Story 2: every evidence pointer's kind, value,
+    # recorded time, and note must be visible in the review view — not
+    # merely retained in the Python object and dropped by the CLI.
+    note_suffix = f" (note: {pointer.note})" if pointer.note else ""
+    return f"{pointer.kind} {pointer.value} @ {pointer.recorded_at}{note_suffix}"
 
 
 def _cmd_milestone_review(args: argparse.Namespace) -> int:
@@ -866,15 +879,19 @@ def _cmd_milestone_review(args: argparse.Namespace) -> int:
     readiness = (
         "ready"
         if view.review_ready
-        else f"not ready ({_format_not_ready_reason(view.not_ready_reason)})"
+        else f"not ready ({_format_not_ready_reason(view.not_ready_reason, view.blocking_ids)})"
     )
-    claim_suffix = f", claimed by {view.claim.owner}" if view.claim else ""
+    claim_suffix = (
+        f", claimed by {view.claim.owner} at {view.claim.claimed_at}"
+        if view.claim
+        else ""
+    )
     print(f"milestone {view.id}: {view.status}, {readiness}{claim_suffix}")
     for child in view.children:
         evidence_str = (
             "none"
             if not child.evidence
-            else "[" + ", ".join(f"{p.kind} {p.value}" for p in child.evidence) + "]"
+            else "[" + ", ".join(_format_evidence_pointer(p) for p in child.evidence) + "]"
         )
         blocked_str = "yes" if child.is_blocked else "no"
         print(f"  {child.id}  {child.status}  evidence: {evidence_str}  blocked: {blocked_str}")

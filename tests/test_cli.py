@@ -2732,6 +2732,42 @@ class TestMilestoneCliSubcommands(unittest.TestCase):
         self.assertEqual(code, 0)
         text = out.getvalue()
         self.assertIn("claimed by alice", text)
+        # spec.md FR-004/User Story 2: the claim's claimed-at time must be
+        # visible too, not merely the owner.
+        claimed_at = self.ledger.get_claim("M-1").claimed_at
+        self.assertIn(claimed_at, text)
+
+    def test_review_output_includes_evidence_recorded_at_and_note(self):
+        # spec.md FR-003/User Story 2: every evidence pointer's recorded
+        # time and note must be visible in the review view, not merely
+        # retained on the Python object and dropped by the CLI.
+        self._create_milestone("M-1")
+        self._create_task("T-1", parent_id="M-1")
+        self.ledger.add_evidence("T-1", "commit", "abc123", note="the actual fix")
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["milestone", "review", "M-1"])
+        self.assertEqual(code, 0)
+        text = out.getvalue()
+        recorded_at = self.ledger.list_evidence("T-1")[0].recorded_at
+        self.assertIn(recorded_at, text)
+        self.assertIn("the actual fix", text)
+
+    def test_review_output_names_the_specific_blocking_dependency(self):
+        # spec.md Acceptance Scenario US1.4: a blocked milestone's review
+        # view must identify the blocking dependency, not just report
+        # "blocked".
+        self._create_task("Blocker-1")
+        self._create_milestone("M-1")
+        self._create_task("T-1", parent_id="M-1")
+        self.ledger.add_blocked_by("M-1", "Blocker-1")
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["milestone", "review", "M-1"])
+        self.assertEqual(code, 0)
+        text = out.getvalue()
+        self.assertIn("not ready", text)
+        self.assertIn("Blocker-1", text)
 
     # -- T017 (US3): enter-review, claim, release ---------------------
 

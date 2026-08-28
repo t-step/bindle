@@ -408,6 +408,80 @@ class TestBlockingAndAvailability(LedgerTestCase):
         self.assertFalse(self.ledger.is_blocked("blocker-open"))
 
 
+class TestListBlocking(LedgerTestCase):
+    """specs/004-milestone-review-surface: list_blocking() generalizes
+    is_blocked()'s existing EXISTS check into a full row read of the
+    currently-still-blocking ids, so the review surface can identify
+    the specific blocking dependency (spec.md Acceptance Scenario
+    US1.4), not merely report a boolean."""
+
+    def test_unblocked_item_returns_empty_list(self):
+        self.ledger.create_work_item(
+            id="A", title="A", source_kind="adhoc", source_locator="x"
+        )
+        self.assertEqual(self.ledger.list_blocking("A"), [])
+
+    def test_still_blocking_ids_are_returned_ordered(self):
+        self.ledger.create_work_item(
+            id="C", title="C", source_kind="adhoc", source_locator="c"
+        )
+        self.ledger.create_work_item(
+            id="B", title="B", source_kind="adhoc", source_locator="b"
+        )
+        self.ledger.create_work_item(
+            id="A", title="A", source_kind="adhoc", source_locator="a",
+            blocked_by=["C", "B"],
+        )
+        self.assertEqual(self.ledger.list_blocking("A"), ["B", "C"])
+
+    def test_resolved_blocker_is_no_longer_listed(self):
+        self.ledger.create_work_item(
+            id="B", title="B", source_kind="adhoc", source_locator="b"
+        )
+        self.ledger.create_work_item(
+            id="A", title="A", source_kind="adhoc", source_locator="a",
+            blocked_by=["B"],
+        )
+        self.assertEqual(self.ledger.list_blocking("A"), ["B"])
+
+        self.assertTrue(self.ledger.mark_done("B"))
+        self.assertEqual(self.ledger.list_blocking("A"), [])
+
+    def test_dangling_reference_is_still_listed(self):
+        self.ledger.create_work_item(
+            id="A", title="A", source_kind="adhoc", source_locator="a"
+        )
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            conn.execute("PRAGMA foreign_keys = OFF")
+            conn.execute(
+                "INSERT INTO work_item_blocked_by (work_item_id, blocked_on_id) "
+                "VALUES ('A', 'does-not-exist')"
+            )
+        finally:
+            conn.close()
+        self.assertEqual(self.ledger.list_blocking("A"), ["does-not-exist"])
+
+    def test_agrees_with_is_blocked(self):
+        self.ledger.create_work_item(
+            id="B", title="B", source_kind="adhoc", source_locator="b"
+        )
+        self.ledger.create_work_item(
+            id="A", title="A", source_kind="adhoc", source_locator="a",
+            blocked_by=["B"],
+        )
+        self.assertEqual(
+            bool(self.ledger.list_blocking("A")), self.ledger.is_blocked("A")
+        )
+        self.assertTrue(self.ledger.mark_done("B"))
+        self.assertEqual(
+            bool(self.ledger.list_blocking("A")), self.ledger.is_blocked("A")
+        )
+
+    def test_nonexistent_work_item_returns_empty_list(self):
+        self.assertEqual(self.ledger.list_blocking("does-not-exist"), [])
+
+
 class TestClaimsEvidenceAndReconciliation(LedgerTestCase):
     """T023-T033, T040-T042: claim arbitration, release, override release,
     evidence, and the reconciliation report's five in-scope findings."""

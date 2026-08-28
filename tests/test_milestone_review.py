@@ -82,9 +82,32 @@ class TestReviewMilestone(LedgerTestCase):
         self.assertFalse(result.view.review_ready)
         self.assertIn("blocked", result.view.not_ready_reason)
         self.assertTrue(result.view.is_blocked)
+        self.assertEqual(result.view.blocking_ids, ["Blocker"])
         self.assertEqual(
             result.view.review_ready, self.ledger.is_review_ready(milestone_id)
         )
+
+    def test_blocking_ids_names_every_still_blocking_dependency(self):
+        # spec.md Acceptance Scenario US1.4: "identifies the blocking
+        # dependency" — not just a boolean.
+        self._create_task("Blocker-1")
+        self._create_task("Blocker-2")
+        self._create_milestone("M-1")
+        self.ledger.add_blocked_by("M-1", "Blocker-1")
+        self.ledger.add_blocked_by("M-1", "Blocker-2")
+
+        result = milestone_review.review_milestone(self.ledger, "M-1")
+        self.assertEqual(result.view.blocking_ids, ["Blocker-1", "Blocker-2"])
+
+        self.assertTrue(self.ledger.mark_done("Blocker-1"))
+        result = milestone_review.review_milestone(self.ledger, "M-1")
+        self.assertEqual(result.view.blocking_ids, ["Blocker-2"])
+
+    def test_unblocked_milestone_reports_empty_blocking_ids(self):
+        milestone_id, _ = self._ready_milestone()
+        result = milestone_review.review_milestone(self.ledger, milestone_id)
+        self.assertFalse(result.view.is_blocked)
+        self.assertEqual(result.view.blocking_ids, [])
 
     def test_mixed_children_not_ready_names_outstanding_children(self):
         self._create_milestone("M-1")

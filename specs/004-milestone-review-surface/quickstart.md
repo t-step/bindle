@@ -50,8 +50,8 @@ assert view.review_ready is True
 ```bash
 $ bindle milestone review <m>
 milestone <m>: open, ready
-  <t1>  done  evidence: [commit abc1234]                                     blocked: no
-  <t2>  done  evidence: [pull_request https://github.com/t-step/bindle/pull/99]  blocked: no
+  <t1>  done  evidence: [commit abc1234 @ <recorded_at>]  blocked: no
+  <t2>  done  evidence: [pull_request https://github.com/t-step/bindle/pull/99 @ <recorded_at>]  blocked: no
 
 $ bindle milestone list --ready-only
 <m>  open  ready
@@ -59,12 +59,14 @@ $ bindle milestone list --ready-only
 $ bindle milestone enter-review <m>
 $ bindle milestone claim <m> --owner alice
 $ bindle milestone review <m>
-milestone <m>: review, ready, claimed by alice
+milestone <m>: review, ready, claimed by alice at <claimed_at>
   ...
 $ bindle milestone accept <m> --evidence "https://github.com/t-step/bindle/pull/101#pullrequestreview-1" --note "matches the agreed scope"
 $ bindle milestone review <m>
-milestone <m>: accepted, ready, claimed by alice
+milestone <m>: accepted, ready, claimed by alice at <claimed_at>
 ```
+
+(Every evidence pointer's recorded time — and its note, when one was supplied — is shown alongside its `kind`/`value`, and the claim line shows `claimed_at` alongside the owner: spec.md's User Story 2 requires these fields visible in the review view itself, not merely retained on the underlying Python objects — FR-003/FR-004.)
 
 (The claim recorded above is still reported after `accept` — accepting/declining never releases a claim; claiming and deciding remain orthogonal facts, spec.md FR-011. A reviewer who wants the claim gone afterward calls `bindle milestone release <m> --owner alice` separately.)
 

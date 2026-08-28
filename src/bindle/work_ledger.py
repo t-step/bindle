@@ -958,6 +958,38 @@ class WorkLedger:
         finally:
             conn.close()
 
+    def list_blocking(self, work_item_id: str) -> list[str]:
+        """List the ids currently still blocking `work_item_id` (specs/004-milestone-review-surface).
+
+        Generalizes `is_blocked()`'s existing `EXISTS` check into a full
+        row read, over the identical `_STILL_BLOCKING_CONDITION`
+        predicate — so this can never disagree with `is_blocked()` about
+        *whether* an item is blocked, only add *which* declared
+        `blocked_by` edges are the reason (spec.md Acceptance Scenario
+        US1.4: "identifies the blocking dependency"). A dangling
+        reference (the referenced id resolves to no row at all) is
+        included exactly as declared, unresolved — treated conservatively
+        as still blocking, matching `is_blocked()`'s own conservative
+        posture, with nothing to substitute for the missing row. Ordered
+        by `blocked_on_id` for determinism; returns `[]`, never raises,
+        when `work_item_id` is not currently blocked or does not exist.
+        """
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT e.blocked_on_id FROM work_item_blocked_by e
+                LEFT JOIN work_items dep ON dep.id = e.blocked_on_id
+                WHERE e.work_item_id = ?
+                  AND {_STILL_BLOCKING_CONDITION}
+                ORDER BY e.blocked_on_id
+                """,
+                (work_item_id,),
+            ).fetchall()
+            return [row[0] for row in rows]
+        finally:
+            conn.close()
+
     def is_claimed(self, work_item_id: str) -> bool:
         """Whether `work_item_id` currently has a claim (T016).
 
