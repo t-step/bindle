@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -18,6 +19,8 @@ from bindle import __version__
 from bindle.cli import _LIFECYCLE_COMMANDS, main
 from bindle.guardrails import detect_claude_guardrails, detect_git_guardrails
 from bindle import qmd as qmd_mod
+from bindle import symphony_projection
+from bindle import work_ledger
 from bindle.projectmem import detect_projectmem
 from bindle.qmd import COLLECTION_NAME, detect_qmd
 from bindle.repo import get_repo_info
@@ -59,8 +62,12 @@ def _normalize_ws(text):
     # argparse wraps description/help text to the terminal width, so a
     # multi-sentence description can gain line breaks mid-phrase. Compare
     # on whitespace-normalized text so wrapping never causes a spurious
-    # mismatch.
-    return " ".join(text.split())
+    # mismatch. argparse's wrapping can also break a hyphenated word (e.g.
+    # `migrate-legacy-global`) across the line boundary; collapse a
+    # trailing hyphen's following whitespace first so that split doesn't
+    # reintroduce a space no hyphenated word in this CLI's help text
+    # actually has.
+    return " ".join(re.sub(r"-\s+", "-", text).split())
 
 
 class TestVersion(unittest.TestCase):
@@ -862,6 +869,310 @@ class TestBranchCommand(unittest.TestCase):
             os.rmdir(outside)
 
 
+class TestInitLedgerAndSymphonyProvisioning(unittest.TestCase):
+    # `bindle init` unconditionally provisions Bindle's own SQLite work
+    # ledger and its published, empty, current Symphony-readable projection
+    # (docs/DECISIONS.md D043) — unlike --projectmem/--qmd, no flag gates
+    # this: it is Bindle's own substrate, not a third-party provider. These
+    # tests prove the actual product behavior (schema objects exist, zero
+    # semantic work state, idempotent, existing ledger contents survive a
+    # rerun, an older valid schema is migrated forward), not just that
+    # `WorkLedger.ensure_schema()`/`symphony_projection.publish()` exist in
+    # isolation — that unit-level coverage already lives in
+    # test_work_ledger.py/test_symphony_projection.py.
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = os.path.join(self.tmp.name, "repo")
+        _init_repo(self.repo)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _ledger_path(self):
+        return os.path.join(self.repo, ".bindle-work", "ledger.sqlite3")
+
+    def _projection_path(self):
+        return os.path.join(self.repo, ".bindle-work", "symphony-projection.sqlite3")
+
+    def test_fresh_init_creates_a_valid_empty_ledger_and_projection(self):
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["init"])
+
+        self.assertEqual(code, 0)
+        self.assertTrue(os.path.isfile(self._ledger_path()))
+        self.assertTrue(os.path.isfile(self._projection_path()))
+
+        conn = sqlite3.connect(self._ledger_path())
+        try:
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            self.assertEqual(
+                tables,
+                {
+                    "work_items",
+                    "work_item_blocked_by",
+                    "work_item_claims",
+                    "work_item_evidence",
+                },
+            )
+            self.assertEqual(
+                conn.execute("PRAGMA user_version").fetchone()[0],
+                work_ledger._SCHEMA_VERSION,
+            )
+        finally:
+            conn.close()
+
+        proj_conn = sqlite3.connect(self._projection_path())
+        try:
+            self.assertEqual(proj_conn.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertEqual(
+                proj_conn.execute("SELECT COUNT(*) FROM task_projection").fetchone()[0],
+                0,
+            )
+        finally:
+            proj_conn.close()
+
+        self.assertIn("Initialized Bindle.", out.getvalue())
+        self.assertIn("SQLite work ledger: ready", out.getvalue())
+        self.assertIn("Symphony projection: ready", out.getvalue())
+
+    def test_fresh_init_creates_zero_semantic_work_state(self):
+        with _chdir(self.repo):
+            self.assertEqual(main(["init"]), 0)
+
+        info = get_repo_info(self.repo)
+        self.assertEqual(WorkLedger(info.repo_root).list_work_items(), [])
+
+        conn = sqlite3.connect(self._ledger_path())
+        try:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM work_item_claims").fetchone()[0], 0
+            )
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM work_item_evidence").fetchone()[0], 0
+            )
+        finally:
+            conn.close()
+
+    def test_ledger_and_projection_are_usable_immediately_with_no_further_setup(self):
+        with _chdir(self.repo):
+            self.assertEqual(main(["init"]), 0)
+
+        info = get_repo_info(self.repo)
+        ledger = WorkLedger(info.repo_root)
+        # A normal ledger-touching command works right away — no separate
+        # schema/bootstrap step of its own is needed after `bindle init`.
+        ledger.create_work_item(
+            id="T-1",
+            title="First task",
+            source_kind="adhoc",
+            source_locator="manual",
+        )
+        self.assertIsNotNone(ledger.get_work_item("T-1"))
+
+        # The coordinator/Symphony projection opens and queries directly,
+        # with no special-cased first-run initialization of its own.
+        proj_path = symphony_projection.projection_path(info.repo_root)
+        conn = sqlite3.connect(proj_path)
+        try:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM task_projection").fetchone()[0],
+                0,
+            )
+        finally:
+            conn.close()
+
+    def test_rerunning_init_is_idempotent(self):
+        with _chdir(self.repo):
+            self.assertEqual(main(["init"]), 0)
+            self.assertEqual(main(["init"]), 0)
+
+        conn = sqlite3.connect(self._ledger_path())
+        try:
+            self.assertEqual(
+                conn.execute("PRAGMA user_version").fetchone()[0],
+                work_ledger._SCHEMA_VERSION,
+            )
+        finally:
+            conn.close()
+
+    def test_rerunning_init_never_disturbs_existing_ledger_contents(self):
+        with _chdir(self.repo):
+            self.assertEqual(main(["init"]), 0)
+
+        info = get_repo_info(self.repo)
+        ledger = WorkLedger(info.repo_root)
+        ledger.create_work_item(
+            id="T-1",
+            title="Existing task",
+            source_kind="adhoc",
+            source_locator="manual",
+        )
+        self.assertTrue(ledger.claim("T-1", owner="alice"))
+
+        with _chdir(self.repo):
+            self.assertEqual(main(["init"]), 0)
+
+        item = ledger.get_work_item("T-1")
+        self.assertIsNotNone(item)
+        self.assertEqual(item.status, "open")
+        claim = ledger.get_claim("T-1")
+        self.assertIsNotNone(claim)
+        self.assertEqual(claim.owner, "alice")
+
+    def test_rerunning_init_republishes_the_projection_from_current_ledger_state(self):
+        with _chdir(self.repo):
+            self.assertEqual(main(["init"]), 0)
+
+        info = get_repo_info(self.repo)
+        ledger = WorkLedger(info.repo_root)
+        ledger.create_work_item(
+            id="T-1",
+            title="Existing task",
+            source_kind="adhoc",
+            source_locator="manual",
+        )
+
+        with _chdir(self.repo):
+            self.assertEqual(main(["init"]), 0)
+
+        conn = sqlite3.connect(self._projection_path())
+        try:
+            self.assertEqual(
+                conn.execute(
+                    "SELECT identifier FROM task_projection"
+                ).fetchall(),
+                [("T-1",)],
+            )
+        finally:
+            conn.close()
+
+    def test_init_migrates_an_older_valid_schema_forward_in_place(self):
+        db_path = self._ledger_path()
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(
+                """
+                CREATE TABLE work_items (
+                  id                TEXT PRIMARY KEY,
+                  title             TEXT,
+                  status            TEXT NOT NULL CHECK (status IN ('open', 'done', 'superseded')),
+                  superseded_by     TEXT REFERENCES work_items(id),
+                  source_kind       TEXT CHECK (source_kind IN ('speckit_task', 'plan', 'adhoc')),
+                  source_locator    TEXT,
+                  source_promoted_by TEXT,
+                  created_at        TEXT,
+                  updated_at        TEXT NOT NULL,
+                  archived_at       TEXT,
+                  CHECK (
+                    (status = 'superseded' AND superseded_by IS NOT NULL) OR
+                    (status != 'superseded' AND superseded_by IS NULL)
+                  )
+                )
+                """
+            )
+            conn.execute(
+                "CREATE TABLE work_item_blocked_by ("
+                "  work_item_id TEXT NOT NULL REFERENCES work_items(id),"
+                "  blocked_on_id TEXT NOT NULL REFERENCES work_items(id),"
+                "  PRIMARY KEY (work_item_id, blocked_on_id),"
+                "  CHECK (work_item_id != blocked_on_id)"
+                ")"
+            )
+            conn.execute(
+                "CREATE TABLE work_item_claims ("
+                "  work_item_id TEXT PRIMARY KEY REFERENCES work_items(id),"
+                "  owner TEXT NOT NULL,"
+                "  claimed_at TEXT NOT NULL,"
+                "  worktree_path TEXT,"
+                "  branch TEXT"
+                ")"
+            )
+            conn.execute(
+                "CREATE TABLE work_item_evidence ("
+                "  evidence_id INTEGER PRIMARY KEY,"
+                "  work_item_id TEXT NOT NULL REFERENCES work_items(id),"
+                "  kind TEXT NOT NULL CHECK (kind IN ('branch', 'commit', 'pull_request', 'other')),"
+                "  value TEXT NOT NULL,"
+                "  recorded_at TEXT NOT NULL,"
+                "  note TEXT"
+                ")"
+            )
+            conn.execute(
+                "INSERT INTO work_items "
+                "(id, title, status, source_kind, source_locator, created_at, updated_at) "
+                "VALUES ('WI-1', 'Pre-existing item', 'open', 'adhoc', 'loc', "
+                "'2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')"
+            )
+            conn.execute("PRAGMA user_version = 1")
+            conn.commit()
+        finally:
+            conn.close()
+
+        with _chdir(self.repo):
+            self.assertEqual(main(["init"]), 0)
+
+        conn = sqlite3.connect(db_path)
+        try:
+            self.assertEqual(
+                conn.execute("PRAGMA user_version").fetchone()[0],
+                work_ledger._SCHEMA_VERSION,
+            )
+        finally:
+            conn.close()
+
+        item = WorkLedger(get_repo_info(self.repo).repo_root).get_work_item("WI-1")
+        self.assertIsNotNone(item)
+        self.assertEqual(item.type, "task")
+        self.assertEqual(item.title, "Pre-existing item")
+
+    def test_init_from_linked_worktree_provisions_the_ledger_at_the_shared_repo_root(self):
+        worktree = os.path.join(self.tmp.name, "linked")
+        _run(["git", "worktree", "add", "-q", "-b", "feature-x", worktree], self.repo)
+
+        with _chdir(worktree):
+            self.assertEqual(main(["init"]), 0)
+
+        # Storage resolves to the shared Git common directory (the main
+        # checkout), never the linked worktree's own directory — every
+        # linked worktree must see the same ledger.
+        self.assertTrue(os.path.isfile(self._ledger_path()))
+        self.assertFalse(
+            os.path.exists(os.path.join(worktree, ".bindle-work", "ledger.sqlite3"))
+        )
+
+    def test_init_with_qmd_flag_also_provisions_the_ledger(self):
+        # --projectmem/--qmd remain opt-in provider layers; the ledger and
+        # projection are not gated behind either — this seeds `.qmd/` as
+        # already-ready (mirrors TestInitQmdFlag's own
+        # test_qmd_flag_is_noop_when_already_ready) so this test needs no
+        # real `qmd` CLI and stays focused on the ledger/projection outcome.
+        qmd_dir = os.path.join(self.repo, ".qmd")
+        os.makedirs(qmd_dir)
+        with open(os.path.join(qmd_dir, "index.yml"), "w") as f:
+            f.write(f"collections:\n  {COLLECTION_NAME}:\n    path: {os.path.realpath(self.repo)}\n")
+
+        def forbid_mutation(cmd, **kwargs):
+            if cmd and os.path.basename(cmd[0]) == "fake-qmd":
+                raise AssertionError("must not invoke qmd for an already-ready repo")
+            return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+
+        with _chdir(self.repo), mock.patch(
+            "bindle.qmd.qmd_executable", return_value="/usr/bin/fake-qmd"
+        ), mock.patch("subprocess.run", side_effect=forbid_mutation):
+            code = main(["init", "--qmd"])
+
+        self.assertEqual(code, 0)
+        self.assertTrue(os.path.isfile(self._ledger_path()))
+        self.assertTrue(os.path.isfile(self._projection_path()))
+
+
 class TestInitProjectmemFlag(unittest.TestCase):
     # `bindle init --projectmem` is a second, independent provider-lifecycle
     # seam alongside the guardrail installer (TestGuardrailLifecycleCommands
@@ -1154,6 +1465,11 @@ class TestInitProjectmemFlag(unittest.TestCase):
         self.assertEqual(code, 3)
         self.assertEqual(pjm_calls, [])
         self.assertFalse(os.path.exists(self._mem_dir()))
+        # A guardrail failure must also stop `bindle init` before it
+        # reaches the unconditional ledger/projection provisioning step
+        # (docs/DECISIONS.md D043) — never partially provision Bindle's own
+        # substrate when an earlier step in the same invocation failed.
+        self.assertFalse(os.path.exists(os.path.join(self.repo, ".bindle-work")))
 
     def test_remove_never_touches_projectmem(self):
         os.makedirs(self._mem_dir())
@@ -1770,6 +2086,10 @@ class TestInitQmdFlag(unittest.TestCase):
         self.assertEqual(calls[0][1], "init")
         info = get_repo_info(self.repo)
         self.assertEqual(detect_git_guardrails(info), "installed")
+        # A failed `--qmd` mutation must also stop `bindle init` before the
+        # unconditional ledger/projection provisioning step
+        # (docs/DECISIONS.md D043).
+        self.assertFalse(os.path.exists(os.path.join(self.repo, ".bindle-work")))
 
     def test_qmd_flag_propagates_collection_add_failure_and_preserves_state(self):
         def fake_run(cmd, **kwargs):
@@ -1793,6 +2113,10 @@ class TestInitQmdFlag(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(self._qmd_dir(), "index.yml")))
         info = get_repo_info(self.repo)
         self.assertEqual(detect_git_guardrails(info), "installed")
+        # A failed `--qmd` mutation must also stop `bindle init` before the
+        # unconditional ledger/projection provisioning step
+        # (docs/DECISIONS.md D043).
+        self.assertFalse(os.path.exists(os.path.join(self.repo, ".bindle-work")))
 
     def test_qmd_mutation_never_attempted_when_guardrails_fail(self):
         calls = []
@@ -1813,6 +2137,11 @@ class TestInitQmdFlag(unittest.TestCase):
         self.assertEqual(code, 3)
         self.assertEqual(calls, [])
         self.assertFalse(os.path.exists(self._qmd_dir()))
+        # Same guarantee as TestInitProjectmemFlag's own
+        # test_projectmem_init_never_attempted_when_guardrails_fail: a
+        # guardrail failure stops `bindle init` before the unconditional
+        # ledger/projection provisioning step (docs/DECISIONS.md D043).
+        self.assertFalse(os.path.exists(os.path.join(self.repo, ".bindle-work")))
 
     def test_remove_never_touches_qmd(self):
         qmd_dir = self._qmd_dir()

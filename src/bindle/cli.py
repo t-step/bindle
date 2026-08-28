@@ -5,7 +5,20 @@ lifecycle commands (see AGENTS.md and docs/SCOPE.md). `--version`,
 `repo info`, `branch`, `init`, `remove`, `status`, and `migrate-legacy-global`
 have real behavior today. `init`/`remove` always cover the guardrail layer
 (Git hook dispatch + Claude Code PreToolUse guard) via
-install-guardrails.sh; `init --projectmem` additionally ensures Projectmem
+install-guardrails.sh. `init` also unconditionally provisions Bindle's own
+coordination substrate (docs/DECISIONS.md D043): it bootstraps the durable
+SQLite work ledger (`WorkLedger.ensure_schema()`, work_ledger.py — the same
+schema-authority path every other ledger-touching command already uses,
+never a second copy) and (re)generates the current, versioned
+Symphony-readable projection (`symphony_projection.publish()`) so both
+files exist and are valid the moment a repository opts into Bindle, with
+no separate manual bootstrap step. This is pure provisioning, never
+semantic work state: a fresh ledger holds zero work items, and the
+projection it publishes has zero rows to match. This is Bindle-owned
+substrate, not a Symphony lifecycle surface — Bindle still does not
+install, build, configure, launch, stop, or report status for Symphony
+itself, and no `bindle symphony ...` command exists or is implied by this.
+`init --projectmem` additionally ensures Projectmem
 is initialized for the repository via the native `pjm` CLI (see
 projectmem.py) — the explicit, opt-in provider-lifecycle seam this slice
 adds, still no general Bindle-owned component/provider registry.
@@ -106,9 +119,14 @@ _LIFECYCLE_COMMANDS: dict[str, tuple[str, str]] = {
         "is the explicit opt-in boundary: a repository becomes "
         "Bindle-managed by running `bindle init` in it. Intended to be "
         "safe to run repeatedly as more integrations are added later. "
-        "Repository-scoped only: refuses to run (rather than silently "
-        "migrating or removing it) if a recognized legacy machine-global "
-        "Bindle guardrail install is still present; run "
+        "Also unconditionally provisions Bindle's own SQLite work ledger "
+        "and the current Symphony-readable projection generated "
+        "from it — no manual database setup, and no separate publish "
+        "step, is needed before other `bindle work`/`bindle milestone` "
+        "commands can operate; this creates zero work items, milestones, "
+        "or claims. Repository-scoped only: refuses to run (rather than "
+        "silently migrating or removing it) if a recognized legacy "
+        "machine-global Bindle guardrail install is still present; run "
         "`bindle migrate-legacy-global` first. Add --projectmem to also "
         "ensure Projectmem is initialized for this repository via its "
         "native `pjm init` CLI, or --qmd to also ensure a QMD retrieval "
@@ -419,9 +437,6 @@ def _apply_qmd(info, state: str) -> int:
 
 
 def _cmd_init(args: argparse.Namespace) -> int:
-    if not args.projectmem and not args.qmd:
-        return _run_guardrail_installer("init", "--apply")
-
     try:
         info = get_repo_info()
     except NotAGitRepositoryError as exc:
@@ -432,7 +447,12 @@ def _cmd_init(args: argparse.Namespace) -> int:
     # — a refusal on one opt-in must never leave guardrails, or an
     # already-preflighted other opt-in, newly mutated behind it (mirrors
     # D032's "all requested layers preflight together" precedent, now
-    # generalized past just the two guardrail halves).
+    # generalized past just the two guardrail halves). The ledger/Symphony
+    # substrate below has no preflight of its own to run here: unlike
+    # Projectmem/QMD it is not a third-party provider with its own
+    # detectable installed/partial/conflict states — it is Bindle's own
+    # schema, bootstrapped by the same idempotent path every other
+    # ledger-touching command already uses.
     projectmem_state, projectmem_pjm = None, None
     if args.projectmem:
         refusal, projectmem_state, projectmem_pjm = _projectmem_init_preflight(info)
@@ -467,6 +487,33 @@ def _cmd_init(args: argparse.Namespace) -> int:
         if code != 0:
             return code
 
+    # Bindle's own coordination substrate (docs/DECISIONS.md D043) —
+    # unconditional, unlike --projectmem/--qmd: every `bindle init`
+    # invocation, bare or flagged, leaves the ledger and its published
+    # Symphony-readable projection ready to use. `ensure_schema()` is the
+    # exact same bootstrap-or-verify path `WorkLedger`'s other methods
+    # already get for free (work_ledger.py's `_ensure_schema`) — never a
+    # second copy of what a valid schema looks like — so an already-current
+    # ledger (including one already holding real work items from a prior
+    # `bindle work load-speckit`) is left untouched, and an older-but-valid
+    # schema is migrated forward in place, exactly as it already would be
+    # on the next ordinary ledger-touching command. `publish()` then
+    # (re)generates the projection from whatever the ledger currently
+    # holds — zero rows for a fresh ledger, unchanged real rows for an
+    # already-populated one — so this step never creates, claims, or
+    # transitions a work item itself; it only guarantees both files exist
+    # and are structurally valid the moment a repository opts into Bindle,
+    # with no separate manual `bindle work publish` required first. This is
+    # Bindle-owned substrate provisioning, not a Symphony lifecycle
+    # surface: Bindle still does not install, build, configure, launch,
+    # stop, or report status for Symphony itself.
+    ledger = WorkLedger(info.repo_root)
+    ledger.ensure_schema()
+    symphony_projection.publish(ledger)
+
+    print("Initialized Bindle.")
+    print("SQLite work ledger: ready")
+    print("Symphony projection: ready")
     return 0
 
 
