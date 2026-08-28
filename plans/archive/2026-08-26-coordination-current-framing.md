@@ -1,6 +1,6 @@
 # Coordination current framing
 
-Date: 2026-08-26. Status: **active framing; execution integration not yet adopted.**
+Date: 2026-08-26. Status: **superseded by completion.** This plan's own "Next coordination work" items 1–4 (record the ledger adoption decision; re-verify the pinned Symphony fork; define the adapter mapping; prove one end-to-end execution path) are all resolved — item 1 by docs/DECISIONS.md D038, items 2–4 by a Symphony-side feature independently proven end-to-end and recorded in docs/DECISIONS.md D041 (no Bindle-repository code or schema change). Item 5 — whether Bindle ever needs a CLI lifecycle surface (`init`/status/launch) for Symphony — remains a deliberate open question, not adopted work; D041 does not answer it and none is planned without further demonstrated need. This document is retained, unedited below, as the historical record of the boundary reasoning that led to D038–D042 — not as an open resumption point. Where it conflicts with docs/DECISIONS.md or docs/SYMPHONY.md, those govern.
 
 ## Outcome
 
