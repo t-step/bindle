@@ -88,6 +88,7 @@ from .projectmem import (
     detect_projectmem,
     pjm_executable,
 )
+from . import git_local_exclude
 from . import milestone_review
 from . import qmd as qmd_mod
 from .repo import NotAGitRepositoryError, get_repo_info
@@ -95,6 +96,7 @@ from .skills import CATALOG, UnknownKitError, add_desired_kit, read_desired_kits
 from .skills.config import SkillsConfigError
 from .speckit_loader import TasksFileError, load_feature
 from . import symphony_projection
+from . import work_ledger
 from .work_ledger import WorkLedger
 
 # Lifecycle commands with an established name and short/long --help text.
@@ -436,6 +438,65 @@ def _apply_qmd(info, state: str) -> int:
     return 0
 
 
+def _ledger_init_preflight(info) -> int | None:
+    # Read-only precondition check for the coordination-artifact substrate
+    # `bindle init` unconditionally provisions (docs/DECISIONS.md D043 and
+    # the local-ignore/collision-safety follow-up), mirroring
+    # _projectmem_init_preflight/_qmd_init_preflight's shape: run BEFORE
+    # ANY mutation (guardrails included), so a tracked-file collision on
+    # either canonical SQLite path never leaves guardrails — or another
+    # requested layer — newly installed/reconciled behind it.
+    #
+    # This checks Git-tracked status only, for exactly the two canonical
+    # database files (never their WAL/SHM/journal sidecars, which are
+    # never meaningfully tracked). The separate filesystem-collision/
+    # ownership check — an untracked but foreign file already occupying
+    # one of these exact paths — happens inside
+    # `WorkLedger.ensure_schema()`/`symphony_projection.publish()`
+    # themselves (`work_ledger.ForeignDatabaseError`/
+    # `symphony_projection.ForeignDatabaseError`), each file's own schema/
+    # publish authority — this preflight never duplicates that logic, and
+    # `_cmd_init` below catches both exceptions separately, at the point
+    # those calls actually run.
+    ledger_relpath = os.path.relpath(work_ledger.ledger_path(info.repo_root), info.repo_root)
+    projection_relpath = os.path.relpath(
+        symphony_projection.projection_path(info.repo_root), info.repo_root
+    )
+
+    # This preflight is safety-critical (it exists to prevent overwriting
+    # tracked, team-shared state), so a Git failure that leaves
+    # trackedness genuinely unknown must fail closed here — never read as
+    # "not tracked" and silently continue. `is_path_tracked` raises
+    # `GitCommandError` (never returns a value) for exactly that case.
+    try:
+        tracked = [
+            relpath
+            for relpath in (ledger_relpath, projection_relpath)
+            if git_local_exclude.is_path_tracked(info.repo_root, relpath)
+        ]
+    except git_local_exclude.GitCommandError as exc:
+        print(
+            f"bindle init: could not determine whether the coordination-"
+            f"artifact paths are already tracked in Git ({exc}) — "
+            "refusing to provision Bindle's coordination substrate "
+            "without that answer. Nothing was mutated.",
+            file=sys.stderr,
+        )
+        return 1
+    if tracked:
+        joined = ", ".join(tracked)
+        print(
+            f"bindle init: {joined} already tracked in Git — refusing to "
+            "provision Bindle's coordination substrate over a tracked, "
+            "team-shared path. Untrack it (git rm --cached <path>) if this "
+            "should be Bindle-local coordination state, then retry — "
+            "nothing was mutated.",
+            file=sys.stderr,
+        )
+        return 1
+    return None
+
+
 def _cmd_init(args: argparse.Namespace) -> int:
     try:
         info = get_repo_info()
@@ -464,6 +525,10 @@ def _cmd_init(args: argparse.Namespace) -> int:
         refusal, qmd_state = _qmd_init_preflight(info)
         if refusal is not None:
             return refusal
+
+    ledger_refusal = _ledger_init_preflight(info)
+    if ledger_refusal is not None:
+        return ledger_refusal
 
     # Preflight passed for every requested layer — now mutate. Guardrails
     # first (unchanged bare `bindle init` behavior), then each requested
@@ -507,9 +572,48 @@ def _cmd_init(args: argparse.Namespace) -> int:
     # Bindle-owned substrate provisioning, not a Symphony lifecycle
     # surface: Bindle still does not install, build, configure, launch,
     # stop, or report status for Symphony itself.
+    #
+    # Both calls are the "runtime failure independently reported" half of
+    # AGENTS.md's preflight/runtime split: `_ledger_init_preflight` above
+    # already ruled out a *tracked*-file collision; a foreign, untracked
+    # file at either exact path is only detectable by opening it, which
+    # `ensure_schema()`/`publish()` do as the schema/publish authority for
+    # each file (never duplicated here) — a `ForeignDatabaseError` from
+    # either is reported cleanly and stops `bindle init` before that file
+    # is ever created, migrated, or regenerated.
     ledger = WorkLedger(info.repo_root)
-    ledger.ensure_schema()
-    symphony_projection.publish(ledger)
+    try:
+        ledger.ensure_schema()
+        symphony_projection.publish(ledger)
+    except (work_ledger.ForeignDatabaseError, symphony_projection.ForeignDatabaseError) as exc:
+        print(f"bindle init: {exc}", file=sys.stderr)
+        return 1
+
+    # Locally ignore exactly these two artifacts (and their WAL/SHM/journal
+    # sidecars) — never the tracked `.gitignore`, never a broader
+    # `.bindle-work/` rule (see work_ledger.py's/symphony_projection.py's
+    # own `ensure_gitignored`) — so a fresh `bindle init` never leaves them
+    # showing up as untracked clutter in `git status`. Run only after both
+    # files are confirmed to exist and be Bindle-owned. Local-ignore
+    # hygiene is this feature's own stated postcondition, not merely a
+    # QMD-style convenience — so, unlike QMD's own silent-on-failure
+    # `ensure_gitignored`, a write failure here is reported and turns
+    # `bindle init` itself nonzero, rather than silently claiming success
+    # while the ignore rules never actually landed. This is still not a
+    # transaction: the already-provisioned, valid ledger/projection files
+    # above are never rolled back for an ignore-write failure — only the
+    # reported outcome changes.
+    ledger_ignored = work_ledger.ensure_gitignored(info.git_common_dir)
+    projection_ignored = symphony_projection.ensure_gitignored(info.git_common_dir)
+    if not (ledger_ignored and projection_ignored):
+        print(
+            "bindle init: the SQLite work ledger and Symphony projection "
+            "are provisioned, but locally ignoring them in "
+            f"{os.path.join(info.git_common_dir, 'info', 'exclude')} "
+            "failed — check permissions on that path and retry.",
+            file=sys.stderr,
+        )
+        return 1
 
     print("Initialized Bindle.")
     print("SQLite work ledger: ready")

@@ -176,9 +176,8 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
-import tempfile
 
+from . import git_local_exclude
 from .repo import RepoInfo
 
 QmdState = str
@@ -261,49 +260,12 @@ def collection_add_args(worktree_root: str) -> tuple[str, ...]:
 _EXCLUDE_LINE = f"{_QMD_DIR_NAME}/"
 
 
-def _info_exclude_path(repo_info: RepoInfo) -> str:
-    return os.path.join(repo_info.git_common_dir, "info", "exclude")
-
-
 def _qmd_dir_is_tracked(repo_info: RepoInfo) -> bool:
-    result = subprocess.run(
-        ["git", "-C", repo_info.worktree_root, "ls-files", "--", _QMD_DIR_NAME],
-        capture_output=True,
-        text=True,
-    )
-    return bool(result.stdout.strip())
+    return git_local_exclude.is_path_tracked(repo_info.worktree_root, _QMD_DIR_NAME)
 
 
 def _qmd_dir_is_ignored(repo_info: RepoInfo) -> bool:
-    result = subprocess.run(
-        ["git", "-C", repo_info.worktree_root, "check-ignore", "-q", _QMD_DIR_NAME],
-        capture_output=True,
-        text=True,
-    )
-    return result.returncode == 0
-
-
-def _atomic_append_line(path: str, line: str) -> None:
-    existing = ""
-    if os.path.isfile(path):
-        with open(path, "r", encoding="utf-8") as f:
-            existing = f.read()
-    sep = "" if not existing or existing.endswith("\n") else "\n"
-    new_text = f"{existing}{sep}{line}\n"
-
-    dest_dir = os.path.dirname(path) or "."
-    os.makedirs(dest_dir, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=".bindle-qmd-excludetmp.", dir=dest_dir)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(new_text)
-        os.replace(tmp, path)
-    except OSError:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    return git_local_exclude.is_path_ignored(repo_info.worktree_root, _QMD_DIR_NAME)
 
 
 def ensure_gitignored(repo_info: RepoInfo) -> None:
@@ -317,18 +279,17 @@ def ensure_gitignored(repo_info: RepoInfo) -> None:
     filesystem/Git error here — this is a convenience, not a precondition
     for QMD itself working, so a failure here must never surface as a
     `bindle init --qmd` failure.
+
+    Write mechanics (atomic append, dedup) and the tracked/ignored
+    predicates above live in `git_local_exclude.py`, shared with the
+    `.bindle-work/` coordination-artifact ignore rules in
+    `work_ledger.py`/`symphony_projection.py` — this function is the only
+    place that decides *which* line QMD needs.
     """
     try:
         if _qmd_dir_is_tracked(repo_info) or _qmd_dir_is_ignored(repo_info):
             return
-
-        path = _info_exclude_path(repo_info)
-        if os.path.isfile(path):
-            with open(path, "r", encoding="utf-8") as f:
-                if _EXCLUDE_LINE in f.read().splitlines():
-                    return
-
-        _atomic_append_line(path, _EXCLUDE_LINE)
+        git_local_exclude.ensure_line_excluded(repo_info.git_common_dir, _EXCLUDE_LINE)
     except OSError:
         pass
 

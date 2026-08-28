@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from bindle import __version__
 from bindle.cli import _LIFECYCLE_COMMANDS, main
 from bindle.guardrails import detect_claude_guardrails, detect_git_guardrails
+from bindle import git_local_exclude
 from bindle import qmd as qmd_mod
 from bindle import symphony_projection
 from bindle import work_ledger
@@ -1169,6 +1170,282 @@ class TestInitLedgerAndSymphonyProvisioning(unittest.TestCase):
             code = main(["init", "--qmd"])
 
         self.assertEqual(code, 0)
+        self.assertTrue(os.path.isfile(self._ledger_path()))
+        self.assertTrue(os.path.isfile(self._projection_path()))
+
+
+class TestInitLedgerLocalIgnoreAndCollisionSafety(unittest.TestCase):
+    # Follow-up to TestInitLedgerAndSymphonyProvisioning above: `bindle
+    # init` must also (1) locally ignore exactly the two canonical
+    # coordination-artifact SQLite files and their WAL/SHM/journal
+    # sidecars, via the repository's machine-local
+    # `<git-common-dir>/info/exclude` (never the tracked `.gitignore`,
+    # never a broader `.bindle-work/` rule), and (2) refuse cleanly,
+    # before any mutation, when either canonical path is already tracked
+    # in Git or occupied by an unrecognizable foreign file.
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = os.path.join(self.tmp.name, "repo")
+        _init_repo(self.repo)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _ledger_path(self):
+        return os.path.join(self.repo, ".bindle-work", "ledger.sqlite3")
+
+    def _projection_path(self):
+        return os.path.join(self.repo, ".bindle-work", "symphony-projection.sqlite3")
+
+    def _exclude_path(self):
+        return os.path.join(get_repo_info(self.repo).git_common_dir, "info", "exclude")
+
+    def _exclude_lines(self):
+        path = self._exclude_path()
+        if not os.path.isfile(path):
+            return []
+        with open(path) as f:
+            return f.read().splitlines()
+
+    _EXPECTED_LINES = (
+        "/.bindle-work/ledger.sqlite3",
+        "/.bindle-work/ledger.sqlite3-journal",
+        "/.bindle-work/ledger.sqlite3-wal",
+        "/.bindle-work/ledger.sqlite3-shm",
+        "/.bindle-work/symphony-projection.sqlite3",
+        "/.bindle-work/symphony-projection.sqlite3-journal",
+        "/.bindle-work/symphony-projection.sqlite3-wal",
+        "/.bindle-work/symphony-projection.sqlite3-shm",
+    )
+
+    def test_fresh_init_ignores_exactly_the_eight_canonical_lines(self):
+        with _chdir(self.repo):
+            self.assertEqual(main(["init"]), 0)
+
+        lines = self._exclude_lines()
+        for expected in self._EXPECTED_LINES:
+            self.assertIn(expected, lines)
+        # Nothing broader: no bare `.bindle-work/` directory rule and no
+        # generic `*.sqlite3` glob.
+        self.assertNotIn(".bindle-work/", lines)
+        self.assertNotIn("/.bindle-work/", lines)
+        self.assertNotIn("*.sqlite3", lines)
+
+    def test_exclude_lives_in_git_common_dir_not_tracked_gitignore(self):
+        with _chdir(self.repo):
+            self.assertEqual(main(["init"]), 0)
+
+        info = get_repo_info(self.repo)
+        self.assertEqual(self._exclude_path(), os.path.join(info.git_common_dir, "info", "exclude"))
+        gitignore = os.path.join(self.repo, ".gitignore")
+        self.assertFalse(os.path.isfile(gitignore))
+
+        status = subprocess.run(
+            ["git", "-C", self.repo, "status", "--porcelain"], capture_output=True, text=True
+        )
+        self.assertEqual(status.stdout, "")
+
+    def test_repeat_init_is_idempotent_no_duplicate_exclude_entries(self):
+        with _chdir(self.repo):
+            self.assertEqual(main(["init"]), 0)
+            self.assertEqual(main(["init"]), 0)
+
+        lines = self._exclude_lines()
+        for expected in self._EXPECTED_LINES:
+            self.assertEqual(lines.count(expected), 1)
+
+    def test_unrelated_file_inside_bindle_work_remains_visible(self):
+        with _chdir(self.repo):
+            self.assertEqual(main(["init"]), 0)
+
+        with open(os.path.join(self.repo, ".bindle-work", "notes.txt"), "w") as f:
+            f.write("not a Bindle artifact\n")
+
+        status = subprocess.run(
+            ["git", "-C", self.repo, "status", "--porcelain", "--ignored", "-uall"],
+            capture_output=True,
+            text=True,
+        )
+        # Ordinary untracked content, not ignored.
+        self.assertIn("?? .bindle-work/notes.txt", status.stdout)
+        self.assertIn("!! .bindle-work/ledger.sqlite3", status.stdout)
+
+    def test_wal_and_shm_and_journal_sidecars_are_ignored_once_present(self):
+        with _chdir(self.repo):
+            self.assertEqual(main(["init"]), 0)
+
+        # WAL mode (set by work_ledger.connect()) means a live ledger
+        # ordinarily carries -wal/-shm sidecars; simulate a journal file
+        # too (legacy rollback-journal mode) to prove all three are
+        # actually ignored, not merely declared.
+        for suffix in ("-wal", "-shm", "-journal"):
+            with open(self._ledger_path() + suffix, "w") as f:
+                f.write("x")
+
+        status = subprocess.run(
+            ["git", "-C", self.repo, "status", "--porcelain", "--ignored"],
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotIn("ledger.sqlite3-wal", status.stdout.replace("!! ", ""))
+        for suffix in ("-wal", "-shm", "-journal"):
+            self.assertNotIn(f"?? .bindle-work/ledger.sqlite3{suffix}", status.stdout)
+
+    def test_tracked_ledger_path_refuses_before_any_mutation(self):
+        os.makedirs(os.path.join(self.repo, ".bindle-work"))
+        with open(self._ledger_path(), "w") as f:
+            f.write("decoy tracked content\n")
+        _run(["git", "add", ".bindle-work/ledger.sqlite3"], self.repo)
+        _run(["git", "commit", "-m", "chore: track a decoy ledger file"], self.repo)
+
+        err = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stderr(err):
+            code = main(["init"])
+
+        self.assertNotEqual(code, 0)
+        self.assertIn("already tracked in Git", err.getvalue())
+
+        info = get_repo_info(self.repo)
+        self.assertEqual(detect_git_guardrails(info), "not-installed")
+        self.assertEqual(detect_claude_guardrails(info), "not-installed")
+
+    def test_tracked_projection_path_refuses_before_any_mutation(self):
+        os.makedirs(os.path.join(self.repo, ".bindle-work"))
+        with open(self._projection_path(), "w") as f:
+            f.write("decoy tracked content\n")
+        _run(["git", "add", ".bindle-work/symphony-projection.sqlite3"], self.repo)
+        _run(["git", "commit", "-m", "chore: track a decoy projection file"], self.repo)
+
+        err = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stderr(err):
+            code = main(["init"])
+
+        self.assertNotEqual(code, 0)
+        self.assertIn("already tracked in Git", err.getvalue())
+
+        info = get_repo_info(self.repo)
+        self.assertEqual(detect_git_guardrails(info), "not-installed")
+        self.assertEqual(detect_claude_guardrails(info), "not-installed")
+
+    def test_tracked_path_preflight_fails_closed_on_git_error(self):
+        # The tracked-path check is safety-critical: if Git itself cannot
+        # answer whether either canonical path is tracked, `bindle init`
+        # must refuse rather than silently treat that as "not tracked"
+        # and continue mutating.
+        err = io.StringIO()
+        with _chdir(self.repo), mock.patch(
+            "bindle.git_local_exclude.is_path_tracked",
+            side_effect=git_local_exclude.GitCommandError("simulated git ls-files failure"),
+        ), contextlib.redirect_stderr(err):
+            code = main(["init"])
+
+        self.assertNotEqual(code, 0)
+        self.assertIn("could not determine", err.getvalue())
+
+        info = get_repo_info(self.repo)
+        self.assertEqual(detect_git_guardrails(info), "not-installed")
+        self.assertEqual(detect_claude_guardrails(info), "not-installed")
+        self.assertFalse(os.path.isfile(self._ledger_path()))
+
+    def test_foreign_untracked_file_at_ledger_path_is_never_overwritten(self):
+        os.makedirs(os.path.dirname(self._ledger_path()))
+        conn = sqlite3.connect(self._ledger_path())
+        conn.execute("CREATE TABLE unrelated_stuff (id INTEGER PRIMARY KEY, val TEXT)")
+        conn.execute("INSERT INTO unrelated_stuff (val) VALUES ('precious')")
+        conn.commit()
+        conn.close()
+
+        err = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stderr(err):
+            code = main(["init"])
+
+        self.assertNotEqual(code, 0)
+        self.assertIn("not recognizable as a Bindle-owned", err.getvalue())
+
+        conn = sqlite3.connect(self._ledger_path())
+        try:
+            self.assertEqual(
+                conn.execute("SELECT val FROM unrelated_stuff").fetchall(),
+                [("precious",)],
+            )
+        finally:
+            conn.close()
+
+    def test_valid_premarker_ledger_remains_usable_after_init(self):
+        # A ledger created by pre-marker Bindle code (no application_id
+        # ever stamped) is a legitimate, migratable artifact — `bindle
+        # init` must adopt it, not refuse it as foreign.
+        os.makedirs(os.path.dirname(self._ledger_path()))
+        conn = sqlite3.connect(self._ledger_path())
+        for stmt in work_ledger._SCHEMA_STATEMENTS:
+            conn.execute(stmt)
+        conn.execute(f"PRAGMA user_version = {work_ledger._SCHEMA_VERSION}")
+        conn.execute(
+            "INSERT INTO work_items (id, type, title, status, source_kind, "
+            "source_locator, created_at, updated_at) VALUES "
+            "('WI-1', 'task', 'Pre-existing', 'open', 'adhoc', 'loc', "
+            "'2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')"
+        )
+        conn.commit()
+        conn.close()
+
+        with _chdir(self.repo):
+            self.assertEqual(main(["init"]), 0)
+
+        item = WorkLedger(get_repo_info(self.repo).repo_root).get_work_item("WI-1")
+        self.assertIsNotNone(item)
+        self.assertEqual(item.title, "Pre-existing")
+
+        conn = sqlite3.connect(self._ledger_path())
+        try:
+            self.assertEqual(
+                conn.execute("PRAGMA application_id").fetchone()[0],
+                work_ledger._APPLICATION_ID,
+            )
+        finally:
+            conn.close()
+
+    def test_linked_worktree_ignore_entries_land_in_shared_common_dir(self):
+        worktree = os.path.join(self.tmp.name, "linked")
+        _run(["git", "worktree", "add", "-q", "-b", "feature-ignore", worktree], self.repo)
+
+        with _chdir(worktree):
+            self.assertEqual(main(["init"]), 0)
+
+        # The exclude entries land in the shared Git common directory, so
+        # they take effect for every linked worktree, not just the one
+        # `bindle init` was run from.
+        info_from_main = get_repo_info(self.repo)
+        info_from_linked = get_repo_info(worktree)
+        self.assertEqual(info_from_main.git_common_dir, info_from_linked.git_common_dir)
+
+        lines = self._exclude_lines()
+        for expected in self._EXPECTED_LINES:
+            self.assertIn(expected, lines)
+
+        # And the artifacts themselves live at the shared repo root, not
+        # under the linked worktree's own directory.
+        self.assertTrue(os.path.isfile(self._ledger_path()))
+        self.assertFalse(
+            os.path.exists(os.path.join(worktree, ".bindle-work", "ledger.sqlite3"))
+        )
+
+    def test_failed_ignore_write_is_reported_not_silently_swallowed(self):
+        # Local-ignore hygiene is this feature's own stated postcondition
+        # (unlike QMD's convenience-only ensure_gitignored): if writing
+        # the exclude entries fails after both SQLite artifacts are
+        # already validly provisioned, `bindle init` must report that
+        # failure rather than printing "Initialized Bindle." anyway.
+        with _chdir(self.repo), mock.patch(
+            "bindle.work_ledger.ensure_gitignored", return_value=False
+        ):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code = main(["init"])
+
+        self.assertNotEqual(code, 0)
+        self.assertIn("locally ignoring them", err.getvalue())
+        # The already-provisioned files are not rolled back.
         self.assertTrue(os.path.isfile(self._ledger_path()))
         self.assertTrue(os.path.isfile(self._projection_path()))
 

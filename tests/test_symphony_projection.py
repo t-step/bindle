@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import threading
@@ -496,6 +497,294 @@ class TestQuickstartEndToEnd(LedgerTestCase):
         )
         self.assertFalse(milestone_result.ok)
         self.assertEqual(milestone_result.reason, "not_a_task")
+
+
+class TestApplicationIdOwnership(LedgerTestCase):
+    # Mirrors tests/test_work_ledger.py's own TestApplicationIdOwnership,
+    # applied to the disposable, regenerated projection file: an absent
+    # file is always safe to create; one already carrying
+    # `_APPLICATION_ID`, or a pre-marker file whose `user_version`/table
+    # set positively match the known projection shape, is safe to adopt
+    # and regenerate; anything else must fail closed.
+    def _db_path(self):
+        return symphony_projection.projection_path(self.repo_root)
+
+    def test_fresh_publish_stamps_the_application_id(self):
+        symphony_projection.publish(self.ledger)
+        conn = sqlite3.connect(self._db_path())
+        try:
+            self.assertEqual(
+                conn.execute("PRAGMA application_id").fetchone()[0],
+                symphony_projection._APPLICATION_ID,
+            )
+        finally:
+            conn.close()
+
+    def test_premarker_v1_projection_is_adopted_and_stamped(self):
+        os.makedirs(os.path.dirname(self._db_path()), exist_ok=True)
+        conn = sqlite3.connect(self._db_path())
+        conn.execute(symphony_projection._CREATE_TASK_PROJECTION_SQL)
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+        conn.close()
+
+        self._create_task("T-1")
+        symphony_projection.publish(self.ledger)
+
+        conn = sqlite3.connect(self._db_path())
+        try:
+            self.assertEqual(
+                conn.execute("PRAGMA application_id").fetchone()[0],
+                symphony_projection._APPLICATION_ID,
+            )
+            self.assertEqual(
+                conn.execute(
+                    "SELECT identifier FROM task_projection"
+                ).fetchall(),
+                [("T-1",)],
+            )
+        finally:
+            conn.close()
+
+    def test_foreign_database_with_unrelated_tables_refuses(self):
+        os.makedirs(os.path.dirname(self._db_path()), exist_ok=True)
+        conn = sqlite3.connect(self._db_path())
+        conn.execute("CREATE TABLE unrelated_stuff (id INTEGER PRIMARY KEY, val TEXT)")
+        conn.execute("INSERT INTO unrelated_stuff (val) VALUES ('precious')")
+        conn.commit()
+        conn.close()
+
+        with self.assertRaises(symphony_projection.ForeignDatabaseError):
+            symphony_projection.publish(self.ledger)
+
+        conn = sqlite3.connect(self._db_path())
+        try:
+            self.assertEqual(
+                conn.execute("SELECT val FROM unrelated_stuff").fetchall(),
+                [("precious",)],
+            )
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            self.assertEqual(tables, {"unrelated_stuff"})
+        finally:
+            conn.close()
+
+    def test_foreign_nonzero_application_id_refuses_even_with_matching_tables(self):
+        os.makedirs(os.path.dirname(self._db_path()), exist_ok=True)
+        conn = sqlite3.connect(self._db_path())
+        conn.execute(symphony_projection._CREATE_TASK_PROJECTION_SQL)
+        conn.execute("PRAGMA user_version = 1")
+        conn.execute("PRAGMA application_id = 999999")
+        conn.commit()
+        conn.close()
+
+        with self.assertRaises(symphony_projection.ForeignDatabaseError):
+            symphony_projection.publish(self.ledger)
+
+    def test_unreadable_file_refuses_with_foreign_database_error(self):
+        os.makedirs(os.path.dirname(self._db_path()), exist_ok=True)
+        with open(self._db_path(), "w") as f:
+            f.write("this is not a sqlite database at all\n" * 50)
+
+        with self.assertRaises(symphony_projection.ForeignDatabaseError):
+            symphony_projection.publish(self.ledger)
+
+    def test_absent_path_is_treated_as_fresh(self):
+        self.assertFalse(os.path.exists(self._db_path()))
+
+        symphony_projection.publish(self.ledger)
+
+        conn = sqlite3.connect(self._db_path())
+        try:
+            self.assertEqual(
+                conn.execute("PRAGMA application_id").fetchone()[0],
+                symphony_projection._APPLICATION_ID,
+            )
+        finally:
+            conn.close()
+
+    def test_preexisting_zero_byte_file_refuses(self):
+        # A 0-byte file already occupying the canonical path BEFORE
+        # publish() ever runs is a placeholder Bindle never created —
+        # unlike the identical-looking state connect() itself produces
+        # for an absent path, this must refuse rather than be silently
+        # adopted as fresh.
+        os.makedirs(os.path.dirname(self._db_path()), exist_ok=True)
+        open(self._db_path(), "w").close()
+        self.assertEqual(os.path.getsize(self._db_path()), 0)
+
+        with self.assertRaises(symphony_projection.ForeignDatabaseError):
+            symphony_projection.publish(self.ledger)
+
+        self.assertEqual(os.path.getsize(self._db_path()), 0)
+
+    def test_matching_table_name_and_version_but_wrong_column_shape_refuses(self):
+        # Adversarial case: a foreign database that happens to reuse
+        # Bindle's exact table name and a recognized user_version, but
+        # whose columns don't actually match.
+        os.makedirs(os.path.dirname(self._db_path()), exist_ok=True)
+        conn = sqlite3.connect(self._db_path())
+        conn.execute(
+            "CREATE TABLE task_projection (id TEXT PRIMARY KEY, definitely_not_ours TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO task_projection (id, definitely_not_ours) VALUES ('X', 'precious')"
+        )
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+        conn.close()
+
+        with self.assertRaises(symphony_projection.ForeignDatabaseError):
+            symphony_projection.publish(self.ledger)
+
+        conn = sqlite3.connect(self._db_path())
+        try:
+            self.assertEqual(
+                conn.execute(
+                    "SELECT definitely_not_ours FROM task_projection WHERE id = 'X'"
+                ).fetchall(),
+                [("precious",)],
+            )
+            self.assertEqual(conn.execute("PRAGMA application_id").fetchone()[0], 0)
+        finally:
+            conn.close()
+
+    def test_preexisting_nonzero_empty_sqlite_file_refuses_regardless_of_size(self):
+        # File size is not a trustworthy ownership signal: an unrelated,
+        # genuinely empty SQLite database (application_id=0, user_version=0,
+        # no tables) that happens to be nonzero-size (e.g. because some
+        # other process already opened it) must refuse exactly like a
+        # literal 0-byte placeholder.
+        db_path = self._db_path()
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.close()
+        self.assertGreater(os.path.getsize(db_path), 0)
+
+        with self.assertRaises(symphony_projection.ForeignDatabaseError):
+            symphony_projection.publish(self.ledger)
+
+        conn = sqlite3.connect(db_path)
+        try:
+            self.assertEqual(conn.execute("PRAGMA application_id").fetchone()[0], 0)
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            self.assertEqual(tables, set())
+        finally:
+            conn.close()
+
+    def test_fresh_creation_is_stamped_before_publish_can_fail_and_retry_succeeds(self):
+        # Mirrors work_ledger's identical retry-safety test: a path absent
+        # before this invocation is stamped `_APPLICATION_ID` immediately,
+        # before the regenerate transaction runs — so a crash mid-publish
+        # still leaves a file the next `publish()` attempt positively
+        # recognizes as its own, purely from the marker (no filesize/
+        # content heuristic).
+        db_path = self._db_path()
+        self.assertFalse(os.path.exists(db_path))
+
+        real_sql = symphony_projection._CREATE_TASK_PROJECTION_SQL
+        symphony_projection._CREATE_TASK_PROJECTION_SQL = "CREATE TABLE this is not valid sql"
+        try:
+            with self.assertRaises(sqlite3.OperationalError):
+                symphony_projection.publish(self.ledger)
+        finally:
+            symphony_projection._CREATE_TASK_PROJECTION_SQL = real_sql
+
+        raw_conn = sqlite3.connect(db_path)
+        try:
+            self.assertEqual(
+                raw_conn.execute("PRAGMA application_id").fetchone()[0],
+                symphony_projection._APPLICATION_ID,
+            )
+            self.assertEqual(raw_conn.execute("PRAGMA user_version").fetchone()[0], 0)
+            tables = {
+                row[0]
+                for row in raw_conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            self.assertEqual(tables, set())
+        finally:
+            raw_conn.close()
+
+        # A retry succeeds — recognized via the marker alone.
+        symphony_projection.publish(self.ledger)
+        conn = sqlite3.connect(db_path)
+        try:
+            self.assertEqual(
+                conn.execute("PRAGMA user_version").fetchone()[0],
+                symphony_projection._PROJECTION_VERSION,
+            )
+        finally:
+            conn.close()
+
+
+class TestProjectionEnsureGitignored(unittest.TestCase):
+    # docs/DECISIONS.md: `bindle init` locally ignores exactly the
+    # canonical projection artifact and its SQLite sidecars — never the
+    # tracked `.gitignore`, never a broader `.bindle-work/` rule.
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = os.path.join(self.tmp.name, "repo")
+        os.makedirs(self.repo)
+        self._run(["git", "init", "--initial-branch=main"])
+        self._run(["git", "config", "user.email", "test@example.com"])
+        self._run(["git", "config", "user.name", "Test"])
+        with open(os.path.join(self.repo, "README.md"), "w") as f:
+            f.write("test\n")
+        self._run(["git", "add", "README.md"])
+        self._run(["git", "commit", "-m", "chore: initial commit"])
+        self.git_common_dir = os.path.join(self.repo, ".git")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run(self, args):
+        subprocess.run(args, cwd=self.repo, check=True, capture_output=True, text=True)
+
+    def _exclude_lines(self):
+        path = os.path.join(self.git_common_dir, "info", "exclude")
+        if not os.path.isfile(path):
+            return []
+        with open(path) as f:
+            return f.read().splitlines()
+
+    def test_adds_exactly_the_projection_and_its_three_sidecars(self):
+        symphony_projection.ensure_gitignored(self.git_common_dir)
+        lines = self._exclude_lines()
+        self.assertIn("/.bindle-work/symphony-projection.sqlite3", lines)
+        self.assertIn("/.bindle-work/symphony-projection.sqlite3-journal", lines)
+        self.assertIn("/.bindle-work/symphony-projection.sqlite3-wal", lines)
+        self.assertIn("/.bindle-work/symphony-projection.sqlite3-shm", lines)
+        self.assertNotIn("/.bindle-work/ledger.sqlite3", lines)
+
+    def test_idempotent_no_duplicate_lines(self):
+        symphony_projection.ensure_gitignored(self.git_common_dir)
+        symphony_projection.ensure_gitignored(self.git_common_dir)
+        lines = self._exclude_lines()
+        self.assertEqual(lines.count("/.bindle-work/symphony-projection.sqlite3"), 1)
+
+    def test_never_writes_the_tracked_gitignore(self):
+        gitignore = os.path.join(self.repo, ".gitignore")
+        with open(gitignore, "w") as f:
+            f.write("*.log\n")
+        self._run(["git", "add", ".gitignore"])
+        self._run(["git", "commit", "-m", "add gitignore"])
+
+        symphony_projection.ensure_gitignored(self.git_common_dir)
+
+        with open(gitignore) as f:
+            self.assertEqual(f.read(), "*.log\n")
 
 
 if __name__ == "__main__":
