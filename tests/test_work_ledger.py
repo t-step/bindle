@@ -3204,5 +3204,103 @@ class TestResyncDeclarativeFields(LedgerTestCase):
         self.assertEqual(before, after)
 
 
+class TestEvidenceReadAccessor(LedgerTestCase):
+    """T003 (specs/004-milestone-review-surface): list_evidence() reads
+    back every recorded Evidence Pointer individually, ordered
+    oldest-first by insertion order (evidence_id), never raising for a
+    nonexistent work_item_id."""
+
+    def test_zero_pointers_returns_empty_list(self):
+        self.ledger.create_work_item(
+            id="T-1", title="T", source_kind="adhoc", source_locator="x"
+        )
+        self.assertEqual(self.ledger.list_evidence("T-1"), [])
+
+    def test_one_pointer_of_each_kind_round_trips_every_field(self):
+        for kind, value in (
+            ("branch", "feature/x"),
+            ("commit", "abc123"),
+            ("pull_request", "https://example.com/pr/1"),
+            ("other", "docs/DECISIONS.md#D001"),
+        ):
+            with self.subTest(kind=kind):
+                item_id = f"T-{kind}"
+                self.ledger.create_work_item(
+                    id=item_id, title="T", source_kind="adhoc", source_locator="x"
+                )
+                self.ledger.add_evidence(item_id, kind, value, note="a note")
+                pointers = self.ledger.list_evidence(item_id)
+                self.assertEqual(len(pointers), 1)
+                pointer = pointers[0]
+                self.assertEqual(pointer.kind, kind)
+                self.assertEqual(pointer.value, value)
+                self.assertEqual(pointer.note, "a note")
+                self.assertIsInstance(pointer.recorded_at, str)
+                self.assertTrue(pointer.recorded_at)
+
+    def test_multiple_pointers_come_back_ordered_oldest_first(self):
+        self.ledger.create_work_item(
+            id="T-1", title="T", source_kind="adhoc", source_locator="x"
+        )
+        self.ledger.add_evidence("T-1", "commit", "first")
+        self.ledger.add_evidence("T-1", "commit", "second")
+        self.ledger.add_evidence("T-1", "commit", "third")
+
+        pointers = self.ledger.list_evidence("T-1")
+        self.assertEqual([p.value for p in pointers], ["first", "second", "third"])
+
+    def test_nonexistent_work_item_id_returns_empty_list_never_raises(self):
+        self.assertEqual(self.ledger.list_evidence("does-not-exist"), [])
+
+    def test_note_defaults_to_none(self):
+        self.ledger.create_work_item(
+            id="T-1", title="T", source_kind="adhoc", source_locator="x"
+        )
+        self.ledger.add_evidence("T-1", "commit", "abc")
+        pointers = self.ledger.list_evidence("T-1")
+        self.assertIsNone(pointers[0].note)
+
+
+class TestClaimReadAccessor(LedgerTestCase):
+    """T004 (specs/004-milestone-review-surface): get_claim() reads back
+    the single claim row for a work item individually, returning None
+    when unclaimed or when work_item_id does not exist."""
+
+    def test_unclaimed_returns_none(self):
+        self.ledger.create_work_item(
+            id="T-1", title="T", source_kind="adhoc", source_locator="x"
+        )
+        self.assertIsNone(self.ledger.get_claim("T-1"))
+
+    def test_claim_with_worktree_and_branch_round_trips_every_field(self):
+        self.ledger.create_work_item(
+            id="T-1", title="T", source_kind="adhoc", source_locator="x"
+        )
+        self.assertTrue(
+            self.ledger.claim(
+                "T-1", "alice", worktree_path="/tmp/wt", branch="feature/x"
+            )
+        )
+        claim = self.ledger.get_claim("T-1")
+        self.assertEqual(claim.owner, "alice")
+        self.assertIsInstance(claim.claimed_at, str)
+        self.assertTrue(claim.claimed_at)
+        self.assertEqual(claim.worktree_path, "/tmp/wt")
+        self.assertEqual(claim.branch, "feature/x")
+
+    def test_claim_with_worktree_and_branch_left_none_round_trips_as_none(self):
+        self.ledger.create_work_item(
+            id="T-1", title="T", source_kind="adhoc", source_locator="x"
+        )
+        self.assertTrue(self.ledger.claim("T-1", "alice"))
+        claim = self.ledger.get_claim("T-1")
+        self.assertEqual(claim.owner, "alice")
+        self.assertIsNone(claim.worktree_path)
+        self.assertIsNone(claim.branch)
+
+    def test_nonexistent_work_item_id_returns_none(self):
+        self.assertIsNone(self.ledger.get_claim("does-not-exist"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -75,6 +75,7 @@ from .projectmem import (
     detect_projectmem,
     pjm_executable,
 )
+from . import milestone_review
 from . import qmd as qmd_mod
 from .repo import NotAGitRepositoryError, get_repo_info
 from .skills import CATALOG, UnknownKitError, add_desired_kit, read_desired_kits, remove_desired_kit, require_kit
@@ -832,6 +833,152 @@ def _cmd_skills_remove(args: argparse.Namespace) -> int:
     return 0 if outcome.ok else 1
 
 
+def _format_not_ready_reason(reasons: list[str]) -> str:
+    # milestone_review.MilestoneReviewView.not_ready_reason is a flat
+    # subset of {"blocked", "no_children"} plus one entry per outstanding
+    # child id — render the two fixed tokens as-is and group every
+    # remaining entry (a child id) under one "outstanding: ..." clause.
+    parts = []
+    if "blocked" in reasons:
+        parts.append("blocked")
+    if "no_children" in reasons:
+        parts.append("no_children")
+    outstanding = [r for r in reasons if r not in ("blocked", "no_children")]
+    if outstanding:
+        parts.append("outstanding: " + ", ".join(outstanding))
+    return ", ".join(parts)
+
+
+def _cmd_milestone_review(args: argparse.Namespace) -> int:
+    try:
+        info = get_repo_info()
+    except NotAGitRepositoryError as exc:
+        print(f"bindle milestone review: {exc}", file=sys.stderr)
+        return 1
+
+    ledger = WorkLedger(info.repo_root)
+    result = milestone_review.review_milestone(ledger, args.id)
+    if not result.ok:
+        print(f"bindle milestone review: {result.reason}", file=sys.stderr)
+        return 1
+
+    view = result.view
+    readiness = (
+        "ready"
+        if view.review_ready
+        else f"not ready ({_format_not_ready_reason(view.not_ready_reason)})"
+    )
+    claim_suffix = f", claimed by {view.claim.owner}" if view.claim else ""
+    print(f"milestone {view.id}: {view.status}, {readiness}{claim_suffix}")
+    for child in view.children:
+        evidence_str = (
+            "none"
+            if not child.evidence
+            else "[" + ", ".join(f"{p.kind} {p.value}" for p in child.evidence) + "]"
+        )
+        blocked_str = "yes" if child.is_blocked else "no"
+        print(f"  {child.id}  {child.status}  evidence: {evidence_str}  blocked: {blocked_str}")
+    return 0
+
+
+def _cmd_milestone_list(args: argparse.Namespace) -> int:
+    try:
+        info = get_repo_info()
+    except NotAGitRepositoryError as exc:
+        print(f"bindle milestone list: {exc}", file=sys.stderr)
+        return 1
+
+    ledger = WorkLedger(info.repo_root)
+    entries = milestone_review.list_milestones(ledger)
+    if args.status is not None:
+        entries = [e for e in entries if e.status == args.status]
+    if args.ready_only:
+        entries = [e for e in entries if e.review_ready]
+
+    for entry in entries:
+        print(f"{entry.id}  {entry.status}  {'ready' if entry.review_ready else 'not ready'}")
+    return 0
+
+
+def _cmd_milestone_enter_review(args: argparse.Namespace) -> int:
+    try:
+        info = get_repo_info()
+    except NotAGitRepositoryError as exc:
+        print(f"bindle milestone enter-review: {exc}", file=sys.stderr)
+        return 1
+
+    ledger = WorkLedger(info.repo_root)
+    result = milestone_review.enter_review(ledger, args.id)
+    if not result.ok:
+        print(f"bindle milestone enter-review: {result.reason}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _cmd_milestone_claim(args: argparse.Namespace) -> int:
+    try:
+        info = get_repo_info()
+    except NotAGitRepositoryError as exc:
+        print(f"bindle milestone claim: {exc}", file=sys.stderr)
+        return 1
+
+    ledger = WorkLedger(info.repo_root)
+    result = milestone_review.claim_milestone(
+        ledger, args.id, args.owner, worktree_path=args.worktree, branch=args.branch
+    )
+    if not result.ok:
+        print(f"bindle milestone claim: {result.reason}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _cmd_milestone_release(args: argparse.Namespace) -> int:
+    try:
+        info = get_repo_info()
+    except NotAGitRepositoryError as exc:
+        print(f"bindle milestone release: {exc}", file=sys.stderr)
+        return 1
+
+    ledger = WorkLedger(info.repo_root)
+    result = milestone_review.release_milestone(ledger, args.id, args.owner)
+    if not result.ok:
+        print(f"bindle milestone release: {result.reason}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _cmd_milestone_accept(args: argparse.Namespace) -> int:
+    return _cmd_milestone_decide("accept", milestone_review.accept, args)
+
+
+def _cmd_milestone_decline(args: argparse.Namespace) -> int:
+    return _cmd_milestone_decide("decline", milestone_review.decline, args)
+
+
+def _cmd_milestone_decide(verb: str, fn, args: argparse.Namespace) -> int:
+    try:
+        info = get_repo_info()
+    except NotAGitRepositoryError as exc:
+        print(f"bindle milestone {verb}: {exc}", file=sys.stderr)
+        return 1
+
+    ledger = WorkLedger(info.repo_root)
+    result = fn(ledger, args.id, evidence_locator=args.evidence, note=args.note)
+    if not result.ok:
+        print(f"bindle milestone {verb}: {result.reason}", file=sys.stderr)
+        return 1
+
+    past_tense = "accepted" if verb == "accept" else "declined"
+    print(f"bindle milestone {verb}: {args.id} {past_tense}")
+    if result.rationale_error is not None:
+        print(
+            f"bindle milestone {verb}: decision recorded, but the rationale "
+            f"locator was not: {result.rationale_error}",
+            file=sys.stderr,
+        )
+    return 0
+
+
 class _BindleArgumentParser(argparse.ArgumentParser):
     """`ArgumentParser` with colorized help forced off.
 
@@ -966,6 +1113,100 @@ def build_parser() -> argparse.ArgumentParser:
     done_parser = work_subparsers.add_parser("done", help="Mark a claimed task done.")
     done_parser.add_argument("id", help="Work item id")
 
+    milestone_parser = subparsers.add_parser(
+        "milestone",
+        help="Review milestone readiness/evidence and record accept/decline decisions.",
+        description=(
+            "Milestone Review Surface (specs/004-milestone-review-surface): the "
+            "human-facing counterpart to `bindle work` — a maintainer's CLI path to "
+            "the milestone review lifecycle specs/002-milestone-task-work-items "
+            "already implements in the ledger (review-readiness, enter-review, "
+            "claim/release, accept/decline). Deliberately a separate command group "
+            "from `bindle work`, not a namespace it nests under: this surface "
+            "exposes no task mutation, and `bindle work` exposes no milestone "
+            "mutation."
+        ),
+    )
+    milestone_subparsers = milestone_parser.add_subparsers(dest="milestone_command")
+
+    milestone_review_parser = milestone_subparsers.add_parser(
+        "review", help="Show a milestone's status, review-readiness, and evidence."
+    )
+    milestone_review_parser.add_argument("id", help="Work item id")
+
+    milestone_list_parser = milestone_subparsers.add_parser(
+        "list", help="Enumerate milestone work items."
+    )
+    milestone_list_parser.add_argument(
+        "--status",
+        choices=["open", "review", "accepted", "superseded"],
+        default=None,
+        help="Only show milestones with this status.",
+    )
+    milestone_list_parser.add_argument(
+        "--ready-only",
+        action="store_true",
+        help="Only show review-ready milestones.",
+    )
+
+    milestone_enter_review_parser = milestone_subparsers.add_parser(
+        "enter-review", help="Move a review-ready milestone from open to review."
+    )
+    milestone_enter_review_parser.add_argument("id", help="Work item id")
+
+    milestone_claim_parser = milestone_subparsers.add_parser(
+        "claim", help="Claim a milestone."
+    )
+    milestone_claim_parser.add_argument("id", help="Work item id")
+    milestone_claim_parser.add_argument(
+        "--owner", required=True, help="Claim owner identity"
+    )
+    milestone_claim_parser.add_argument(
+        "--worktree", default=None, help="Worktree path to record with the claim"
+    )
+    milestone_claim_parser.add_argument(
+        "--branch", default=None, help="Branch name to record with the claim"
+    )
+
+    milestone_release_parser = milestone_subparsers.add_parser(
+        "release", help="Release a claim on a milestone."
+    )
+    milestone_release_parser.add_argument("id", help="Work item id")
+    milestone_release_parser.add_argument(
+        "--owner", required=True, help="Claim owner identity"
+    )
+
+    def _add_decision_arguments(decision_parser: argparse.ArgumentParser) -> None:
+        decision_parser.add_argument("id", help="Work item id")
+        decision_parser.add_argument(
+            "--evidence",
+            default=None,
+            help="Rationale-locator evidence pointer value, recorded against the milestone.",
+        )
+        decision_parser.add_argument(
+            "--note",
+            default=None,
+            help="Optional note alongside --evidence (requires --evidence).",
+        )
+        # `--note` without `--evidence` is a usage error caught by argument
+        # parsing (contracts/milestone-review-surface.md), not a manual
+        # check inside the command handler — the parser reference is
+        # stashed on the Namespace itself (set_defaults) so main()'s
+        # dispatch can call this exact subparser's own .error() (argparse's
+        # own mechanism: prints usage, exits 2) rather than the top-level
+        # parser's.
+        decision_parser.set_defaults(_decision_parser=decision_parser)
+
+    milestone_accept_parser = milestone_subparsers.add_parser(
+        "accept", help="Accept a milestone currently in review."
+    )
+    _add_decision_arguments(milestone_accept_parser)
+
+    milestone_decline_parser = milestone_subparsers.add_parser(
+        "decline", help="Decline a milestone currently in review, back to open."
+    )
+    _add_decision_arguments(milestone_decline_parser)
+
     return parser
 
 
@@ -1021,6 +1262,26 @@ def main(argv: list[str] | None = None) -> int:
         if args.work_command == "done":
             return _cmd_work_done(args)
         parser.parse_args(["work", "--help"])
+        return 1
+
+    if args.command == "milestone":
+        if args.milestone_command == "review":
+            return _cmd_milestone_review(args)
+        if args.milestone_command == "list":
+            return _cmd_milestone_list(args)
+        if args.milestone_command == "enter-review":
+            return _cmd_milestone_enter_review(args)
+        if args.milestone_command == "claim":
+            return _cmd_milestone_claim(args)
+        if args.milestone_command == "release":
+            return _cmd_milestone_release(args)
+        if args.milestone_command in ("accept", "decline"):
+            if args.note is not None and args.evidence is None:
+                args._decision_parser.error("argument --note: not allowed without argument --evidence")
+            if args.milestone_command == "accept":
+                return _cmd_milestone_accept(args)
+            return _cmd_milestone_decline(args)
+        parser.parse_args(["milestone", "--help"])
         return 1
 
     parser.print_help()

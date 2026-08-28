@@ -601,6 +601,38 @@ class ExternalProjectionRow:
     created_at: str
 
 
+@dataclasses.dataclass(frozen=True)
+class EvidencePointer:
+    """One row of `work_item_evidence`, read back individually.
+
+    specs/004-milestone-review-surface data-model.md: generalizes
+    `has_qualifying_evidence()`'s existing `EXISTS` check into a full-row
+    read — no new field, no new kind (`kind` remains one of `branch` |
+    `commit` | `pull_request` | `other`, per the schema's own `CHECK`).
+    """
+
+    kind: str
+    value: str
+    recorded_at: str
+    note: str | None
+
+
+@dataclasses.dataclass(frozen=True)
+class ClaimInfo:
+    """The single claim row for a work item, read back individually.
+
+    specs/004-milestone-review-surface data-model.md: generalizes
+    `is_claimed()`'s existing `EXISTS` check into a full-row read.
+    `worktree_path`/`branch` mirror `claim()`'s own optional-argument
+    shape — `None` when not supplied at claim time.
+    """
+
+    owner: str
+    claimed_at: str
+    worktree_path: str | None
+    branch: str | None
+
+
 _WORK_ITEM_COLUMNS = (
     "id",
     "type",
@@ -1283,6 +1315,48 @@ class WorkLedger:
                 (work_item_id,),
             ).fetchone()
             return bool(row[0])
+        finally:
+            conn.close()
+
+    def list_evidence(self, work_item_id: str) -> list[EvidencePointer]:
+        """Read back every recorded Evidence Pointer for `work_item_id` (T005).
+
+        specs/004-milestone-review-surface data-model.md: generalizes
+        `has_qualifying_evidence()`'s existing `EXISTS` check into a full
+        row read, ordered by `evidence_id` (the table's own
+        auto-incrementing insertion order — append-only, never
+        reordered — not `recorded_at`, which can tie between two
+        pointers recorded in the same instant). Returns `[]`, never
+        raises, for a nonexistent `work_item_id`.
+        """
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT kind, value, recorded_at, note FROM work_item_evidence "
+                "WHERE work_item_id = ? ORDER BY evidence_id",
+                (work_item_id,),
+            ).fetchall()
+            return [EvidencePointer(*row) for row in rows]
+        finally:
+            conn.close()
+
+    def get_claim(self, work_item_id: str) -> ClaimInfo | None:
+        """Read back the single claim row for `work_item_id`, or `None` (T006).
+
+        specs/004-milestone-review-surface data-model.md: generalizes
+        `is_claimed()`'s existing `EXISTS` check into a full row read.
+        `work_item_claims.PRIMARY KEY (work_item_id)` guarantees at most
+        one row, so this returns a single optional value, mirroring
+        `get_work_item()`'s own `WorkItem | None` shape for "not found."
+        """
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT owner, claimed_at, worktree_path, branch "
+                "FROM work_item_claims WHERE work_item_id = ?",
+                (work_item_id,),
+            ).fetchone()
+            return ClaimInfo(*row) if row is not None else None
         finally:
             conn.close()
 

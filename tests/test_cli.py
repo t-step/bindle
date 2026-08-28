@@ -2599,5 +2599,306 @@ class TestWorkCliSubcommands(unittest.TestCase):
         self.assertIn("not_a_task", err.getvalue())
 
 
+class TestMilestoneCliSubcommands(unittest.TestCase):
+    # T010 (specs/004-milestone-review-surface): the `bindle milestone`
+    # subcommand family is a thin wrapper over milestone_review.py —
+    # mirrors TestWorkCliSubcommands' shape for the milestone-facing
+    # surface. review/list here (US1); enter-review/claim/release (US3),
+    # accept/decline (US4), and the task-rejection guard (US5) are added
+    # by later test classes/extensions in this file.
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = os.path.join(self.tmp.name, "repo")
+        _init_repo(self.repo)
+        with _chdir(self.repo):
+            self.ledger = WorkLedger(get_repo_info().repo_root)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _create_milestone(self, id):
+        self.ledger.create_work_item(
+            id=id, title=f"Milestone {id}", source_kind="adhoc",
+            source_locator=f"plans/active/example.md#{id}", type="milestone",
+        )
+
+    def _create_task(self, id, parent_id=None):
+        self.ledger.create_work_item(
+            id=id, title=f"Task {id}", source_kind="adhoc",
+            source_locator=f"plans/active/example.md#{id}", parent_id=parent_id,
+        )
+
+    def _ready_milestone(self, milestone_id="M-1", child_id="T-1"):
+        self._create_milestone(milestone_id)
+        self._create_task(child_id, parent_id=milestone_id)
+        self.assertTrue(self.ledger.mark_done(child_id))
+        self.ledger.add_evidence(child_id, "commit", "abc123")
+
+    def test_review_not_found(self):
+        err = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stderr(err):
+            code = main(["milestone", "review", "does-not-exist"])
+        self.assertEqual(code, 1)
+        self.assertIn("bindle milestone review:", err.getvalue())
+        self.assertIn("not_found", err.getvalue())
+
+    def test_review_not_a_milestone(self):
+        self._create_task("T-1")
+        err = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stderr(err):
+            code = main(["milestone", "review", "T-1"])
+        self.assertEqual(code, 1)
+        self.assertIn("bindle milestone review:", err.getvalue())
+        self.assertIn("not_a_milestone", err.getvalue())
+
+    def test_review_not_ready_names_outstanding_child(self):
+        self._create_milestone("M-1")
+        self._create_task("T-1", parent_id="M-1")
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["milestone", "review", "M-1"])
+        self.assertEqual(code, 0)
+        text = out.getvalue()
+        self.assertIn("not ready", text)
+        self.assertIn("T-1", text)
+
+    def test_review_ready(self):
+        self._ready_milestone()
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["milestone", "review", "M-1"])
+        self.assertEqual(code, 0)
+        text = out.getvalue()
+        self.assertIn("ready", text)
+        self.assertNotIn("not ready", text)
+
+    def test_list_shows_every_milestone(self):
+        self._ready_milestone("M-1", "T-1")
+        self._create_milestone("M-2")
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["milestone", "list"])
+        self.assertEqual(code, 0)
+        text = out.getvalue()
+        self.assertIn("M-1", text)
+        self.assertIn("M-2", text)
+
+    def test_list_ready_only_filters(self):
+        self._ready_milestone("M-1", "T-1")
+        self._create_milestone("M-2")
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["milestone", "list", "--ready-only"])
+        self.assertEqual(code, 0)
+        text = out.getvalue()
+        self.assertIn("M-1", text)
+        self.assertNotIn("M-2", text)
+
+    def test_list_status_filters(self):
+        self._ready_milestone("M-1", "T-1")
+        self._create_milestone("M-2")
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["milestone", "list", "--status", "open"])
+        self.assertEqual(code, 0)
+        text = out.getvalue()
+        self.assertIn("M-1", text)
+        self.assertIn("M-2", text)
+
+    # -- T015 (US2): review output carries per-child evidence/blocked
+    # state and the milestone's own claim line.
+
+    def test_review_output_includes_child_evidence_and_blocked_state(self):
+        self._create_milestone("M-1")
+        self._create_task("Blocker")
+        self._create_task("T-1", parent_id="M-1")
+        self.ledger.add_blocked_by("T-1", "Blocker")
+        self.ledger.add_evidence("T-1", "commit", "abc123")
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["milestone", "review", "M-1"])
+        self.assertEqual(code, 0)
+        text = out.getvalue()
+        self.assertIn("commit abc123", text)
+        self.assertIn("blocked: yes", text)
+
+    def test_review_output_includes_claim_line_when_claimed(self):
+        self._ready_milestone()
+        self.ledger.mark_in_review("M-1")
+        self.ledger.claim("M-1", "alice")
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["milestone", "review", "M-1"])
+        self.assertEqual(code, 0)
+        text = out.getvalue()
+        self.assertIn("claimed by alice", text)
+
+    # -- T017 (US3): enter-review, claim, release ---------------------
+
+    def test_enter_review_success_and_rejection(self):
+        self._create_milestone("M-1")
+        self._create_task("T-1", parent_id="M-1")
+        err = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stderr(err):
+            code = main(["milestone", "enter-review", "M-1"])
+        self.assertEqual(code, 1)
+        self.assertIn("not_ready_or_not_open", err.getvalue())
+
+        self.assertTrue(self.ledger.mark_done("T-1"))
+        self.ledger.add_evidence("T-1", "commit", "abc")
+        with _chdir(self.repo):
+            code = main(["milestone", "enter-review", "M-1"])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.ledger.get_work_item("M-1").status, "review")
+
+    def test_claim_and_release_success(self):
+        self._ready_milestone()
+        with _chdir(self.repo):
+            self.assertEqual(main(["milestone", "enter-review", "M-1"]), 0)
+            code = main(
+                ["milestone", "claim", "M-1", "--owner", "alice",
+                 "--worktree", "/tmp/wt", "--branch", "feature/x"]
+            )
+        self.assertEqual(code, 0)
+        claim = self.ledger.get_claim("M-1")
+        self.assertEqual(claim.owner, "alice")
+        self.assertEqual(claim.worktree_path, "/tmp/wt")
+        self.assertEqual(claim.branch, "feature/x")
+
+        with _chdir(self.repo):
+            code = main(["milestone", "release", "M-1", "--owner", "alice"])
+        self.assertEqual(code, 0)
+        self.assertIsNone(self.ledger.get_claim("M-1"))
+
+    def test_claim_rejects_task_id(self):
+        self._create_task("T-1")
+        err = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stderr(err):
+            code = main(["milestone", "claim", "T-1", "--owner", "alice"])
+        self.assertEqual(code, 1)
+        self.assertIn("not_a_milestone", err.getvalue())
+
+    # -- T021 (US4): accept, decline -----------------------------------
+
+    def test_accept_success_with_evidence(self):
+        self._ready_milestone()
+        with _chdir(self.repo):
+            self.assertEqual(main(["milestone", "enter-review", "M-1"]), 0)
+            code = main(
+                ["milestone", "accept", "M-1", "--evidence",
+                 "docs/DECISIONS.md#D1", "--note", "matches scope"]
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(self.ledger.get_work_item("M-1").status, "accepted")
+        pointers = self.ledger.list_evidence("M-1")
+        self.assertEqual(len(pointers), 1)
+        self.assertEqual(pointers[0].value, "docs/DECISIONS.md#D1")
+        self.assertEqual(pointers[0].note, "matches scope")
+
+    def test_decline_success_with_evidence(self):
+        self._ready_milestone()
+        with _chdir(self.repo):
+            self.assertEqual(main(["milestone", "enter-review", "M-1"]), 0)
+            code = main(
+                ["milestone", "decline", "M-1", "--evidence", "docs/DECISIONS.md#D2"]
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(self.ledger.get_work_item("M-1").status, "open")
+        pointers = self.ledger.list_evidence("M-1")
+        self.assertEqual(len(pointers), 1)
+        self.assertEqual(pointers[0].value, "docs/DECISIONS.md#D2")
+
+    def test_note_without_evidence_is_a_usage_error(self):
+        self._ready_milestone()
+        err = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stderr(err):
+            with self.assertRaises(SystemExit) as cm:
+                main(["milestone", "accept", "M-1", "--note", "orphaned note"])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("--note", err.getvalue())
+        self.assertIn("--evidence", err.getvalue())
+
+    def test_not_in_review_rejection_leaves_no_evidence_pointer(self):
+        self._create_milestone("M-1")
+        err = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stderr(err):
+            code = main(
+                ["milestone", "accept", "M-1", "--evidence", "docs/DECISIONS.md#D3"]
+            )
+        self.assertEqual(code, 1)
+        self.assertIn("not_in_review", err.getvalue())
+
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            main(["milestone", "review", "M-1"])
+        self.assertNotIn("D3", out.getvalue())
+        self.assertEqual(self.ledger.list_evidence("M-1"), [])
+
+    def test_rationale_recording_failure_still_exits_zero_with_distinct_warning(self):
+        self._ready_milestone()
+        with _chdir(self.repo):
+            self.assertEqual(main(["milestone", "enter-review", "M-1"]), 0)
+
+        err = io.StringIO()
+        with mock.patch.object(
+            WorkLedger, "add_evidence", side_effect=RuntimeError("storage error")
+        ), _chdir(self.repo), contextlib.redirect_stderr(err):
+            code = main(
+                ["milestone", "accept", "M-1", "--evidence", "docs/DECISIONS.md#D1"]
+            )
+        self.assertEqual(code, 0)
+        self.assertIn("storage error", err.getvalue())
+
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            main(["milestone", "review", "M-1"])
+        self.assertIn("accepted", out.getvalue())
+
+
+class TestMilestoneCommandsRejectTasks(unittest.TestCase):
+    # T025 (US5): the CLI-level mirror of
+    # TestMilestoneOnlyGuard.test_every_function_rejects_a_task_id_without_side_effects
+    # — every `bindle milestone <verb>` invoked against a task id, exit
+    # code 1, "not a milestone" (not_a_milestone) in stderr, no ledger
+    # state change. TestWorkCliSubcommands.test_done_rejects_milestone
+    # (unmodified, run as part of the same full suite) demonstrates
+    # `bindle work done`'s existing milestone guard is untouched by this
+    # feature.
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = os.path.join(self.tmp.name, "repo")
+        _init_repo(self.repo)
+        with _chdir(self.repo):
+            self.ledger = WorkLedger(get_repo_info().repo_root)
+        self.ledger.create_work_item(
+            id="T-1", title="Task T-1", source_kind="adhoc",
+            source_locator="plans/active/example.md#T-1",
+        )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run_and_assert_rejected(self, argv):
+        err = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stderr(err):
+            code = main(argv)
+        self.assertEqual(code, 1, argv)
+        self.assertIn("not_a_milestone", err.getvalue(), argv)
+
+    def test_every_milestone_command_rejects_a_task_id(self):
+        before_item = self.ledger.get_work_item("T-1")
+
+        self._run_and_assert_rejected(["milestone", "review", "T-1"])
+        self._run_and_assert_rejected(["milestone", "enter-review", "T-1"])
+        self._run_and_assert_rejected(["milestone", "claim", "T-1", "--owner", "alice"])
+        self._run_and_assert_rejected(["milestone", "release", "T-1", "--owner", "alice"])
+        self._run_and_assert_rejected(["milestone", "accept", "T-1"])
+        self._run_and_assert_rejected(["milestone", "decline", "T-1"])
+
+        self.assertEqual(self.ledger.get_work_item("T-1"), before_item)
+        self.assertEqual(self.ledger.list_evidence("T-1"), [])
+        self.assertIsNone(self.ledger.get_claim("T-1"))
+
+
 if __name__ == "__main__":
     unittest.main()
