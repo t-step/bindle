@@ -1,6 +1,6 @@
 # Milestone/task work-item model: task composition and Spec Kit comparison
 
-Date: 2026-08-27. Status: **composition complete; implementation proceeding directly, not via parallel subagents.**
+Date: 2026-08-27. Status: **superseded by completion.** `specs/002-milestone-task-work-items/` is fully implemented, verified, and adopted (docs/DECISIONS.md D038). This document is retained, unedited below, as the historical record of the composition analysis — not as an open resumption point.
 
 ## Why this document exists
 

@@ -1,6 +1,6 @@
 # Symphony Task Integration: task composition and Spec Kit comparison
 
-Date: 2026-08-27. Status: **composition complete; implementation proceeds using the parallelism identified below.**
+Date: 2026-08-27. Status: **superseded by completion.** `specs/003-symphony-task-integration/` is fully implemented, verified, and adopted (docs/DECISIONS.md D039). This document is retained, unedited below, as the historical record of the composition analysis — not as an open resumption point.
 
 ## Why this document exists
 

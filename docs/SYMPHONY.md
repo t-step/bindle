@@ -182,12 +182,15 @@ This document establishes a reference only. Even with the published
 projection and write surface above, Bindle still does not:
 
 * install, build, configure, start, stop, or supervise Symphony;
-* build a Symphony-specific tracker adapter — that adapter, if built,
-  remains future work, deferred until a first end-to-end integration is
-  actually attempted, and would read the published projection and map
-  its rows onto `Tracker.Issue` directly, never translate into Symphony's
-  own separate, standalone local tracker format
-  (`.symphony/local_tracker.json`), which is unrelated;
+* build the Symphony-specific tracker adapter itself — that adapter now
+  exists and has been independently proven end-to-end
+  (`docs/DECISIONS.md` D041), but entirely as Symphony-repository work
+  (`specs/003-bindle-tracker-adapter` on the fork's `development` branch):
+  it reads the published projection and maps its rows onto
+  `Tracker.Issue` directly, and does not translate into Symphony's own
+  separate, standalone local tracker format
+  (`.symphony/local_tracker.json`), which remains unrelated. No Bindle
+  repository code, schema, or CLI surface implements or depends on it;
 * make its published SQLite projection a second copy of, or a
   replacement for, Symphony's own tracker/storage — the projection is a
   disposable, regenerable read model derived from Bindle's own canonical
@@ -196,10 +199,11 @@ projection and write surface above, Bindle still does not:
   or any other consumer may treat as authoritative;
 * standardize a `bindle` command to launch or manage Symphony.
 
-`plans/active/2026-08-24-symphony-coordination-exploration.md` records the
-architecture direction a future implementation is expected to follow once
-that work actually starts (Symphony remains the coordinator; Bindle adds
-only the smallest seams Symphony already exposes). This document does not
-change or narrow that plan — it only gives that future work, and any
-other future reference to Symphony, a fixed, intentional starting point
-instead of an assumed or rediscovered one.
+`plans/archive/2026-08-24-symphony-coordination-exploration.md` records the
+architecture direction that implementation followed (Symphony remains the
+coordinator; Bindle adds only the smallest seams Symphony already
+exposes) — the direction `specs/003-symphony-task-integration/`
+(`docs/DECISIONS.md` D039) and the Symphony-side adapter proof above
+(`docs/DECISIONS.md` D041) both bore out. This document does not change
+or narrow that plan; it remains the fixed, intentional starting point for
+any further reference to Symphony.
