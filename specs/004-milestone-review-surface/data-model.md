@@ -117,7 +117,23 @@ Each mirrors `symphony_projection.py`'s existing `claim_task`/`release_task`/`co
 | `accept(ledger, id, evidence_locator=None, note=None) -> DecisionResult` | `accept_milestone()`, then `add_evidence(kind='other', ...)` iff the transition returned `True` and `evidence_locator` was given | `ok` \| `not_found` \| `not_a_milestone` \| `not_in_review` |
 | `decline(ledger, id, evidence_locator=None, note=None) -> DecisionResult` | `decline_review()`, then `add_evidence(kind='other', ...)` iff the transition returned `True` and `evidence_locator` was given | `ok` \| `not_found` \| `not_a_milestone` \| `not_in_review` |
 
-`DecisionResult`/`TransitionResult`/`ClaimResult`/`ReleaseResult` are small frozen dataclasses with an `ok: bool` and a `reason: str | None`, mirroring `symphony_projection.py`'s existing `ClaimResult`/`ReleaseResult`/`CompleteResult` shape exactly (`contracts/task-write-surface.md`'s own result vocabulary convention, applied here rather than reinvented).
+`TransitionResult`/`ClaimResult`/`ReleaseResult` are small frozen dataclasses with an `ok: bool` and a `reason: str | None`, mirroring `symphony_projection.py`'s existing `ClaimResult`/`ReleaseResult`/`CompleteResult` shape exactly (`contracts/task-write-surface.md`'s own result vocabulary convention, applied here rather than reinvented).
+
+`DecisionResult` carries one additional field beyond that shared shape, because `accept`/`decline` compose two separately committed calls (`research.md`'s "Partial-failure semantics (FR-010a)"):
+
+```python
+@dataclasses.dataclass(frozen=True)
+class DecisionResult:
+    ok: bool                     # reflects the status transition's own outcome only
+    reason: str | None           # None when ok; else 'not_found' | 'not_a_milestone' | 'not_in_review'
+    rationale_error: str | None  # None unless the transition succeeded, a locator was
+                                  # supplied, and the *separate* add_evidence() call then
+                                  # raised -- in that case, str(exception). Always None
+                                  # when ok is False (a rejected transition never attempts
+                                  # to record evidence at all, per FR-010).
+```
+
+`ok=True` with `rationale_error` set means: the accept/decline transition itself is committed exactly as requested; the optional rationale-locator evidence pointer was not recorded. The transition is not retried or rolled back on account of this — spec.md FR-010a. The "exactly one evidence pointer is recorded" guarantee (`contracts/milestone-review-surface.md`) holds only when `ok is True` and `rationale_error is None`.
 
 ## What is explicitly not a new entity
 
