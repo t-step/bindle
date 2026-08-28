@@ -39,13 +39,51 @@ import sqlite3
 import subprocess
 from collections.abc import Sequence
 
+from . import git_local_exclude
+
 
 class SchemaVersionError(RuntimeError):
     """Raised when an existing ledger's schema version is unexpected."""
 
 
+class ForeignDatabaseError(RuntimeError):
+    """Raised when an existing file at the ledger path cannot be positively
+    identified as a Bindle-owned or migratable work ledger.
+
+    docs/DECISIONS.md's same-path filesystem-collision safety rule: an
+    absent ledger file is always safe to create; an existing one already
+    carrying `_APPLICATION_ID`, or one whose `user_version` and table set
+    positively match a known pre-marker Bindle ledger shape, is safe to
+    reconcile or adopt; anything else — a foreign database, an unreadable
+    file, or a Bindle-shaped file at an unexpected version — must never be
+    overwritten or reinterpreted. `connect()` raises this before any
+    `CREATE TABLE`, migration, or journal-mode write touches the file.
+    """
+
+
 _LEDGER_DIR_NAME = ".bindle-work"
 _LEDGER_FILE_NAME = "ledger.sqlite3"
+
+# SQLite `PRAGMA application_id` — a small, narrow ownership marker for
+# exactly this one file (never a broader ownership registry or manifest).
+# The ASCII bytes "BWL1" ("Bindle Work Ledger", format 1) read as a
+# big-endian 32-bit integer; fits a signed 32-bit PRAGMA value (SQLite
+# stores this as a signed int32) and is distinct from
+# `symphony_projection._APPLICATION_ID`. `connect()`/`_ensure_schema()`
+# stamp this on every fresh-create, migrate, and pre-marker-adopt path —
+# see `_verify_ownership` for how an existing file is checked against it
+# before anything is written.
+_APPLICATION_ID = 0x42574C31
+
+# The exact table set every schema version (1, 2, or 3) of this ledger has
+# always had — used by `_verify_ownership` to positively recognize a
+# pre-marker (application_id == 0) database as a genuine, adoptable
+# Bindle ledger rather than an unrelated file that happens to share a
+# `user_version` number.
+_KNOWN_TABLE_NAMES = frozenset(
+    {"work_items", "work_item_blocked_by", "work_item_claims", "work_item_evidence"}
+)
+_KNOWN_SCHEMA_VERSIONS = frozenset({1, 2, 3})
 
 # PRAGMA user_version — see research.md's "Decision: schema versioning and
 # migration ownership". Bump this and add an explicit migration step keyed
@@ -159,6 +197,203 @@ def ledger_path(repo_root: str) -> str:
     return os.path.join(repo_root, _LEDGER_DIR_NAME, _LEDGER_FILE_NAME)
 
 
+def ensure_gitignored(git_common_dir: str) -> bool:
+    """Make sure the ledger file and its SQLite sidecars are locally
+    ignored for this repository.
+
+    Adds exactly `/.bindle-work/ledger.sqlite3` and its `-journal`/`-wal`/
+    `-shm` sidecar lines to the repository's machine-local `info/exclude`
+    (never the tracked `.gitignore`, never a broader `.bindle-work/` or
+    `*.sqlite3` rule — see `git_local_exclude.py`'s module docstring and
+    docs/DECISIONS.md) — so anything else placed under `.bindle-work/`
+    stays ordinary, visible, trackable content. Idempotent: never
+    duplicates a line already present.
+
+    Never *raises* on a filesystem/Git error — same convenience-layer
+    posture as `qmd.py`'s own `ensure_gitignored` — but, unlike that
+    function, reports the outcome: returns `True` iff every line was
+    confirmed present, `False` if an `OSError` prevented that. Local-ignore
+    hygiene is this feature's own stated postcondition (docs/DECISIONS.md),
+    not merely QMD's best-effort convenience, so a caller (`bindle init`)
+    can tell the difference and report it rather than silently claiming
+    success — without this function itself needing to raise, retry, or
+    add any rollback of its own.
+    """
+    try:
+        relpath = f"{_LEDGER_DIR_NAME}/{_LEDGER_FILE_NAME}"
+        for line in git_local_exclude.sqlite_artifact_exclude_lines(relpath):
+            git_local_exclude.ensure_line_excluded(git_common_dir, line)
+        return True
+    except OSError:
+        return False
+
+
+def _existing_table_names(conn: sqlite3.Connection) -> frozenset[str]:
+    rows = conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+    return frozenset(row[0] for row in rows)
+
+
+def _table_columns(conn: sqlite3.Connection, table_name: str) -> tuple[tuple, ...]:
+    """`(name, declared_type, notnull, pk)` for every column of `table_name`,
+    ordered by column position — read via `PRAGMA table_info`, SQLite's own
+    schema introspection. Never a second, hand-maintained schema
+    definition: this is compared only against fingerprints derived the
+    same way from this module's own real `CREATE TABLE` statements (see
+    `_reference_table_columns`), not against a separately-authored list.
+    `table_name` is always one of the fixed internal names in
+    `_KNOWN_TABLE_NAMES`, never caller-supplied input.
+    """
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    # row: (cid, name, type, notnull, dflt_value, pk)
+    return tuple((row[1], row[2], row[3], row[5]) for row in sorted(rows, key=lambda r: r[0]))
+
+
+# Columns `_migrate_v1_to_v2` adds to `work_items` via `ALTER TABLE ... ADD
+# COLUMN` — the exact same three names that function's own ALTER
+# statements name (see its docstring). Kept here, cross-referenced rather
+# than duplicated independently, so a version-1 database's expected
+# `work_items` shape can be derived by removing exactly these columns
+# from the current (v2/v3, identical) shape below, rather than a second,
+# separately hand-maintained "v1 shape" definition that could drift from
+# the migration itself.
+_V1_TO_V2_ADDED_WORK_ITEMS_COLUMNS = frozenset({"type", "parent_id", "description"})
+
+
+def _reference_table_columns() -> dict[str, tuple[tuple, ...]]:
+    """The exact current column shape of every table in `_KNOWN_TABLE_NAMES`.
+
+    Built by actually running `_SCHEMA_STATEMENTS` — the identical,
+    authoritative SQL `_ensure_schema()` uses for a fresh ledger — against
+    a throwaway in-memory connection and reading `PRAGMA table_info` back
+    (`_table_columns`). Never a second, independently-maintained schema
+    definition, hash, or manifest: this is the same schema authority
+    every other bootstrap path already uses, just introspected rather
+    than re-declared. `work_item_blocked_by`/`work_item_claims`/
+    `work_item_evidence` have never changed shape across schema versions
+    1–3 (only `work_items` has); this reference shape doubles as the v2
+    *and* v3 `work_items` shape too, since `_migrate_v2_to_v3` changes
+    only a table-level `CHECK` constraint (not visible to `PRAGMA
+    table_info`, and not a column), never a column.
+    """
+    conn = sqlite3.connect(":memory:")
+    try:
+        for statement in _SCHEMA_STATEMENTS:
+            conn.execute(statement)
+        return {name: _table_columns(conn, name) for name in _KNOWN_TABLE_NAMES}
+    finally:
+        conn.close()
+
+
+def _expected_table_columns(version: int) -> dict[str, tuple[tuple, ...]]:
+    """The expected per-table column shape for a pre-marker database
+    claiming to be at `version` (always one of `_KNOWN_SCHEMA_VERSIONS`).
+
+    Versions 2 and 3 share `_reference_table_columns()` verbatim (see its
+    docstring). Version 1's `work_items` shape is derived by removing
+    `_V1_TO_V2_ADDED_WORK_ITEMS_COLUMNS` from that same reference shape —
+    reusing `_migrate_v1_to_v2`'s own already-encoded knowledge of what
+    changed, rather than a separate v1 schema definition.
+    """
+    current = _reference_table_columns()
+    if version != 1:
+        return current
+    v1 = dict(current)
+    v1["work_items"] = tuple(
+        col for col in current["work_items"] if col[0] not in _V1_TO_V2_ADDED_WORK_ITEMS_COLUMNS
+    )
+    return v1
+
+
+def _verify_ownership(conn: sqlite3.Connection, db_path: str) -> None:
+    """Refuse to touch an existing file at `db_path` that cannot be
+    positively identified as Bindle-owned or migratable, before
+    `_ensure_schema()` (or any journal-mode write) ever runs against it.
+
+    Strictly path-oriented, with no filesize or content heuristic: a path
+    absent before this invocation is stamped `_APPLICATION_ID` by
+    `connect()` itself, immediately, before this function is ever called
+    (see `connect()`'s own comment) — so by the time this runs,
+    `application_id == _APPLICATION_ID` is true for every legitimately
+    fresh ledger, and any other `application_id == 0` state observed here
+    can only mean a pre-existing file this invocation did not create.
+
+    Outcomes, matching the same-path filesystem-collision safety rule
+    this exists to enforce:
+
+    * `application_id` already `_APPLICATION_ID` — either a path this same
+      `connect()` call just created and stamped, or a Bindle ledger from a
+      version of this code that already stamps the marker on an existing
+      file. Proceed; `_ensure_schema()` handles ordinary create/verify/
+      migrate from here, and a crash any time after the stamp leaves a
+      file a retry recognizes as its own, with no filesize/content
+      heuristic needed.
+    * `application_id == 0`, `user_version == 0`, no tables — a
+      pre-existing file this invocation did not create (had it, `connect()`
+      would have already stamped it before this function ran). Always
+      refused, regardless of file size: file size is not a trustworthy
+      ownership signal, since an unrelated empty SQLite database can look
+      identical to a partially-initialized one.
+    * `application_id == 0`, `user_version` one of `_KNOWN_SCHEMA_VERSIONS`,
+      its table set exactly `_KNOWN_TABLE_NAMES`, AND every one of those
+      tables' actual columns (`PRAGMA table_info`) match
+      `_expected_table_columns(version)` exactly — a legitimate ledger
+      created before this marker existed. Proceed; `_ensure_schema()` will
+      migrate it forward if needed and stamp `_APPLICATION_ID` exactly
+      once, adopting it. A table-name match with a *mismatched* column
+      shape (a foreign database that happens to reuse Bindle's table
+      names) is never adopted — it falls through to the final refusal.
+    * Anything else — a nonzero, non-Bindle `application_id`; a
+      `user_version`/table-set/column-shape combination that doesn't
+      positively match a known Bindle shape; or a file that isn't a
+      readable SQLite database at all — raises `ForeignDatabaseError`.
+      Fails closed: nothing is created, migrated, or written.
+    """
+    try:
+        app_id = conn.execute("PRAGMA application_id").fetchone()[0]
+        if app_id == _APPLICATION_ID:
+            return
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        tables = _existing_table_names(conn)
+    except sqlite3.DatabaseError as exc:
+        raise ForeignDatabaseError(
+            f"{db_path}: existing file is not a readable SQLite database "
+            f"({exc}) — refusing to treat it as a Bindle work ledger."
+        ) from exc
+
+    if app_id == 0 and version == 0 and not tables:
+        raise ForeignDatabaseError(
+            f"{db_path}: an existing, empty file already occupies the "
+            "work ledger path — refusing to treat a pre-existing file as "
+            "fresh Bindle state. Move or remove it yourself if it is "
+            "safe to replace."
+        )
+
+    if app_id == 0 and version in _KNOWN_SCHEMA_VERSIONS and tables == _KNOWN_TABLE_NAMES:
+        expected = _expected_table_columns(version)
+        mismatched = [
+            name for name in _KNOWN_TABLE_NAMES if _table_columns(conn, name) != expected[name]
+        ]
+        if not mismatched:
+            return
+        raise ForeignDatabaseError(
+            f"{db_path}: an existing file matches a Bindle work ledger's "
+            f"table names at user_version={version}, but the column shape "
+            f"of {sorted(mismatched)} does not match — refusing to treat "
+            "it as a Bindle-owned or migratable ledger. Move or remove "
+            "the existing file yourself if it is safe to replace, or "
+            "investigate what created it."
+        )
+
+    raise ForeignDatabaseError(
+        f"{db_path}: an existing file occupies the work ledger path but is "
+        "not recognizable as a Bindle-owned or migratable work ledger "
+        f"(application_id={app_id}, user_version={version}, "
+        f"tables={sorted(tables)}) — refusing to create or migrate a "
+        "schema over it. Move or remove the existing file yourself if it "
+        "is safe to replace, or investigate what created it."
+    )
+
+
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version == 0:
@@ -193,6 +428,19 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         raise SchemaVersionError(
             f"ledger at schema version {version}, expected {_SCHEMA_VERSION}"
         )
+
+    # Every branch above (fresh create, either migration, or an
+    # already-current schema that fell through untouched) leaves the file
+    # at `_SCHEMA_VERSION` — stamp the ownership marker unconditionally
+    # here rather than per-branch, so a pre-marker database that was
+    # *already* current on entry (no CREATE/migration of its own to
+    # piggyback the stamp onto) still gets adopted exactly once.
+    # `_verify_ownership()` above has already established this file is
+    # either fresh or a recognized/migratable Bindle ledger, so this write
+    # is always safe by the time it runs. A single `PRAGMA` write is its
+    # own atomic unit (autocommit) and is idempotent to reissue on a
+    # connection that already carries the marker.
+    conn.execute(f"PRAGMA application_id = {_APPLICATION_ID}")
 
 
 def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
@@ -346,12 +594,38 @@ def connect(repo_root: str) -> sqlite3.Connection:
     """
     db_path = ledger_path(repo_root)
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    # Must be observed BEFORE sqlite3.connect() below, which creates a
+    # 0-byte file immediately for a path that didn't already exist
+    # (verified empirically) — this is the only way to know "this
+    # invocation itself created db_path" from inside the function.
+    path_existed_before = os.path.exists(db_path)
     conn = sqlite3.connect(db_path, isolation_level=None)
     try:
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 2000")
+        if not path_existed_before:
+            # This connection's own sqlite3.connect() call is what just
+            # created db_path — stamp ownership immediately, as the very
+            # first write, before `journal_mode`/schema bootstrap can ever
+            # fail. A crash any time after this single, already-committed
+            # (autocommit) statement leaves the file positively
+            # recognizable as Bindle's own on the next connect() attempt,
+            # so a retry can safely resume via `_verify_ownership`'s own
+            # `application_id == _APPLICATION_ID` fast path below — no
+            # filesize or content heuristic needed (docs/DECISIONS.md).
+            conn.execute(f"PRAGMA application_id = {_APPLICATION_ID}")
+        # Ownership MUST be verified before `journal_mode = WAL` below:
+        # switching journal mode writes SQLite's WAL flag into the
+        # database file's own header immediately, which would mutate a
+        # foreign file before ownership is established. `foreign_keys`/
+        # `busy_timeout` above are connection-local settings, never
+        # written to `db_path` itself, so checking ownership after them
+        # but before `journal_mode`/`synchronous` (the latter is also
+        # connection-local, but kept adjacent to `journal_mode` for
+        # readability) is safe.
+        _verify_ownership(conn, db_path)
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA synchronous = NORMAL")
-        conn.execute("PRAGMA busy_timeout = 2000")
         _ensure_schema(conn)
     except BaseException:
         # A connection that fails setup (a PRAGMA, or schema bootstrap)

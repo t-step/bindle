@@ -3376,5 +3376,468 @@ class TestClaimReadAccessor(LedgerTestCase):
         self.assertIsNone(self.ledger.get_claim("does-not-exist"))
 
 
+class TestApplicationIdOwnership(LedgerTestCase):
+    # Same-path filesystem-collision safety rule (docs/DECISIONS.md): an
+    # absent ledger file is always safe to create; an existing one already
+    # carrying `_APPLICATION_ID`, or one whose `user_version`/table set
+    # positively matches a known pre-marker Bindle ledger shape, is safe
+    # to reconcile or adopt exactly once; anything else must fail closed.
+    def _db_path(self):
+        return work_ledger.ledger_path(self.repo_root)
+
+    def test_fresh_database_is_stamped_with_the_application_id(self):
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            self.assertEqual(
+                conn.execute("PRAGMA application_id").fetchone()[0],
+                work_ledger._APPLICATION_ID,
+            )
+        finally:
+            conn.close()
+
+    def test_reopening_an_owned_ledger_leaves_it_owned(self):
+        work_ledger.connect(self.repo_root).close()
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            self.assertEqual(
+                conn.execute("PRAGMA application_id").fetchone()[0],
+                work_ledger._APPLICATION_ID,
+            )
+        finally:
+            conn.close()
+
+    def test_premarker_v3_database_is_adopted_and_stamped_once(self):
+        os.makedirs(os.path.dirname(self._db_path()), exist_ok=True)
+        conn = sqlite3.connect(self._db_path())
+        for stmt in work_ledger._SCHEMA_STATEMENTS:
+            conn.execute(stmt)
+        conn.execute("PRAGMA user_version = 3")
+        conn.execute(
+            "INSERT INTO work_items (id, type, title, status, source_kind, "
+            "source_locator, created_at, updated_at) VALUES "
+            "('WI-1', 'task', 'Pre-existing', 'open', 'adhoc', 'loc', "
+            f"'{_NOW}', '{_NOW}')"
+        )
+        conn.commit()
+        conn.close()
+
+        ledger = work_ledger.WorkLedger(self.repo_root)
+        item = ledger.get_work_item("WI-1")
+        self.assertIsNotNone(item)
+        self.assertEqual(item.title, "Pre-existing")
+
+        conn = sqlite3.connect(self._db_path())
+        try:
+            self.assertEqual(
+                conn.execute("PRAGMA application_id").fetchone()[0],
+                work_ledger._APPLICATION_ID,
+            )
+        finally:
+            conn.close()
+
+    def test_premarker_v1_database_is_migrated_and_stamped(self):
+        os.makedirs(os.path.dirname(self._db_path()), exist_ok=True)
+        conn = sqlite3.connect(self._db_path())
+        conn.execute(
+            """
+            CREATE TABLE work_items (
+              id                TEXT PRIMARY KEY,
+              title             TEXT,
+              status            TEXT NOT NULL CHECK (status IN ('open', 'done', 'superseded')),
+              superseded_by     TEXT REFERENCES work_items(id),
+              source_kind       TEXT CHECK (source_kind IN ('speckit_task', 'plan', 'adhoc')),
+              source_locator    TEXT,
+              source_promoted_by TEXT,
+              created_at        TEXT,
+              updated_at        TEXT NOT NULL,
+              archived_at       TEXT,
+              CHECK (
+                (status = 'superseded' AND superseded_by IS NOT NULL) OR
+                (status != 'superseded' AND superseded_by IS NULL)
+              )
+            )
+            """
+        )
+        conn.execute(
+            "CREATE TABLE work_item_blocked_by ("
+            "  work_item_id TEXT NOT NULL REFERENCES work_items(id),"
+            "  blocked_on_id TEXT NOT NULL REFERENCES work_items(id),"
+            "  PRIMARY KEY (work_item_id, blocked_on_id),"
+            "  CHECK (work_item_id != blocked_on_id)"
+            ")"
+        )
+        conn.execute(
+            "CREATE TABLE work_item_claims ("
+            "  work_item_id TEXT PRIMARY KEY REFERENCES work_items(id),"
+            "  owner TEXT NOT NULL,"
+            "  claimed_at TEXT NOT NULL,"
+            "  worktree_path TEXT,"
+            "  branch TEXT"
+            ")"
+        )
+        conn.execute(
+            "CREATE TABLE work_item_evidence ("
+            "  evidence_id INTEGER PRIMARY KEY,"
+            "  work_item_id TEXT NOT NULL REFERENCES work_items(id),"
+            "  kind TEXT NOT NULL CHECK (kind IN ('branch', 'commit', 'pull_request', 'other')),"
+            "  value TEXT NOT NULL,"
+            "  recorded_at TEXT NOT NULL,"
+            "  note TEXT"
+            ")"
+        )
+        conn.execute(
+            "INSERT INTO work_items (id, title, status, source_kind, source_locator, "
+            f"created_at, updated_at) VALUES ('WI-1', 'V1 item', 'open', 'adhoc', 'loc', "
+            f"'{_NOW}', '{_NOW}')"
+        )
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+        conn.close()
+
+        ledger = work_ledger.WorkLedger(self.repo_root)
+        ledger.ensure_schema()
+
+        conn = sqlite3.connect(self._db_path())
+        try:
+            self.assertEqual(
+                conn.execute("PRAGMA user_version").fetchone()[0],
+                work_ledger._SCHEMA_VERSION,
+            )
+            self.assertEqual(
+                conn.execute("PRAGMA application_id").fetchone()[0],
+                work_ledger._APPLICATION_ID,
+            )
+        finally:
+            conn.close()
+
+    def test_foreign_database_with_unrelated_tables_refuses(self):
+        os.makedirs(os.path.dirname(self._db_path()), exist_ok=True)
+        conn = sqlite3.connect(self._db_path())
+        conn.execute("CREATE TABLE unrelated_stuff (id INTEGER PRIMARY KEY, val TEXT)")
+        conn.execute("INSERT INTO unrelated_stuff (val) VALUES ('precious')")
+        conn.commit()
+        conn.close()
+
+        with self.assertRaises(work_ledger.ForeignDatabaseError):
+            work_ledger.WorkLedger(self.repo_root).ensure_schema()
+
+        # The foreign file must be completely untouched.
+        conn = sqlite3.connect(self._db_path())
+        try:
+            self.assertEqual(
+                conn.execute("SELECT val FROM unrelated_stuff").fetchall(),
+                [("precious",)],
+            )
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            self.assertEqual(tables, {"unrelated_stuff"})
+        finally:
+            conn.close()
+
+    def test_foreign_nonzero_application_id_refuses_even_with_matching_tables(self):
+        os.makedirs(os.path.dirname(self._db_path()), exist_ok=True)
+        conn = sqlite3.connect(self._db_path())
+        for stmt in work_ledger._SCHEMA_STATEMENTS:
+            conn.execute(stmt)
+        conn.execute("PRAGMA user_version = 3")
+        conn.execute("PRAGMA application_id = 999999")
+        conn.commit()
+        conn.close()
+
+        with self.assertRaises(work_ledger.ForeignDatabaseError):
+            work_ledger.WorkLedger(self.repo_root).ensure_schema()
+
+    def test_matching_table_names_and_version_but_wrong_column_shape_refuses(self):
+        # Adversarial case: a foreign database that happens to reuse
+        # Bindle's exact table names and a recognized user_version, but
+        # whose columns don't actually match — table-name matching alone
+        # must not be enough to positively identify it as adoptable.
+        os.makedirs(os.path.dirname(self._db_path()), exist_ok=True)
+        conn = sqlite3.connect(self._db_path())
+        conn.execute(
+            "CREATE TABLE work_items (id TEXT PRIMARY KEY, definitely_not_ours TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE work_item_blocked_by ("
+            "  work_item_id TEXT NOT NULL,"
+            "  blocked_on_id TEXT NOT NULL,"
+            "  PRIMARY KEY (work_item_id, blocked_on_id)"
+            ")"
+        )
+        conn.execute(
+            "CREATE TABLE work_item_claims (work_item_id TEXT PRIMARY KEY, owner TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE work_item_evidence (evidence_id INTEGER PRIMARY KEY, value TEXT)"
+        )
+        conn.execute("INSERT INTO work_items (id, definitely_not_ours) VALUES ('X', 'precious')")
+        conn.execute("PRAGMA user_version = 3")
+        conn.commit()
+        conn.close()
+
+        with self.assertRaises(work_ledger.ForeignDatabaseError):
+            work_ledger.WorkLedger(self.repo_root).ensure_schema()
+
+        # Untouched: the foreign row and foreign column are still there,
+        # and application_id was never stamped.
+        conn = sqlite3.connect(self._db_path())
+        try:
+            self.assertEqual(
+                conn.execute(
+                    "SELECT definitely_not_ours FROM work_items WHERE id = 'X'"
+                ).fetchall(),
+                [("precious",)],
+            )
+            self.assertEqual(conn.execute("PRAGMA application_id").fetchone()[0], 0)
+        finally:
+            conn.close()
+
+    def test_v1_shaped_table_with_wrong_column_refuses(self):
+        # Same adversarial shape check, exercised against the v1 branch
+        # of _expected_table_columns (the derived, not directly-referenced,
+        # shape).
+        os.makedirs(os.path.dirname(self._db_path()), exist_ok=True)
+        conn = sqlite3.connect(self._db_path())
+        conn.execute(
+            "CREATE TABLE work_items (id TEXT PRIMARY KEY, title TEXT, "
+            "status TEXT NOT NULL, superseded_by TEXT, source_kind TEXT, "
+            "source_locator TEXT, source_promoted_by TEXT, created_at TEXT, "
+            "updated_at TEXT NOT NULL, archived_at TEXT, extra_foreign_column TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE work_item_blocked_by ("
+            "  work_item_id TEXT NOT NULL,"
+            "  blocked_on_id TEXT NOT NULL,"
+            "  PRIMARY KEY (work_item_id, blocked_on_id)"
+            ")"
+        )
+        conn.execute(
+            "CREATE TABLE work_item_claims (work_item_id TEXT PRIMARY KEY, owner TEXT NOT NULL, "
+            "claimed_at TEXT NOT NULL, worktree_path TEXT, branch TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE work_item_evidence (evidence_id INTEGER PRIMARY KEY, "
+            "work_item_id TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL, "
+            "recorded_at TEXT NOT NULL, note TEXT)"
+        )
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+        conn.close()
+
+        with self.assertRaises(work_ledger.ForeignDatabaseError):
+            work_ledger.WorkLedger(self.repo_root).ensure_schema()
+
+        conn = sqlite3.connect(self._db_path())
+        try:
+            self.assertEqual(conn.execute("PRAGMA application_id").fetchone()[0], 0)
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 1)
+        finally:
+            conn.close()
+
+    def test_unreadable_file_refuses_with_foreign_database_error(self):
+        os.makedirs(os.path.dirname(self._db_path()), exist_ok=True)
+        with open(self._db_path(), "w") as f:
+            f.write("this is not a sqlite database at all\n" * 50)
+
+        with self.assertRaises(work_ledger.ForeignDatabaseError):
+            work_ledger.WorkLedger(self.repo_root).ensure_schema()
+
+    def test_absent_path_is_treated_as_fresh(self):
+        # The path never existed before connect() itself creates it — the
+        # ordinary, unconditionally-safe fresh-create path.
+        self.assertFalse(os.path.exists(self._db_path()))
+
+        work_ledger.WorkLedger(self.repo_root).ensure_schema()
+
+        conn = sqlite3.connect(self._db_path())
+        try:
+            self.assertEqual(
+                conn.execute("PRAGMA application_id").fetchone()[0],
+                work_ledger._APPLICATION_ID,
+            )
+            self.assertEqual(
+                conn.execute("PRAGMA user_version").fetchone()[0],
+                work_ledger._SCHEMA_VERSION,
+            )
+        finally:
+            conn.close()
+
+    def test_preexisting_zero_byte_file_refuses(self):
+        # A 0-byte file already occupying the canonical path BEFORE
+        # connect() ever runs is a placeholder Bindle never created —
+        # unlike the identical-looking state connect() itself produces
+        # for an absent path, this must refuse rather than be silently
+        # adopted as fresh.
+        os.makedirs(os.path.dirname(self._db_path()), exist_ok=True)
+        open(self._db_path(), "w").close()
+        self.assertTrue(os.path.exists(self._db_path()))
+        self.assertEqual(os.path.getsize(self._db_path()), 0)
+
+        with self.assertRaises(work_ledger.ForeignDatabaseError):
+            work_ledger.WorkLedger(self.repo_root).ensure_schema()
+
+        # Untouched: still a 0-byte file, nothing written.
+        self.assertEqual(os.path.getsize(self._db_path()), 0)
+
+    def test_preexisting_zero_byte_projection_sidecar_path_does_not_affect_ledger(self):
+        # Sanity check that this refusal is scoped to the ledger's own
+        # exact path, not a broader "any pre-existing file nearby" rule.
+        os.makedirs(os.path.dirname(self._db_path()), exist_ok=True)
+        with open(self._db_path() + "-journal", "w") as f:
+            f.write("unrelated leftover\n")
+
+        work_ledger.WorkLedger(self.repo_root).ensure_schema()
+
+        conn = sqlite3.connect(self._db_path())
+        try:
+            self.assertEqual(
+                conn.execute("PRAGMA application_id").fetchone()[0],
+                work_ledger._APPLICATION_ID,
+            )
+        finally:
+            conn.close()
+
+    def test_preexisting_nonzero_empty_sqlite_file_refuses_regardless_of_size(self):
+        # File size is not a trustworthy ownership signal: an unrelated,
+        # genuinely empty SQLite database (application_id=0, user_version=0,
+        # no tables) that some other process already opened — and is
+        # therefore nonzero-size, e.g. via its own journal-mode change —
+        # must refuse exactly like a literal 0-byte placeholder, never be
+        # silently claimed as fresh or resumable Bindle state.
+        db_path = self._db_path()
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.close()
+        self.assertGreater(os.path.getsize(db_path), 0)
+
+        with self.assertRaises(work_ledger.ForeignDatabaseError):
+            work_ledger.WorkLedger(self.repo_root).ensure_schema()
+
+        conn = sqlite3.connect(db_path)
+        try:
+            self.assertEqual(conn.execute("PRAGMA application_id").fetchone()[0], 0)
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            self.assertEqual(tables, set())
+        finally:
+            conn.close()
+
+    def test_fresh_creation_is_stamped_before_bootstrap_can_fail_and_retry_succeeds(self):
+        # The retry-safety mechanism that replaces the (removed) filesize
+        # heuristic: a path absent before this invocation is stamped
+        # `_APPLICATION_ID` immediately, before schema bootstrap runs — so
+        # a crash mid-bootstrap still leaves a file the next attempt
+        # positively recognizes as its own, purely from the marker.
+        db_path = self._db_path()
+        self.assertFalse(os.path.exists(db_path))
+
+        real_statements = work_ledger._SCHEMA_STATEMENTS
+        broken_statements = real_statements[:2] + ("CREATE TABLE this is not valid sql",)
+        work_ledger._SCHEMA_STATEMENTS = broken_statements
+        try:
+            with self.assertRaises(sqlite3.OperationalError):
+                work_ledger.connect(self.repo_root)
+        finally:
+            work_ledger._SCHEMA_STATEMENTS = real_statements
+
+        # Stamped already, even though bootstrap itself failed and rolled
+        # back — inspected via a raw connection, bypassing this module's
+        # own connect()/_ensure_schema() entirely.
+        raw_conn = sqlite3.connect(db_path)
+        try:
+            self.assertEqual(
+                raw_conn.execute("PRAGMA application_id").fetchone()[0],
+                work_ledger._APPLICATION_ID,
+            )
+            self.assertEqual(raw_conn.execute("PRAGMA user_version").fetchone()[0], 0)
+            tables = {
+                row[0]
+                for row in raw_conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            self.assertEqual(tables, set())
+        finally:
+            raw_conn.close()
+
+        # A retry succeeds — recognized via the marker alone, not a
+        # filesize/content heuristic.
+        conn = work_ledger.connect(self.repo_root)
+        try:
+            self.assertEqual(
+                conn.execute("PRAGMA user_version").fetchone()[0],
+                work_ledger._SCHEMA_VERSION,
+            )
+        finally:
+            conn.close()
+
+
+class TestLedgerEnsureGitignored(unittest.TestCase):
+    # docs/DECISIONS.md: `bindle init` locally ignores exactly the
+    # canonical ledger artifact and its SQLite sidecars — never the
+    # tracked `.gitignore`, never a broader `.bindle-work/` rule.
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = os.path.join(self.tmp.name, "repo")
+        os.makedirs(self.repo)
+        self._run(["git", "init", "--initial-branch=main"])
+        self._run(["git", "config", "user.email", "test@example.com"])
+        self._run(["git", "config", "user.name", "Test"])
+        with open(os.path.join(self.repo, "README.md"), "w") as f:
+            f.write("test\n")
+        self._run(["git", "add", "README.md"])
+        self._run(["git", "commit", "-m", "chore: initial commit"])
+        self.git_common_dir = os.path.join(self.repo, ".git")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run(self, args):
+        subprocess.run(args, cwd=self.repo, check=True, capture_output=True, text=True)
+
+    def _exclude_lines(self):
+        path = os.path.join(self.git_common_dir, "info", "exclude")
+        if not os.path.isfile(path):
+            return []
+        with open(path) as f:
+            return f.read().splitlines()
+
+    def test_adds_exactly_the_ledger_and_its_three_sidecars(self):
+        work_ledger.ensure_gitignored(self.git_common_dir)
+        lines = self._exclude_lines()
+        self.assertIn("/.bindle-work/ledger.sqlite3", lines)
+        self.assertIn("/.bindle-work/ledger.sqlite3-journal", lines)
+        self.assertIn("/.bindle-work/ledger.sqlite3-wal", lines)
+        self.assertIn("/.bindle-work/ledger.sqlite3-shm", lines)
+        self.assertNotIn("/.bindle-work/symphony-projection.sqlite3", lines)
+
+    def test_idempotent_no_duplicate_lines(self):
+        work_ledger.ensure_gitignored(self.git_common_dir)
+        work_ledger.ensure_gitignored(self.git_common_dir)
+        lines = self._exclude_lines()
+        self.assertEqual(lines.count("/.bindle-work/ledger.sqlite3"), 1)
+
+    def test_never_writes_the_tracked_gitignore(self):
+        gitignore = os.path.join(self.repo, ".gitignore")
+        with open(gitignore, "w") as f:
+            f.write("*.log\n")
+        self._run(["git", "add", ".gitignore"])
+        self._run(["git", "commit", "-m", "add gitignore"])
+
+        work_ledger.ensure_gitignored(self.git_common_dir)
+
+        with open(gitignore) as f:
+            self.assertEqual(f.read(), "*.log\n")
+
+
 if __name__ == "__main__":
     unittest.main()
