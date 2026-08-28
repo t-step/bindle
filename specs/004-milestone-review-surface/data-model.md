@@ -1,6 +1,6 @@
 # Data Model: Milestone Review Surface
 
-This feature adds no new column, no new table, and no schema version bump — `work_items`, `work_item_blocked_by`, `work_item_claims`, `work_item_evidence` are all unchanged from schema version 3 (`specs/003-symphony-task-integration/data-model.md`). It adds two new read-only `WorkLedger` methods and one new module (`src/bindle/milestone_review.py`) composing them, plus five thin write wrappers, into human-facing result shapes.
+This feature adds no new column, no new table, and no schema version bump — `work_items`, `work_item_blocked_by`, `work_item_claims`, `work_item_evidence` are all unchanged from schema version 3 (`specs/003-symphony-task-integration/data-model.md`). It adds three new read-only `WorkLedger` methods and one new module (`src/bindle/milestone_review.py`) composing them, plus five thin write wrappers, into human-facing result shapes.
 
 ## New `WorkLedger` methods (`src/bindle/work_ledger.py`)
 
@@ -27,6 +27,18 @@ WHERE work_item_id = ?
 
 Returns the single claim row for `work_item_id`, or `None` if unclaimed (`work_item_claims.PRIMARY KEY (work_item_id)` guarantees at most one row). Generalizes `is_claimed()`'s existing `EXISTS` check into a full-row read; does not replace or change that method.
 
+### `list_blocking(work_item_id: str) -> list[str]`
+
+```sql
+SELECT e.blocked_on_id FROM work_item_blocked_by e
+LEFT JOIN work_items dep ON dep.id = e.blocked_on_id
+WHERE e.work_item_id = ?
+  AND <_STILL_BLOCKING_CONDITION>
+ORDER BY e.blocked_on_id
+```
+
+Returns the ids currently still blocking `work_item_id`, over the identical `_STILL_BLOCKING_CONDITION` predicate `is_blocked()` already uses — so this can never disagree with `is_blocked()` about *whether* an item is blocked, only add *which* declared `blocked_by` edges are the reason. Generalizes `is_blocked()`'s existing `EXISTS` check into a full-row read, the same pattern `list_evidence()`/`get_claim()` already establish for their own existence checks. A dangling reference (the referenced id resolves to no row) is included as declared, unresolved, matching `is_blocked()`'s own conservative posture. Added specifically so `review_milestone()` can satisfy spec.md Acceptance Scenario US1.4 ("identifies the blocking dependency") without a new SQL predicate or any graph/dependency-resolution machinery beyond this one additional read.
+
 ## New dataclasses (`src/bindle/work_ledger.py`)
 
 Both `@dataclasses.dataclass(frozen=True)`, following the existing `WorkItem`/`ReconciliationFinding`/`ProjectedWorkItem`/`ExternalProjectionRow` precedent.
@@ -49,7 +61,7 @@ class ClaimInfo:
 
 ## Milestone Review View (`src/bindle/milestone_review.py`)
 
-Not a stored entity — computed fresh on every call from existing/new `WorkLedger` reads only (`get_work_item`, `list_work_items`, `is_review_ready`, `is_blocked`, `list_evidence`, `get_claim`). No caching, no persistence, mirroring `is_review_ready()`'s own "derived, never stored" precedent.
+Not a stored entity — computed fresh on every call from existing/new `WorkLedger` reads only (`get_work_item`, `list_work_items`, `is_review_ready`, `is_blocked`, `list_blocking`, `list_evidence`, `get_claim`). No caching, no persistence, mirroring `is_review_ready()`'s own "derived, never stored" precedent.
 
 ```python
 @dataclasses.dataclass(frozen=True)
@@ -72,6 +84,13 @@ class MilestoneReviewView:
                                       # exist but at least one fails the resolved-or-
                                       # evidenced bar; empty when review_ready is True
     is_blocked: bool
+    blocking_ids: list[str]          # ids currently still blocking this milestone
+                                      # (spec.md Acceptance Scenario US1.4:
+                                      # "identifies the blocking dependency");
+                                      # empty whenever is_blocked is False.
+                                      # is_blocked is derived from this list
+                                      # (bool(blocking_ids)), never a second,
+                                      # separately-read boolean.
     claim: ClaimInfo | None
     children: list[ChildTaskView]
 

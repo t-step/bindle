@@ -92,7 +92,7 @@ Having reviewed the evidence (User Story 2), the reviewer records their decision
 
 ### User Story 5 - Neither surface can perform the other's mutation (Priority: P3)
 
-An execution agent (or Symphony itself) operating through the existing task-facing write surface can never accept, decline, or advance a milestone; a human operating through this feature's review surface can never mark a task done or otherwise mutate task-only state.
+An execution agent (or Symphony itself) that only ever acts through the existing task-facing write surface has no command available to it that would accept, decline, or advance a milestone; a human operating only through this feature's review surface has no command available that would mark a task done or otherwise mutate task-only state. This is a structural property of what each surface exposes, not an identity or authorization boundary — see the Assumptions section below for the precise scope of this guarantee.
 
 **Why this priority**: Lowest priority because it is a property of the two surfaces' construction, not new behavior a user directly invokes — but it is the concrete answer to "acceptance cannot accidentally be performed by Symphony or an execution agent."
 
