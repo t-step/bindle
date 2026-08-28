@@ -169,6 +169,14 @@ act on, without adopting Symphony itself or any of its tracker formats:
   directly on the ledger's own existing atomic claim/release/mark-done
   primitives — no new arbitration mechanism, no raw SQL exposed as the
   contract (`contracts/task-write-surface.md`).
+* `bindle init` unconditionally provisions both the internal ledger and
+  this published projection (`docs/DECISIONS.md` D043) — `WorkLedger
+  .ensure_schema()` and `publish()`, the same functions every other
+  ledger/Symphony command already uses, run eagerly so both files exist
+  and are schema-current the moment a repository opts into Bindle,
+  without requiring a manual `bindle work publish` first. A fresh
+  repository's projection has zero rows, matching its empty ledger —
+  this creates no task, claim, or dispatch decision.
 
 This remains a one-directional, disposable projection and a fixed set of
 narrow write operations — not a Symphony-specific tracker adapter, and
@@ -198,6 +206,14 @@ projection and write surface above, Bindle still does not:
   `specs/002-milestone-task-work-items/`), never a durable store Symphony
   or any other consumer may treat as authoritative;
 * standardize a `bindle` command to launch or manage Symphony.
+
+`bindle init`'s unconditional ledger/projection provisioning
+(`docs/DECISIONS.md` D043) does not change any bullet above: it eagerly
+runs code Bindle already owned and already ran on every other
+ledger-touching command, against Bindle's own SQLite files. It is not the
+"CLI lifecycle surface (`init`/status/launch) for Symphony" `PLAN.md` and
+D041 leave as a deliberate, undecided question — no `bindle symphony ...`
+command of any kind exists or is added.
 
 `plans/archive/2026-08-24-symphony-coordination-exploration.md` records the
 architecture direction that implementation followed (Symphony remains the

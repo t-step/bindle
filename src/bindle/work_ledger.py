@@ -737,6 +737,30 @@ class WorkLedger:
     def _connect(self) -> sqlite3.Connection:
         return connect(self.repo_root)
 
+    def ensure_schema(self) -> None:
+        """Bootstrap or verify this repository's ledger schema, eagerly.
+
+        Every other method already gets this for free as a side effect of
+        `_connect()`/`connect()`'s own bootstrap-or-verify behavior — this
+        method exists only so a caller that wants schema readiness as an
+        explicit, standalone step (`bindle init`: see `cli.py`) can ask for
+        it without reaching into the private `_connect()` or the
+        module-level `connect()` function directly, and without a second,
+        drifting copy of what "valid schema" means. On a fresh repository,
+        creates `.bindle-work/ledger.sqlite3` with all tables at the
+        current `_SCHEMA_VERSION` and zero rows in every table. On an
+        existing repository, verifies the schema, migrating it forward in
+        place first if it predates `_SCHEMA_VERSION` (`_migrate_v1_to_v2`/
+        `_migrate_v2_to_v3` — see their own docstrings for the exact,
+        narrow compatibility/backfill transformations each applies, e.g.
+        backfilling `type = 'task'` or `created_at` from `updated_at` on a
+        pre-existing row) — this never creates, claims, or transitions a
+        work item, and never creates or changes semantic work state:
+        existing rows are preserved as-is, except for a migration's own
+        defined, narrow compatibility/backfill transformations.
+        """
+        self._connect().close()
+
     # -- User Story 1: create/read -----------------------------------
 
     def create_work_item(
