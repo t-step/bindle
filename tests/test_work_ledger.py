@@ -2757,6 +2757,42 @@ class TestAvailableWorkItemsExcludesMilestones(LedgerTestCase):
         self.assertNotIn("M-1", available)
 
 
+class TestIsDispatchable(unittest.TestCase):
+    """specs/005-work-state-visibility data-model.md: `is_dispatchable()`
+    is the single, pure, I/O-free expression of the exact three-conjunct
+    rule `list_available_work_items()`'s own query encodes — evaluated
+    identically against live ledger state (via that method's refactored
+    implementation) and against a read-only forecast counterfactual
+    (`work_status.build_forecast()`, a later slice). No ledger fixture is
+    needed here: this is a pure function truth table."""
+
+    def test_truth_table(self):
+        for status in ("open", "done", "superseded"):
+            for claimed in (False, True):
+                for blocked in (False, True):
+                    expected = status == "open" and not claimed and not blocked
+                    self.assertEqual(
+                        work_ledger.is_dispatchable(status, claimed, blocked),
+                        expected,
+                        f"status={status!r} claimed={claimed} blocked={blocked}",
+                    )
+
+    def test_open_unclaimed_unblocked_is_dispatchable(self):
+        self.assertTrue(work_ledger.is_dispatchable("open", False, False))
+
+    def test_claimed_open_unblocked_is_not_dispatchable(self):
+        self.assertFalse(work_ledger.is_dispatchable("open", True, False))
+
+    def test_blocked_open_unclaimed_is_not_dispatchable(self):
+        self.assertFalse(work_ledger.is_dispatchable("open", False, True))
+
+    def test_done_unclaimed_unblocked_is_not_dispatchable(self):
+        self.assertFalse(work_ledger.is_dispatchable("done", False, False))
+
+    def test_superseded_unclaimed_unblocked_is_not_dispatchable(self):
+        self.assertFalse(work_ledger.is_dispatchable("superseded", False, False))
+
+
 class TestMilestoneArchival(LedgerTestCase):
     """T017 (SC-006/SC-007): archiving a milestone with an unresolved
     child is refused and leaves the row untouched; archiving succeeds

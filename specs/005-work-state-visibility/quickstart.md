@@ -1,6 +1,6 @@
 # Quickstart: Validating Work-State Visibility
 
-Like `specs/004-milestone-review-surface/quickstart.md`, this feature composes an already-implemented ledger — these scenarios are runnable once this feature's tasks land, and double as the shape of `tests/test_work_status.py`/`tests/test_view.py`/`tests/test_cli.py`'s new test cases. Each scenario traces to a User Story in `spec.md`.
+Like `specs/004-milestone-review-surface/quickstart.md`, this feature composes an already-implemented ledger — these scenarios are runnable and double as the shape of `tests/test_work_status.py`/`tests/test_cli.py`'s test cases. Each scenario traces to an adopted User Story (1–4) in `spec.md`. A fourth walkthrough (D) covering a proposed `bindle view` local visual surface was originally drafted here alongside these three; that surface was evaluated after Walkthroughs A–C's commands existed and were usable, and was declined from this feature's adopted scope (`docs/DECISIONS.md` D045) — it is retained below, clearly labeled, as a historical record of what was considered, not as an executable walkthrough against real CLI behavior.
 
 ## Prerequisites
 
@@ -8,16 +8,16 @@ Like `specs/004-milestone-review-surface/quickstart.md`, this feature composes a
 - A small mixed-state ledger, built entirely from the existing, unmodified library surface (this feature creates nothing):
 
 ```python
-m = ledger.create_work_item(type="milestone", title="Ship visibility")
-a = ledger.create_work_item(type="task", title="A", parent_id=m)
-b = ledger.create_work_item(type="task", title="B", parent_id=m)
-c = ledger.create_work_item(type="task", title="C (needs A and B)", parent_id=m)
-d = ledger.create_work_item(type="task", title="D (needs A only)", parent_id=m)
-ledger.add_blocked_by(c, a)
-ledger.add_blocked_by(c, b)
-ledger.add_blocked_by(d, a)
+m, a, b, c, d = "M", "A", "B", "C", "D"
+ledger.create_work_item(id=m, title="Ship visibility", source_kind="adhoc", source_locator="x", type="milestone")
+ledger.create_work_item(id=a, title="A", source_kind="adhoc", source_locator="x", parent_id=m)
+ledger.create_work_item(id=b, title="B", source_kind="adhoc", source_locator="x", parent_id=m)
+ledger.create_work_item(id=c, title="C (needs A and B)", source_kind="adhoc", source_locator="x", parent_id=m, blocked_by=[a, b])
+ledger.create_work_item(id=d, title="D (needs A only)", source_kind="adhoc", source_locator="x", parent_id=m, blocked_by=[a])
 ledger.claim(d, owner="alice")  # D: claimed AND blocked on A
 ```
+
+`create_work_item()` requires `id`/`title`/`source_kind`/`source_locator` and returns `None` — it is not `id`-generating, so callers name each id explicitly (matching `tests/test_work_status.py`'s own fixture style). `blocked_by` is passed at creation instead of two separate `add_blocked_by()` calls (equivalent, and the one-transaction path `create_work_item()` itself documents).
 
 This is the exact dependency graph spec.md's own Independent Test for User Story 4 names (C blocked on {A, B}; D blocked on {A}), plus the claimed-but-blocked case Acceptance Scenario US4.5 requires.
 
@@ -138,7 +138,9 @@ all lines independently valid JSON
 
 **Expected**: `--json --watch` emits [JSON Lines](https://jsonlines.org/) (NDJSON) — one complete, compact JSON document per refresh, newline-delimited — never a growing array, never a partial object, never a document split across lines (`contracts/work-status-json-v1.md`, "Watch-mode framing"). Interrupting mid-stream leaves only complete lines in the file; no trailing partial JSON fragment. ✅ traces to Acceptance Scenario US3.4, FR-010.
 
-## Walkthrough D — `bindle view`: one long-lived server, many requests, manual reload, `--watch` opt-in, no Symphony section (User Story 5)
+## Walkthrough D (HISTORICAL — NOT IMPLEMENTED, DECLINED) — `bindle view`: one long-lived server, many requests, manual reload, `--watch` opt-in, no Symphony section (User Story 5, declined)
+
+**This walkthrough does not correspond to any implemented command.** `bindle view` was drafted and planned (User Story 5) alongside Walkthroughs A–C but was evaluated after those commands existed and declined from this feature's adopted scope — see `docs/DECISIONS.md` D045. Running the commands below against this repository's actual `bindle` CLI will fail with an unrecognized-subcommand error. It is preserved verbatim below only as a historical record of what was designed and considered, not as something to execute.
 
 ```bash
 $ bindle view &

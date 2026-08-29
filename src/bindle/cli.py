@@ -97,6 +97,7 @@ from .skills.config import SkillsConfigError
 from .speckit_loader import TasksFileError, load_feature
 from . import symphony_projection
 from . import work_ledger
+from . import work_status
 from .work_ledger import WorkLedger
 
 # Lifecycle commands with an established name and short/long --help text.
@@ -955,6 +956,58 @@ def _cmd_work_done(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_work_status(args: argparse.Namespace) -> int:
+    try:
+        info = get_repo_info()
+    except NotAGitRepositoryError as exc:
+        print(f"bindle work status: {exc}", file=sys.stderr)
+        return 1
+
+    ledger = WorkLedger(info.repo_root)
+
+    if args.watch:
+        try:
+            interval = work_status.resolve_watch_interval(args.interval)
+        except ValueError as exc:
+            print(f"bindle work status: {exc}", file=sys.stderr)
+            return 1
+        try:
+            for snapshot in work_status.watch_snapshots(ledger, interval):
+                if args.json:
+                    print(
+                        json.dumps(
+                            work_status.snapshot_to_json(snapshot), separators=(",", ":")
+                        )
+                    )
+                else:
+                    print(work_status.render_status_text(snapshot))
+                sys.stdout.flush()
+        except KeyboardInterrupt:
+            pass
+        return 0
+
+    snapshot = work_status.build_snapshot(ledger)
+    if args.json:
+        print(json.dumps(work_status.snapshot_to_json(snapshot), indent=2))
+    else:
+        print(work_status.render_status_text(snapshot))
+    return 0
+
+
+def _cmd_work_forecast(args: argparse.Namespace) -> int:
+    try:
+        info = get_repo_info()
+    except NotAGitRepositoryError as exc:
+        print(f"bindle work forecast: {exc}", file=sys.stderr)
+        return 1
+
+    ledger = WorkLedger(info.repo_root)
+    snapshot = work_status.build_snapshot(ledger)
+    frontier = work_status.build_forecast(snapshot)
+    print(work_status.render_forecast_text(snapshot, frontier))
+    return 0
+
+
 def _cmd_skills_remove(args: argparse.Namespace) -> int:
     try:
         info = get_repo_info()
@@ -984,27 +1037,6 @@ def _cmd_skills_remove(args: argparse.Namespace) -> int:
     return 0 if outcome.ok else 1
 
 
-def _format_not_ready_reason(reasons: list[str], blocking_ids: list[str]) -> str:
-    # milestone_review.MilestoneReviewView.not_ready_reason is a flat
-    # subset of {"blocked", "no_children"} plus one entry per outstanding
-    # child id — render the two fixed tokens as-is and group every
-    # remaining entry (a child id) under one "outstanding: ..." clause.
-    # When blocked, name the specific still-blocking dependency ids
-    # (spec.md Acceptance Scenario US1.4: "identifies the blocking
-    # dependency") rather than just the "blocked" token.
-    parts = []
-    if "blocked" in reasons:
-        parts.append(
-            "blocked by: " + ", ".join(blocking_ids) if blocking_ids else "blocked"
-        )
-    if "no_children" in reasons:
-        parts.append("no_children")
-    outstanding = [r for r in reasons if r not in ("blocked", "no_children")]
-    if outstanding:
-        parts.append("outstanding: " + ", ".join(outstanding))
-    return ", ".join(parts)
-
-
 def _format_evidence_pointer(pointer) -> str:
     # spec.md FR-003/User Story 2: every evidence pointer's kind, value,
     # recorded time, and note must be visible in the review view — not
@@ -1030,7 +1062,7 @@ def _cmd_milestone_review(args: argparse.Namespace) -> int:
     readiness = (
         "ready"
         if view.review_ready
-        else f"not ready ({_format_not_ready_reason(view.not_ready_reason, view.blocking_ids)})"
+        else f"not ready ({work_status.format_not_ready_reason(view.not_ready_reason, view.blocking_ids)})"
     )
     claim_suffix = (
         f", claimed by {view.claim.owner} at {view.claim.claimed_at}"
@@ -1281,6 +1313,57 @@ def build_parser() -> argparse.ArgumentParser:
     done_parser = work_subparsers.add_parser("done", help="Mark a claimed task done.")
     done_parser.add_argument("id", help="Work item id")
 
+    status_parser = work_subparsers.add_parser(
+        "status",
+        help="Show a composed, read-only snapshot of every task's and milestone's current state.",
+        description=(
+            "Work-State Visibility (specs/005-work-state-visibility): a single "
+            "snapshot of claim/dispatchable/blocked facts for every task and "
+            "status/review-readiness for every milestone, composed entirely from "
+            "existing, unmodified WorkLedger/milestone_review reads — never a "
+            "second, independently-derived computation. Read-only; a single "
+            "snapshot read and exit."
+        ),
+    )
+    status_parser.add_argument(
+        "--json", action="store_true", help="Emit the stable JSON read-model contract."
+    )
+    status_parser.add_argument(
+        "--watch",
+        action="store_true",
+        help=(
+            "Explicitly opt into continuous refresh: re-run the identical "
+            "snapshot on a bounded interval until interrupted. Absent this "
+            "flag, the command always performs exactly one read and exits."
+        ),
+    )
+    status_parser.add_argument(
+        "--interval",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help=(
+            "Seconds between --watch refreshes "
+            f"(default {work_status.DEFAULT_WATCH_INTERVAL_SECONDS}; values below "
+            f"{work_status.MIN_WATCH_INTERVAL_SECONDS} are clamped up to it, never rejected)."
+        ),
+    )
+
+    work_subparsers.add_parser(
+        "forecast",
+        help="Show the dependency frontier: what's dispatchable now, blocked on what, "
+        "and what would become eligible next if a given blocker resolved.",
+        description=(
+            "Work-State Visibility (specs/005-work-state-visibility): a read-only "
+            "dependency-frontier explainer over the existing blocking/dispatchable/"
+            "review-readiness facts — never a completion-time estimate or an execution "
+            "plan. Reports dispatchable-now tasks, convergence points (items blocked on "
+            "more than one dependency), and, per currently-blocking id, which items "
+            "would become unblocked-next versus (task-only) dispatchable-next if it "
+            "resolved. Read-only; a single computation and exit."
+        ),
+    )
+
     milestone_parser = subparsers.add_parser(
         "milestone",
         help="Review milestone readiness/evidence and record accept/decline decisions.",
@@ -1429,6 +1512,10 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_work_release(args)
         if args.work_command == "done":
             return _cmd_work_done(args)
+        if args.work_command == "status":
+            return _cmd_work_status(args)
+        if args.work_command == "forecast":
+            return _cmd_work_forecast(args)
         parser.parse_args(["work", "--help"])
         return 1
 
