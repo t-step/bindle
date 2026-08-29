@@ -1,5 +1,7 @@
 # Phase 0 Research: Work-State Visibility
 
+**Scope note (post-implementation reconciliation)**: the decisions below cover both the adopted scope (User Stories 1–4: `bindle work status`, `bindle work forecast`, `is_dispatchable()`) and a fifth surface, `bindle view`, that was planned alongside them but evaluated after US1–US4 existed and declined — see `docs/DECISIONS.md` D045. Every decision below whose title names `bindle view` or Symphony runtime enrichment is retained as historical research only, clearly labeled **(NOT ADOPTED — declined, see D045)**; it documents real design work performed during planning, not implemented or pending behavior. Every other decision below (dispatchable sourcing, milestone readiness sourcing, forecast relation, `is_dispatchable()` sharing, dangling blocking ids, `not_ready_reason` rendering, no-timestamp JSON contract, `--watch` interval/framing, watch shutdown behavior) describes the adopted, implemented feature.
+
 ## Decision: one `WorkStatusSnapshot`, built once, consumed by every renderer
 
 **Chosen**: A single function, `work_status.build_snapshot(ledger: WorkLedger) -> WorkStatusSnapshot`, is the only place any of this feature's code reads task/milestone claim, blocking, status, or review-readiness facts from the ledger. `bindle work status`'s plain-text and `--json` forms both format the identical `WorkStatusSnapshot` object; `bindle work forecast`'s `DependencyFrontier` is derived *from* that same object (next decision); `bindle view` builds one `WorkStatusSnapshot` (+ one derived `DependencyFrontier`) per HTTP request and renders both.
@@ -87,7 +89,7 @@ def is_dispatchable(status: str, claimed: bool, blocked: bool) -> bool:
 
 **Rationale**: SC-004 requires `bindle work status --json` invoked twice against an unchanged ledger to be byte-identical. A live "generated at" timestamp embedded in the serialized snapshot would make every `--json` invocation differ from the last one by construction, directly violating SC-004 the moment it was added — this is a correctness requirement the JSON contract must satisfy, not a style preference. Keeping timestamp context entirely in the ephemeral rendering layer (never in the shared, JSON-serialized dataclass) is what makes both true at once: `--json` is exactly reproducible against unchanged state, and a human glancing at `--watch` output or `bindle view` can still see roughly when a given render happened if a future task adds that (this plan does not add it — spec.md never requires it, and it is not needed to satisfy any FR/SC/Acceptance Scenario).
 
-## Decision: `bindle view` rendering medium — loopback `http.server` + server-rendered HTML, not a TUI
+## Decision: `bindle view` rendering medium — loopback `http.server` + server-rendered HTML, not a TUI (NOT ADOPTED — declined, see D045)
 
 **Chosen**: `bindle view` starts a stdlib `http.server.HTTPServer` (not `ThreadingHTTPServer` — a single local human's browser issuing occasional sequential requests needs no concurrency) bound to `127.0.0.1` on an OS-assigned ephemeral port by default (`--port` optionally pins a fixed port). Its one `do_GET` handler, for `GET /`, calls `work_status.build_snapshot()` + `build_forecast()` fresh and returns a server-rendered HTML string (plain Python string formatting — no template engine dependency); any other path returns a plain 404. When `--watch` was given at startup, the rendered page includes `<meta http-equiv="refresh" content="{interval}">`; otherwise it is omitted entirely. `bindle view` prints the resolved URL to stdout and leaves opening a browser to the maintainer (no `webbrowser.open()` call) — a deliberately smaller surface than auto-launching a browser, which spec.md does not require and which would need its own cross-platform/`--no-open`-flag handling to keep testable and predictable in non-interactive contexts.
 
@@ -97,7 +99,7 @@ def is_dispatchable(status: str, claimed: bool, blocked: bool) -> bool:
 
 **Alternatives considered**: A generic web application (client-side JS, a build step, a JSON API the page fetches from) — rejected outright per the planning brief's own explicit instruction and AGENTS.md's minimalism posture; nothing here needs client-side interactivity beyond "reload the page." Re-purposing `bindle work status --watch`'s own terminal output as `bindle view` (i.e., no separate command at all) — rejected: spec.md's User Story 5 and FR-016–019/022/023 define a genuinely separate surface (manual refresh action, explicit "small local visual surface" framing) the plain-text command was never asked to provide.
 
-## Decision: `bindle view` keeps running as a server even without `--watch`
+## Decision: `bindle view` keeps running as a server even without `--watch` (NOT ADOPTED — declined, see D045)
 
 **Chosen**: `bindle view`'s process lifetime is tied to the HTTP server's own lifetime regardless of `--watch` — the server keeps `serve_forever()`-ing in the foreground until interrupted, whether or not automatic refresh is enabled. `--watch` controls only whether the *rendered page itself* asks the browser to reload periodically; it never controls whether the underlying process exits after the first render.
 
@@ -105,13 +107,17 @@ def is_dispatchable(status: str, claimed: bool, blocked: bool) -> bool:
 
 ## Decision: watch/serve shutdown behavior
 
-**Chosen**: `bindle work status --watch`'s loop and `bindle view`'s `serve_forever()` both run in the main thread of the invoking process; both catch `KeyboardInterrupt` at the top level, and both exit 0 without printing a traceback. `bindle view` additionally calls `server.server_close()` in a `finally` block so the bound socket is released immediately rather than lingering until process teardown. Neither writes to the ledger at any point, so there is no lock, temp file, or partial write to clean up on interruption (spec.md FR-010, SC-006) — this is true by construction (nothing in either code path calls a `WorkLedger` mutation method), not something this feature must separately guarantee.
+**Adopted for `bindle work status --watch`; the `bindle view`/`serve_forever()` portion below is NOT ADOPTED — declined, see D045.**
+
+**Chosen**: `bindle work status --watch`'s loop (and, as originally planned but not adopted, `bindle view`'s `serve_forever()`) both run in the main thread of the invoking process; both catch `KeyboardInterrupt` at the top level, and both exit 0 without printing a traceback. (`bindle view` would additionally have called `server.server_close()` in a `finally` block so the bound socket is released immediately rather than lingering until process teardown — moot, since no such server exists.) Neither writes to the ledger at any point, so there is no lock, temp file, or partial write to clean up on interruption (spec.md FR-010, SC-006) — this is true by construction (nothing in either code path calls a `WorkLedger` mutation method), not something this feature must separately guarantee.
 
 **Rationale**: Directly required by spec.md FR-010 ("exit cleanly on interruption without leaving any lock, temp file, or partial output behind") and Non-Goals ("`--watch`... runs only for the lifetime of the invoking process and stops on interruption"). No daemonization, `fork()`, thread pool, or signal-handler installation beyond catching the ordinary `KeyboardInterrupt` Python already raises on `SIGINT` is needed — simplest possible shutdown path that still satisfies the requirement.
 
 ## Decision: `--watch` interval — shared default/minimum constants; single-shot `--json` vs. JSON Lines (NDJSON) in watch mode
 
-**Chosen**: `work_status.py` defines `DEFAULT_WATCH_INTERVAL_SECONDS = 2.0` and `MIN_WATCH_INTERVAL_SECONDS = 1.0` (a caller-supplied `--interval` below the minimum is clamped up to it, never rejected outright — matching FR-011's "a sensible default and a minimum bound MUST apply when no override (or too small an override) is given"). Both `bindle work status --watch` and `bindle view --watch` import these same two constants — one shared bound, never two independently-chosen numbers that could silently diverge.
+**Adopted for `bindle work status --watch`.** (This decision's own framing anticipated a second consumer, `bindle view --watch`, sharing the same constants — that surface was evaluated and declined, see D045; `DEFAULT_WATCH_INTERVAL_SECONDS`/`MIN_WATCH_INTERVAL_SECONDS` exist and are used solely by `bindle work status --watch` in the implemented feature.)
+
+**Chosen**: `work_status.py` defines `DEFAULT_WATCH_INTERVAL_SECONDS = 2.0` and `MIN_WATCH_INTERVAL_SECONDS = 1.0` (a caller-supplied `--interval` below the minimum is clamped up to it, never rejected outright — matching FR-011's "a sensible default and a minimum bound MUST apply when no override (or too small an override) is given").
 
 `bindle work status --json` (no `--watch`) emits **one complete JSON document**, pretty-printed (`json.dumps(..., indent=2)`, matching `bindle repo info --json`'s existing convention). `bindle work status --json --watch` instead emits **[JSON Lines](https://jsonlines.org/) (NDJSON)** — the established term for "one complete, compact JSON value per line, newline-delimited, no enclosing array or other wrapper" — not an ad hoc or Bindle-invented streaming format. Each refresh prints exactly one line: `json.dumps(<snapshot>, separators=(",", ":"))` (compact, no `indent`, since embedded newlines inside a pretty-printed document would break the one-line-per-record framing JSON Lines depends on) followed by a single `\n`.
 
@@ -129,7 +135,7 @@ The **contract**, stated explicitly so it can be tested directly rather than inf
 
 **Alternatives considered**: A configurable delimiter line between watch refreshes (e.g., `---`) instead of JSON Lines — rejected as an invented, undocumented micro-protocol when JSON Lines is already a well-understood, named convention that requires no delimiter at all. A JSON array wrapper that grows across the whole `--watch` session (`[{...},{...},...]`, closed only on exit) — rejected outright: this is the literal "partial/streamed fragment a reader must reassemble" FR-010/US3.4 forbids, since the array is syntactically invalid JSON until the process exits and the closing `]` is written. Making single-shot `--json` also compact (for formatting consistency between watch/non-watch) — rejected: `bindle repo info --json` already establishes pretty-printed as this CLI's single-shot JSON convention, and there is no reader-facing reason a one-time script invocation needs single-line output the way a streaming reader does.
 
-## Decision: `bindle view` process/request semantics — one long-lived server, many requests, no automatic refresh without `--watch`
+## Decision: `bindle view` process/request semantics — one long-lived server, many requests, no automatic refresh without `--watch` (NOT ADOPTED — declined, see D045)
 
 This consolidates and makes explicitly testable what "snapshot by default" means for a process that is, mechanically, an HTTP server — the specific ambiguity this review's item 4 flagged. **"Snapshot by default" governs automatic repeated observation (polling), never the number of HTTP requests the process may serve.** Nothing in this feature's design, before or after this correction, ever limited `bindle view` to handling exactly one HTTP request — that reading is explicitly rejected below.
 
@@ -149,7 +155,7 @@ This consolidates and makes explicitly testable what "snapshot by default" means
 
 **No non-loopback binding, by default or through any flag this feature adds**: restates the "no `--host` override" decision immediately below — `127.0.0.1` unconditionally, no way to widen it from this feature's own surface.
 
-## Decision: no `--host` override on `bindle view`
+## Decision: no `--host` override on `bindle view` (NOT ADOPTED — declined, see D045)
 
 **Chosen**: `bindle view` binds `127.0.0.1` unconditionally; this plan adds no `--host`/`--bind` flag of any kind.
 
@@ -157,7 +163,7 @@ This consolidates and makes explicitly testable what "snapshot by default" means
 
 **Alternatives considered**: Adding `--host` now, defaulting to `127.0.0.1`, "for flexibility" — rejected per `AGENTS.md`'s "invent last" posture and this project's own repeated precedent of not adding configuration surface a spec never asked for.
 
-## Decision: Symphony endpoint discovery has no safe zero-config default — defer runtime enrichment entirely in this cut, with no placeholder
+## Decision: Symphony endpoint discovery has no safe zero-config default — defer runtime enrichment entirely in this cut, with no placeholder (NOT ADOPTED — the whole `bindle view` surface this enrichment would have composed into was subsequently declined; see D045. Retained as grounding evidence for that later decision.)
 
 **Corrected by this review.** The prior version of this decision, while correctly concluding Symphony enrichment should be deferred, still had `bindle view` render a permanent, fixed "Symphony: unavailable" section in every response — a placeholder for a reachability check that no code in this cut ever actually performs. That is misleading in exactly the way this review's item 2 identifies: it visually implies Bindle attempted to find a running Symphony instance and failed, when in fact no attempt is made at all. It also does not match the desired shape given for the initial implementation (`Bindle ledger → semantic snapshot → {status text, JSON, forecast, local view}`, with no Symphony branch at all) versus a clearly separate future shape (`Symphony observability API → optional runtime enrichment → local view`).
 

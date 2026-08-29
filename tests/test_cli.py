@@ -22,6 +22,7 @@ from bindle import git_local_exclude
 from bindle import qmd as qmd_mod
 from bindle import symphony_projection
 from bindle import work_ledger
+from bindle import work_status
 from bindle.projectmem import detect_projectmem
 from bindle.qmd import COLLECTION_NAME, detect_qmd
 from bindle.repo import get_repo_info
@@ -3203,6 +3204,385 @@ class TestWorkCliSubcommands(unittest.TestCase):
                 code = main(["work", "done", "M-1"])
         self.assertEqual(code, 1)
         self.assertIn("not_a_task", err.getvalue())
+
+
+class TestWorkStatusCliSubcommand(unittest.TestCase):
+    # T007/T012 (specs/005-work-state-visibility, Phase 3/4 - US1/US2):
+    # `bindle work status`/`bindle work status --json` is a thin wrapper
+    # over work_status.build_snapshot()/render_status_text()/
+    # snapshot_to_json() — mirrors TestMilestoneCliSubcommands' fixture
+    # shape. Strictly read-only and synchronous: no HTTP server or socket
+    # of any kind is imported by cli.py or work_status.py for this
+    # command (FR-007), so "no network-accessible interface is started"
+    # holds by construction rather than needing a runtime probe here.
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = os.path.join(self.tmp.name, "repo")
+        _init_repo(self.repo)
+        with _chdir(self.repo):
+            self.ledger = WorkLedger(get_repo_info().repo_root)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _create_milestone(self, id):
+        self.ledger.create_work_item(
+            id=id, title=f"Milestone {id}", source_kind="adhoc",
+            source_locator=f"plans/active/example.md#{id}", type="milestone",
+        )
+
+    def _create_task(self, id, parent_id=None, blocked_by=()):
+        self.ledger.create_work_item(
+            id=id, title=f"Task {id}", source_kind="adhoc",
+            source_locator=f"plans/active/example.md#{id}", parent_id=parent_id,
+            blocked_by=blocked_by,
+        )
+
+    def _mixed_fixture(self):
+        # spec.md's own worked shape: a milestone with A/B (dispatchable),
+        # C (blocked on both), D (blocked on A, also claimed).
+        self._create_milestone("M")
+        self._create_task("A", parent_id="M")
+        self._create_task("B", parent_id="M")
+        self._create_task("C", parent_id="M", blocked_by=["A", "B"])
+        self._create_task("D", parent_id="M", blocked_by=["A"])
+        self.ledger.claim("D", owner="alice")
+
+    def test_empty_ledger_is_valid_not_an_error(self):
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["work", "status"])
+        self.assertEqual(code, 0)
+        text = out.getvalue()
+        self.assertIn("tasks:", text)
+        self.assertIn("milestones:", text)
+
+    def test_plain_text_reports_every_fact(self):
+        self._mixed_fixture()
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["work", "status"])
+        self.assertEqual(code, 0)
+        text = out.getvalue()
+        self.assertIn("A", text)
+        self.assertIn("dispatchable", text)
+        self.assertIn("blocked on: A, B", text)
+        self.assertIn("blocked on: A", text)
+        self.assertIn("claimed by alice", text)
+        self.assertIn("not ready", text)
+        self.assertIn("outstanding: A, B, C, D", text)
+
+    def test_json_matches_contract_shape(self):
+        self._mixed_fixture()
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["work", "status", "--json"])
+        self.assertEqual(code, 0)
+        payload = json.loads(out.getvalue())
+        self.assertEqual(set(payload.keys()), {"tasks", "milestones"})
+        by_id = {t["id"]: t for t in payload["tasks"]}
+        self.assertEqual(by_id["A"]["dispatchable"], True)
+        self.assertEqual(by_id["A"]["blocking_ids"], [])
+        self.assertEqual(by_id["C"]["dispatchable"], False)
+        self.assertEqual(by_id["C"]["blocking_ids"], ["A", "B"])
+        self.assertEqual(by_id["D"]["dispatchable"], False)
+        self.assertEqual(by_id["D"]["blocking_ids"], ["A"])
+        self.assertEqual(by_id["D"]["claim"]["owner"], "alice")
+        milestone = payload["milestones"][0]
+        self.assertEqual(milestone["id"], "M")
+        self.assertEqual(milestone["review_ready"], False)
+        self.assertEqual(milestone["not_ready_reason"], ["A", "B", "C", "D"])
+        # every field present, never omitted, per the v1 contract
+        for task in payload["tasks"]:
+            self.assertIn("blocking_ids", task)
+            self.assertIn("claim", task)
+
+    def test_json_is_deterministic_across_two_invocations(self):
+        self._mixed_fixture()
+        outputs = []
+        for _ in range(2):
+            out = io.StringIO()
+            with _chdir(self.repo), contextlib.redirect_stdout(out):
+                code = main(["work", "status", "--json"])
+            self.assertEqual(code, 0)
+            outputs.append(out.getvalue())
+        self.assertEqual(outputs[0], outputs[1])
+
+    def test_text_and_json_report_identical_semantic_facts(self):
+        self._mixed_fixture()
+        text_out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(text_out):
+            main(["work", "status"])
+        json_out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(json_out):
+            main(["work", "status", "--json"])
+        payload = json.loads(json_out.getvalue())
+        text = text_out.getvalue()
+        for task in payload["tasks"]:
+            self.assertIn(task["id"], text)
+        for milestone in payload["milestones"]:
+            self.assertIn(milestone["id"], text)
+            if not milestone["review_ready"]:
+                self.assertIn("not ready", text)
+
+    def test_status_never_mutates_ledger_state(self):
+        self._mixed_fixture()
+        before = self.ledger.list_work_items()
+        before_claim = self.ledger.get_claim("D")
+        for args in (["work", "status"], ["work", "status", "--json"]):
+            out = io.StringIO()
+            with _chdir(self.repo), contextlib.redirect_stdout(out):
+                code = main(args)
+            self.assertEqual(code, 0)
+        after = self.ledger.list_work_items()
+        after_claim = self.ledger.get_claim("D")
+        self.assertEqual(before, after)
+        self.assertEqual(before_claim, after_claim)
+        self.assertEqual(self.ledger.list_available_work_items(), ["A", "B"])
+
+
+class TestWorkStatusWatch(unittest.TestCase):
+    # T016/T017 (specs/005-work-state-visibility, Phase 5 - US3): CLI
+    # wiring for `bindle work status --watch`. `work_status.watch_snapshots`
+    # is itself exhaustively tested against a real ledger (with an
+    # injected `sleep` seam) in tests/test_work_status.py; these tests
+    # only confirm _cmd_work_status wires it correctly — same renderer
+    # as the one-shot path, correct interval clamping, NDJSON framing
+    # under --json, and a clean (non-propagating) exit on
+    # KeyboardInterrupt.
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = os.path.join(self.tmp.name, "repo")
+        _init_repo(self.repo)
+        with _chdir(self.repo):
+            self.ledger = WorkLedger(get_repo_info().repo_root)
+            self.ledger.create_work_item(
+                id="A", title="Task A", source_kind="adhoc",
+                source_locator="plans/active/example.md#A",
+            )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_no_watch_flag_never_calls_watch_snapshots(self):
+        out = io.StringIO()
+        with _chdir(self.repo), mock.patch.object(
+            work_status, "watch_snapshots", side_effect=AssertionError("must not be called")
+        ), contextlib.redirect_stdout(out):
+            code = main(["work", "status"])
+        self.assertEqual(code, 0)
+
+    def test_watch_reuses_the_one_shot_text_renderer_per_refresh(self):
+        s1 = work_status.build_snapshot(self.ledger)
+        self.ledger.claim("A", owner="bob")
+        s2 = work_status.build_snapshot(self.ledger)
+
+        def fake_watch(ledger, interval):
+            yield s1
+            yield s2
+
+        out = io.StringIO()
+        with _chdir(self.repo), mock.patch.object(
+            work_status, "watch_snapshots", side_effect=fake_watch
+        ), contextlib.redirect_stdout(out):
+            code = main(["work", "status", "--watch"])
+        self.assertEqual(code, 0)
+        blocks = out.getvalue()
+        self.assertEqual(blocks.count("tasks:"), 2)
+        self.assertIn(work_status.render_status_text(s1), blocks)
+        self.assertIn(work_status.render_status_text(s2), blocks)
+
+    def test_json_watch_emits_independently_parseable_ndjson_lines(self):
+        s1 = work_status.build_snapshot(self.ledger)
+        self.ledger.claim("A", owner="bob")
+        s2 = work_status.build_snapshot(self.ledger)
+
+        def fake_watch(ledger, interval):
+            yield s1
+            yield s2
+
+        out = io.StringIO()
+        with _chdir(self.repo), mock.patch.object(
+            work_status, "watch_snapshots", side_effect=fake_watch
+        ), contextlib.redirect_stdout(out):
+            code = main(["work", "status", "--json", "--watch"])
+        self.assertEqual(code, 0)
+        lines = [line for line in out.getvalue().split("\n") if line]
+        self.assertEqual(len(lines), 2)
+        for line, snapshot in zip(lines, (s1, s2)):
+            self.assertEqual(json.loads(line), work_status.snapshot_to_json(snapshot))
+        # never a growing array wrapper — each line stands alone
+        self.assertFalse(lines[0].startswith("["))
+        self.assertNotIn("\n", lines[0])
+
+    def test_watch_interval_defaults_and_clamps(self):
+        seen = {}
+
+        def fake_watch(ledger, interval):
+            seen["interval"] = interval
+            return iter(())
+
+        with _chdir(self.repo), mock.patch.object(
+            work_status, "watch_snapshots", side_effect=fake_watch
+        ):
+            main(["work", "status", "--watch"])
+        self.assertEqual(seen["interval"], work_status.DEFAULT_WATCH_INTERVAL_SECONDS)
+
+        with _chdir(self.repo), mock.patch.object(
+            work_status, "watch_snapshots", side_effect=fake_watch
+        ):
+            main(["work", "status", "--watch", "--interval", "0.01"])
+        self.assertEqual(seen["interval"], work_status.MIN_WATCH_INTERVAL_SECONDS)
+
+        with _chdir(self.repo), mock.patch.object(
+            work_status, "watch_snapshots", side_effect=fake_watch
+        ):
+            main(["work", "status", "--watch", "--interval", "10"])
+        self.assertEqual(seen["interval"], 10.0)
+
+    def test_watch_interval_rejects_non_finite_values(self):
+        # "-inf" is passed as "--interval=-inf" (not a separate argv token)
+        # so argparse doesn't mistake it for an unrecognized option — an
+        # argparse-level quirk unrelated to the finiteness check under test.
+        for args in (
+            ["--interval", "nan"],
+            ["--interval", "inf"],
+            ["--interval=-inf"],
+        ):
+            with self.subTest(args=args):
+                err = io.StringIO()
+                with _chdir(self.repo), mock.patch.object(
+                    work_status, "watch_snapshots"
+                ) as watch_mock, contextlib.redirect_stderr(err):
+                    code = main(["work", "status", "--watch", *args])
+                self.assertEqual(code, 1)
+                self.assertIn("finite", err.getvalue())
+                watch_mock.assert_not_called()
+
+    def test_keyboard_interrupt_exits_cleanly_with_no_traceback(self):
+        s1 = work_status.build_snapshot(self.ledger)
+
+        def fake_watch(ledger, interval):
+            yield s1
+            raise KeyboardInterrupt
+
+        out = io.StringIO()
+        with _chdir(self.repo), mock.patch.object(
+            work_status, "watch_snapshots", side_effect=fake_watch
+        ), contextlib.redirect_stdout(out):
+            code = main(["work", "status", "--watch"])  # must not raise
+        self.assertEqual(code, 0)
+        self.assertEqual(out.getvalue().count("tasks:"), 1)
+
+    def test_watch_never_mutates_ledger_state(self):
+        before = self.ledger.list_work_items()
+        calls = {"n": 0}
+
+        def fake_watch(ledger, interval):
+            for _ in range(3):
+                calls["n"] += 1
+                yield work_status.build_snapshot(ledger)
+
+        out = io.StringIO()
+        with _chdir(self.repo), mock.patch.object(
+            work_status, "watch_snapshots", side_effect=fake_watch
+        ), contextlib.redirect_stdout(out):
+            code = main(["work", "status", "--watch"])
+        self.assertEqual(code, 0)
+        self.assertEqual(calls["n"], 3)
+        self.assertEqual(self.ledger.list_work_items(), before)
+
+
+class TestWorkForecastCliSubcommand(unittest.TestCase):
+    # US4 (specs/005-work-state-visibility, Phase 6): `bindle work
+    # forecast` is a thin renderer over
+    # work_status.build_snapshot()/build_forecast()/render_forecast_text()
+    # — mirrors TestWorkStatusCliSubcommand's fixture shape.
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = os.path.join(self.tmp.name, "repo")
+        _init_repo(self.repo)
+        with _chdir(self.repo):
+            self.ledger = WorkLedger(get_repo_info().repo_root)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _create_task(self, id, parent_id=None, blocked_by=()):
+        self.ledger.create_work_item(
+            id=id, title=f"Task {id}", source_kind="adhoc",
+            source_locator=f"plans/active/example.md#{id}", parent_id=parent_id,
+            blocked_by=blocked_by,
+        )
+
+    def _worked_example_fixture(self):
+        # spec.md's own worked example: A, B dispatchable; C blocked on
+        # both (convergence point); D blocked on A only and claimed.
+        self._create_task("A")
+        self._create_task("B")
+        self._create_task("C", blocked_by=["A", "B"])
+        self._create_task("D", blocked_by=["A"])
+        self.ledger.claim("D", owner="alice")
+
+    def test_empty_ledger_is_valid_not_an_error(self):
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["work", "forecast"])
+        self.assertEqual(code, 0)
+        text = out.getvalue()
+        self.assertIn("dispatchable now:", text)
+        self.assertIn("milestone review frontier:", text)
+
+    def test_reports_dispatchable_convergence_and_frontier(self):
+        self._worked_example_fixture()
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["work", "forecast"])
+        self.assertEqual(code, 0)
+        text = out.getvalue()
+        self.assertIn("dispatchable now: A, B", text)
+        self.assertIn("C  blocked on: A, B", text)
+        self.assertIn("(convergence point)", text)
+        self.assertIn("D  blocked on: A", text)
+        self.assertIn("if A resolves:", text)
+        self.assertIn("unblocked-next: D", text)
+        self.assertIn("dispatchable-next: (none — D remains claimed)", text)
+        self.assertIn("if B resolves:", text)
+        self.assertIn("unblocked-next: (none)", text)
+
+    def test_output_contains_no_time_date_or_eta_language(self):
+        self._worked_example_fixture()
+        out = io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out):
+            code = main(["work", "forecast"])
+        self.assertEqual(code, 0)
+        lowered = out.getvalue().lower()
+        for forbidden in ("eta", "duration", "estimated", "minutes", "hours"):
+            self.assertNotIn(forbidden, lowered)
+
+    def test_forecast_never_mutates_ledger_state(self):
+        self._worked_example_fixture()
+        before = self.ledger.list_work_items()
+        before_claim = self.ledger.get_claim("D")
+        for _ in range(2):
+            out = io.StringIO()
+            with _chdir(self.repo), contextlib.redirect_stdout(out):
+                code = main(["work", "forecast"])
+            self.assertEqual(code, 0)
+        after = self.ledger.list_work_items()
+        after_claim = self.ledger.get_claim("D")
+        self.assertEqual(before, after)
+        self.assertEqual(before_claim, after_claim)
+
+    def test_forecast_is_deterministic_across_two_invocations(self):
+        self._worked_example_fixture()
+        outputs = []
+        for _ in range(2):
+            out = io.StringIO()
+            with _chdir(self.repo), contextlib.redirect_stdout(out):
+                main(["work", "forecast"])
+            outputs.append(out.getvalue())
+        self.assertEqual(outputs[0], outputs[1])
 
 
 class TestMilestoneCliSubcommands(unittest.TestCase):

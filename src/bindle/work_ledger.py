@@ -949,6 +949,20 @@ _STILL_BLOCKING_CONDITION = """(
                     )"""
 
 
+def is_dispatchable(status: str, claimed: bool, blocked: bool) -> bool:
+    """The exact task-dispatchability rule `list_available_work_items()`'s
+    own SQL encodes (`status == 'open' AND NOT claimed AND NOT blocked`),
+    factored out as a pure, I/O-free function so it can be evaluated
+    identically against live ledger state and against a read-only forecast
+    counterfactual (specs/005-work-state-visibility). Takes no `type`
+    argument because every caller already scopes to `type == 'task'` before
+    calling this — the same structural precondition
+    `list_available_work_items()`'s own query already applies before this
+    predicate's three conjuncts.
+    """
+    return status == "open" and not claimed and not blocked
+
+
 def _review_ready_sql(id_expr: str) -> str:
     """A boolean SQL expression: is the milestone named by `id_expr`
     review-ready (specs/002 data-model.md's "Review readiness")?
@@ -1321,27 +1335,57 @@ class WorkLedger:
         so an `open`, unclaimed, unblocked milestone must never be reported
         as something to "start." This is a `WHERE` predicate, not a
         post-filter a caller could bypass by reading the table directly.
+
+        specs/005-work-state-visibility: fetches every candidate
+        `type = 'task'` row's `status`/claimed/blocked facts in one
+        `SELECT` (ordered by `id`, unchanged), then applies `is_dispatchable()`
+        per row in Python to decide inclusion — rather than re-expressing
+        the identical three-conjunct rule a second time in this query's own
+        `WHERE` clause. This is the sole authoritative expression of task
+        dispatchability, shared with `work_status.build_forecast()`'s own
+        read-only counterfactual (research.md's "dispatchable-next shares
+        one authoritative predicate"). External behavior, return value, and
+        ordering are unchanged by this refactor.
+
+        `wi.status = 'open'` stays in `WHERE`, not just in `is_dispatchable()`'s
+        Python conjuncts: `claimed`/`blocked` are now correlated `EXISTS`
+        subqueries in the `SELECT` list rather than `WHERE`, so without this
+        filter SQLite would evaluate both subqueries for every `done`/
+        `superseded` task too, even though `is_dispatchable()` always
+        rejects those regardless of `claimed`/`blocked` — pure wasted
+        per-row work the pre-refactor query never did (its own `status =
+        'open'` `WHERE` conjunct short-circuited before either `NOT EXISTS`
+        ever ran). Keeping it here is a plain candidate-narrowing filter on
+        an already-fetched column, not a second expression of the claimed/
+        blocked rule — `is_dispatchable()` still receives and evaluates
+        `status` itself, and remains the only place that rule is decided.
         """
         conn = self._connect()
         try:
             rows = conn.execute(
                 f"""
-                SELECT id FROM work_items wi
-                WHERE wi.status = 'open'
-                  AND wi.type = 'task'
-                  AND NOT EXISTS (
+                SELECT
+                  wi.id,
+                  wi.status,
+                  EXISTS (
                     SELECT 1 FROM work_item_claims c WHERE c.work_item_id = wi.id
-                  )
-                  AND NOT EXISTS (
+                  ) AS claimed,
+                  EXISTS (
                     SELECT 1 FROM work_item_blocked_by e
                     LEFT JOIN work_items dep ON dep.id = e.blocked_on_id
                     WHERE e.work_item_id = wi.id
                       AND {_STILL_BLOCKING_CONDITION}
-                  )
+                  ) AS blocked
+                FROM work_items wi
+                WHERE wi.type = 'task' AND wi.status = 'open'
                 ORDER BY wi.id
                 """
             ).fetchall()
-            return [row[0] for row in rows]
+            return [
+                row[0]
+                for row in rows
+                if is_dispatchable(row[1], bool(row[2]), bool(row[3]))
+            ]
         finally:
             conn.close()
 
