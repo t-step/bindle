@@ -244,7 +244,7 @@ Bindle does not own user memory, working reasoning, transcripts, or durable know
 | local retrieval over durable Markdown | QMD | Project-scoped (D036) | provider-owned, worktree-local, derived/rebuildable |
 | durable knowledge and work records | no standing provider | Closed (D028) | none — deliberate, human/skill-driven when a concrete need emerges |
 | live sessions and transcripts | Claude Code / Codex | Native | harness-owned |
-| deterministic code-state evidence | Git + Bindle evidence blocks | Bindle capability | emitted into provider-owned records |
+| deterministic code-state evidence | Git/GitHub + Bindle evidence pointers | Bindle capability | pointers recorded against coordination state; the evidence itself stays with Git/GitHub |
 
 ### projectmem
 
@@ -270,9 +270,9 @@ The Obsidian Mind (om) trial closed without adoption (docs/DECISIONS.md D028). N
 
 ### Evidence
 
-Git provides deterministic repository state. Bindle may stamp that state into evidence blocks according to docs/WORKTREES.md.
+Git and GitHub provide deterministic, provider-owned state. Bindle records evidence pointers into that state — never a copy of it — per docs/WORKTREES.md and docs/DECISIONS.md D046, implemented as `work_item_evidence` in the durable work ledger (`specs/001-durable-work-ledger/`).
 
-Evidence blocks are provenance, not a Bindle-owned history database.
+Evidence pointers are provenance, not a Bindle-owned history database.
 
 ## Observability
 

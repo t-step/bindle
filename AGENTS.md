@@ -11,7 +11,7 @@ Claude Code and Codex remain the execution harnesses.
 Bindle may provide:
 
 * toolchain manifests, doctor checks, and drift diagnosis
-* deterministic evidence blocks emitted from git state
+* deterministic evidence pointers recorded against Git/GitHub state (docs/DECISIONS.md D046)
 * pointers and provenance links between provider-owned records
 * lightweight adapters, hooks, templates, and commands at tool seams
 * bounded resume-context assembly from provider-owned records

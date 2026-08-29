@@ -20,7 +20,7 @@ capture → promote → project → resume
 ## Bindle owns
 
 * toolchain manifests, doctor checks, and drift diagnosis
-* evidence-block formats and deterministic emission
+* evidence-pointer recording: deterministic references (branch, commit, pull request, or other locator) into Git/GitHub or another provider-owned record (docs/DECISIONS.md D046)
 * pointers and provenance links between provider-owned records
 * lightweight adapters, hooks, templates, and commands at tool seams
 * bounded resume-context assembly from provider-owned records
@@ -75,17 +75,17 @@ Projection and human-curation surfaces remain owned by their receiving systems, 
 
 Graph databases, semantic indexes, and similar retrieval structures are derived and replaceable.
 
-## Evidence blocks
+## Evidence pointers
 
-An evidence block is an immutable observation that work occurred at a specific place and code state.
+An evidence pointer is a small, immutable reference — a branch, commit, pull request, or other provider-owned locator — recorded against coordination state to establish that work occurred, without copying or owning the underlying evidence (docs/DECISIONS.md D046).
 
-Its schema, repository identity rules, and worktree semantics live in docs/WORKTREES.md.
+The pointer schema lives in `specs/001-durable-work-ledger/data-model.md` (`work_item_evidence`, `src/bindle/work_ledger.py`); repository identity rules and worktree semantics live in docs/WORKTREES.md.
 
-Evidence blocks may be embedded in records owned by other systems, such as knowledge records, handoff files, or commits.
+An evidence pointer may be embedded in — or itself point into — a record owned by another system, such as a decision log, a handoff file, a commit, or a pull request.
 
-Bindle emits evidence blocks; it does not accumulate them as canonical history.
+Bindle records evidence pointers; it does not accumulate a separate evidence history or store the evidence itself.
 
-An evidence block establishes provenance. It is not automatically durable project guidance or promoted knowledge.
+An evidence pointer establishes provenance. It is not automatically durable project guidance or promoted knowledge.
 
 ## Promotion
 
@@ -140,7 +140,7 @@ Establish repository instructions, toolchain policy, diagnostics, development co
 
 ### M1: Evidence
 
-Emit deterministic evidence describing work and code state into provider-owned records while preserving provenance and worktree identity.
+Record lightweight evidence pointers — to a branch, commit, pull request, or other provider-owned record — against coordination state, so provenance for completed work is inspectable without Bindle copying or owning the underlying evidence (docs/DECISIONS.md D046).
 
 ### M2: Resume
 

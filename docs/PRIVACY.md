@@ -30,7 +30,7 @@ Examples include:
 * commits and pull requests
 * generated artifacts
 * exports
-* evidence blocks
+* evidence pointers
 * prompts or handoffs intended for external use
 * release and publication output
 
@@ -115,7 +115,7 @@ Generated content intended for potentially public use must support appropriate r
 In particular:
 
 * paths that may identify the user or machine must be redactable
-* evidence blocks intended for embedding outside local state must support path redaction
+* an evidence pointer's recorded value, if it is ever a path, must support redaction before embedding outside local state
 * generated examples must not substitute real private data for synthetic fixtures
 * exports must not silently broaden the set of private information being disclosed
 
