@@ -15,7 +15,7 @@ Bindle is not the destination. It is connective tissue that helps work move to w
 * invoke providers through supported interfaces
 * collect deterministic facts: git state, tool presence, configuration
 * normalize or project those facts
-* emit portable evidence blocks that other systems embed
+* record evidence pointers — branch, commit, pull request, or other locator — that other systems' records may embed
 * emit pointers that owning systems store and resolve
 * diagnose whether the local toolchain is wired correctly
 * provide lightweight adapters, hooks, templates, and commands
@@ -31,9 +31,9 @@ Bindle is not the destination. It is connective tissue that helps work move to w
 
 ## The replaceability rule (D014)
 
-No Bindle code may parse another tool's private store. Bindle may call supported interfaces, emit blocks that other systems embed, and hold pointers that the owning systems resolve.
+No Bindle code may parse another tool's private store. Bindle may call supported interfaces, record evidence pointers that other systems embed, and hold pointers that the owning systems resolve.
 
-Bindle's durable outputs are embeddable artifacts, not destinations. A block or pointer exists so the receiving system can resolve it — never because Bindle wants a graph.
+Bindle's durable outputs are embeddable artifacts, not destinations. A pointer exists so the receiving system can resolve it — never because Bindle wants a graph.
 
 If a provider is replaced or removed, Bindle may lose pointers. It must never break.
 

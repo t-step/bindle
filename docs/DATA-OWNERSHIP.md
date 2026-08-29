@@ -28,7 +28,7 @@ When a durable session summary or handoff is worth writing, Claude Code and Code
 | Session narrative and work records | a repository handoff file under `plans/` | durable when reasoned | provide templates |
 | Program structure | LSPs, code graphs | derived | none |
 | Toolchain desired state | `docs/TOOLCHAIN.md` (policy/recommendations); `.mcp.json` and `.codex/config.toml` (unconditional MCP config, natively consumed) | durable | owned |
-| Deterministic git evidence blocks | Bindle emits the format; owning records embed the block | derived from git at capture time | owned format — never an owned store |
+| Evidence pointers (branch, commit, pull request, or other locator) | Bindle records the pointer (`work_item_evidence`); Git/GitHub/the provider-owned record hold the evidence itself | append-only, immutable once recorded | owned pointer table — never an owned evidence payload or history store |
 | Bindle runtime state | `BINDLE_HOME` | configuration, disposable cache, explicit export only | owned |
 
 ## Routing table
@@ -42,7 +42,7 @@ When a durable session summary or handoff is worth writing, Claude Code and Code
 | Cross-project lesson | a human synthesis, or a narrow skill when a concrete need emerges (docs/DECISIONS.md D028) | projectmem global gotchas, provider auto-memory |
 | Project instructions | `AGENTS.md` | `CLAUDE.md` duplicates, global skills |
 | Personal preferences | provider-native memory (soft recall) | repository files |
-| Deterministic git evidence | an emitted block embedded in the receiving record | prose reconstruction from memory |
+| Evidence pointer (branch, commit, PR, or other locator) | an evidence-pointer record (`work_item_evidence`), or the same pointer embedded in a receiving record | a copied evidence payload, prose reconstruction from memory |
 | Transcripts | stay with the harness; record the pointer | copies in the vault or a repository |
 
 ## Durable versus derived
