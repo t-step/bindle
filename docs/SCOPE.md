@@ -67,6 +67,8 @@ State under BINDLE_HOME is limited to:
 * disposable cache that can be rebuilt from owning providers
 * explicit exports requested by the user
 
+Bindle also durably owns one repository-local category of state that lives outside `BINDLE_HOME` entirely: the coordination ledger (`.bindle-work/ledger.sqlite3`, resolved from the Git common directory, docs/WORKTREES.md) — work-item status, blocking, claims, and evidence pointers, accepted as bounded Bindle-owned coordination state (docs/DECISIONS.md D038). It is not user history, knowledge, or a transcript store; it is bounded, scheduling-relevant fact about specified work, and it is the state `bindle work status`/`forecast` report.
+
 There is no Bindle sessions store, memories store, or index database that acts as the only copy of durable information.
 
 Durable artifacts remain with their natural owners. Decisions belong in repository decision logs, knowledge in approved knowledge systems, transcripts with execution harnesses, and source history in Git.
