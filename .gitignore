@@ -100,7 +100,7 @@ mcp.local.json
 artifacts/generated/
 reports/generated/
 public/generated/
-site/
+/site/
 plans/scratch/
 scratch/
 

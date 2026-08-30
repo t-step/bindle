@@ -29,6 +29,7 @@ When a durable session summary or handoff is worth writing, Claude Code and Code
 | Program structure | LSPs, code graphs | derived | none |
 | Toolchain desired state | `docs/TOOLCHAIN.md` (policy/recommendations); `.mcp.json` and `.codex/config.toml` (unconditional MCP config, natively consumed) | durable | owned |
 | Evidence pointers (branch, commit, pull request, or other locator) | Bindle records the pointer (`work_item_evidence`); Git/GitHub/the provider-owned record hold the evidence itself | append-only, immutable once recorded | owned pointer table — never an owned evidence payload or history store |
+| Coordination ledger / work items (status, blocking, claims) | Bindle (`.bindle-work/ledger.sqlite3`, resolved via the Git common directory, docs/WORKTREES.md) | durable, repository-local — outside `BINDLE_HOME` | owned — accepted bounded coordination state (docs/DECISIONS.md D038) |
 | Bindle runtime state | `BINDLE_HOME` | configuration, disposable cache, explicit export only | owned |
 
 ## Routing table

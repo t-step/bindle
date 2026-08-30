@@ -9,6 +9,16 @@ license = { text = "MIT" }
 [project.scripts]
 bindle = "bindle.cli:main"
 
+# MkDocs is repository documentation tooling (mkdocs.yml, docs/,
+# `mkdocs build --strict` in scripts/check.sh) — not required to run the
+# Bindle CLI at runtime. `dependency-groups` is PEP 735 / uv-native; the
+# `dev` group is included by `uv run` automatically (no `--group` needed),
+# so `uv run mkdocs build --strict` keeps working with no other change.
+[dependency-groups]
+dev = [
+    "mkdocs>=1.6.1",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

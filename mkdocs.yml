@@ -1,0 +1,52 @@
+site_name: Bindle
+site_description: >-
+  A minimal, provider-neutral toolchain bridge — durable coordination state,
+  evidence pointers, and connective tissue between tools that already own
+  their own domains.
+
+# docs_dir intentionally left at MkDocs's own default ("docs", next to this
+# file) so the same tree covers both docs/site/*.md (this feature's new
+# orientation pages) and every existing canonical docs/*.md reference
+# document, with no override (specs/006-public-documentation-site/research.md
+# Decision 2/3).
+#
+# docs/index.md (Home) is the one narrow, deliberate exception to
+# docs/site/ holding every site-only orientation page: MkDocs maps a
+# source page's output path to its path relative to docs_dir, so only a
+# page actually named docs/index.md builds to the site root's own
+# index.html. This is the ordinary MkDocs root-index convention, not a
+# reopening of docs/site/'s information architecture — every other
+# site-only page still lives under docs/site/
+# (specs/006-public-documentation-site/research.md Decision 2).
+
+nav:
+  - Home: index.md
+  - Getting Started: site/getting-started.md
+  - How Bindle Works: site/how-bindle-works.md
+  - Reference:
+      - Philosophy: PHILOSOPHY.md
+      - Scope: SCOPE.md
+      - Data Ownership: DATA-OWNERSHIP.md
+      - Symphony: SYMPHONY.md
+      - Worktrees: WORKTREES.md
+      - Privacy: PRIVACY.md
+      - Toolchain: TOOLCHAIN.md
+      - Decisions: DECISIONS.md
+
+# Built-in default presentation only — no third-party theme, no custom
+# CSS/JS (specs/006-public-documentation-site, human decision 2026-08-29).
+theme:
+  name: mkdocs
+
+plugins:
+  - search
+
+validation:
+  nav:
+    omitted_files: warn
+    not_found: warn
+    absolute_links: warn
+  links:
+    not_found: warn
+    anchors: warn
+    absolute_links: warn
