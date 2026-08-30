@@ -49,53 +49,11 @@ what "done" means — without requiring you to read
 
 ## The same flow, as a diagram
 
-`[Bindle-owned]` marks the only boxes Bindle itself durably owns. Everything
-else belongs to another owner, and the final decision is explicitly human —
-never a computed output of readiness:
+The indigo **Bindle-owned** boxes are the only boxes Bindle itself durably
+owns. Everything else belongs to another owner, and the final decision is
+explicitly human — never a computed output of readiness:
 
-```text
-Spec Kit (spec.md -> plan.md -> tasks.md)
-        |
-        v
-+---------------------------------------+   [Bindle-owned]
-| Coordination ledger                    |
-| status . blocking . claims .           |
-| evidence pointers                      |
-+---------------------------------------+
-        |  publishes dispatchable subset
-        v
-+---------------------------+     +-------------------------------+
-| Symphony                   |---->| Execution harness              |
-| (optional, external,       |     | (Claude Code or Codex)         |
-|  independently run)        |     | performs the actual work       |
-+---------------------------+     +-------------------------------+
-                                                 |
-                                                 v
-                                   +-------------------------------+
-                                   | Git / GitHub                   |
-                                   | commits . branches . PRs       |
-                                   | (evidence and history)         |
-                                   +-------------------------------+
-                                                 |
-                                                 v  evidence pointer recorded back
-+---------------------------------------+   [Bindle-owned]
-| Coordination ledger                    |
-| evidence pointer recorded              |
-| (never a copy of the evidence itself)  |
-+---------------------------------------+
-        |
-        v
-+---------------------------------------+
-| Milestone review-readiness             |
-| mechanical: computed from ledger state |
-+---------------------------------------+
-        |
-        v
-#########################################
-# HUMAN DECISION: accept / decline      #
-# never automated from readiness alone  #
-#########################################
-```
+![Diagram: Spec Kit's task decomposition flows into Bindle's coordination ledger (Bindle-owned), which publishes a dispatchable subset to Symphony and an execution harness (Claude Code or Codex); the harness's work becomes Git/GitHub evidence; an evidence pointer is recorded back into the coordination ledger (Bindle-owned); ledger state computes milestone review-readiness; a human makes the final accept/decline decision, never automated from readiness alone.](img/how-bindle-works-diagram.svg)
 
 Notice what the diagram does *not* show: no box labeled "Bindle" ever
 touches the Symphony/execution-harness boxes, the Git/GitHub box, or the
