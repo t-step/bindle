@@ -20,7 +20,7 @@ cd <bindle-checkout>
 uv run bindle --version
 ```
 
-## 1. Create a disposable scratch repository
+## Step 1 — Create a disposable scratch repository
 
 `bindle init` requires a Git repository with at least one commit (a bare, commit-less
 `git init` has no resolvable `HEAD` yet, and `bindle init` needs one):
@@ -31,7 +31,7 @@ git init
 git commit --allow-empty -m "init"
 ```
 
-## 2. Provision Bindle, with an isolated `BINDLE_HOME`
+## Step 2 — Provision Bindle, with an isolated `BINDLE_HOME`
 
 Point `BINDLE_HOME` at a directory inside your scratch repo so this walkthrough never
 touches your real Bindle configuration:
@@ -58,7 +58,7 @@ The last two lines are the ones that matter here: `bindle init` unconditionally
 provisions the durable coordination ledger (`.bindle-work/ledger.sqlite3`) and its
 Symphony-readable projection. Nothing about this step involves Symphony itself.
 
-## 3. Load a Spec Kit feature's tasks into the ledger
+## Step 3 — Load a Spec Kit feature's tasks into the ledger
 
 This repository's own `specs/005-work-state-visibility/` is a real, complete Spec Kit
 feature already in this repository — a representative worked example, not an invented
@@ -83,7 +83,7 @@ resynced: 0
 Every task from that feature's `tasks.md` is now a work item in your scratch
 repository's ledger, with dependency edges intact.
 
-## 4. See dispatchable and blocked work state
+## Step 4 — See dispatchable and blocked work state
 
 ```sh
 BINDLE_HOME="$PWD/.bindle-dev" uv run --project <bindle-checkout> bindle work status
@@ -135,7 +135,7 @@ BINDLE_HOME="$PWD/.bindle-dev" uv run --project <bindle-checkout> bindle work st
 }
 ```
 
-## 5. See the dependency forecast
+## Step 5 — See the dependency forecast
 
 ```sh
 BINDLE_HOME="$PWD/.bindle-dev" uv run --project <bindle-checkout> bindle work forecast
