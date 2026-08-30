@@ -100,6 +100,7 @@ Never use direct datastore inspection to bypass the supported-interface and priv
 | --- | --- | --- |
 | Context7 | Adopted | external library and framework documentation |
 | Playwright | Adopted | browser automation and web verification when required |
+| MkDocs | Adopted | static documentation-site generator (`mkdocs.yml`, `docs/site/`, built-in default theme only — no third-party theme or plugins); `mkdocs build --strict` is part of `scripts/check.sh` |
 
 Context7 is part of the default MCP configuration. Playwright is task-specific rather than a reason to load browser automation for unrelated work.
 

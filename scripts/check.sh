@@ -147,6 +147,14 @@ else
   fail=1
 fi
 
+# --- 9. documentation site build (MkDocs, strict) -----------------------------
+section "mkdocs build --strict"
+if uv run mkdocs build --strict; then
+  printf '  ✓ documentation site builds cleanly\n'
+else
+  fail=1
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then
   echo "scripts/check.sh: all checks passed"
