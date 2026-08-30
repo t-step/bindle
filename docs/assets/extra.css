@@ -1,0 +1,401 @@
+/*
+ * Bindle documentation site — presentation layer only.
+ *
+ * Retheme via Bootstrap 5 CSS custom properties (the stock "mkdocs" theme
+ * is Bootstrap-based) rather than fighting its component classes. Colors
+ * are the palette already established in docs/site/img/how-bindle-works-
+ * diagram.svg and docs/assets/spec-kit-bindle-symphony.svg: indigo marks
+ * what Bindle itself durably owns, slate marks everything it does not.
+ * See docs/DECISIONS.md D047 for why this file exists.
+ */
+
+:root,
+[data-bs-theme="light"] {
+  --bindle-indigo-50: #eef2ff;
+  --bindle-indigo-100: #e0e7ff;
+  --bindle-indigo-200: #c7d2fe;
+  --bindle-indigo-400: #818cf8;
+  --bindle-indigo-600: #4f46e5;
+  --bindle-indigo-700: #4338ca;
+  --bindle-indigo-800: #3730a3;
+  --bindle-indigo-900: #312e81;
+
+  --bindle-slate-50: #f8fafc;
+  --bindle-slate-100: #f1f5f9;
+  --bindle-slate-200: #e2e8f0;
+  --bindle-slate-400: #94a3b8;
+  --bindle-slate-500: #64748b;
+  --bindle-slate-600: #475569;
+  --bindle-slate-700: #334155;
+  --bindle-slate-800: #1e293b;
+
+  --bs-primary: var(--bindle-indigo-600);
+  --bs-primary-rgb: 79, 70, 229;
+  --bs-primary-text-emphasis: var(--bindle-indigo-900);
+  --bs-primary-bg-subtle: var(--bindle-indigo-50);
+  --bs-primary-border-subtle: var(--bindle-indigo-200);
+
+  --bs-link-color: var(--bindle-indigo-700);
+  --bs-link-color-rgb: 67, 56, 202;
+  --bs-link-hover-color: var(--bindle-indigo-900);
+  --bs-link-hover-color-rgb: 49, 46, 129;
+
+  --bs-tertiary-bg: var(--bindle-slate-50);
+  --bs-border-color: var(--bindle-slate-200);
+}
+
+[data-bs-theme="dark"] {
+  --bindle-indigo-50: #1e1b4b;
+  --bindle-indigo-100: #27245e;
+  --bindle-indigo-200: #4338ca;
+  --bindle-indigo-400: #818cf8;
+  --bindle-indigo-600: #818cf8;
+  --bindle-indigo-700: #a5b4fc;
+  --bindle-indigo-800: #c7d2fe;
+  --bindle-indigo-900: #e0e7ff;
+
+  --bindle-slate-50: #1e293b;
+  --bindle-slate-100: #24344a;
+  --bindle-slate-200: #334155;
+  --bindle-slate-400: #64748b;
+  --bindle-slate-500: #94a3b8;
+  --bindle-slate-600: #cbd5e1;
+  --bindle-slate-700: #e2e8f0;
+  --bindle-slate-800: #f1f5f9;
+
+  --bs-body-bg: #0f172a;
+  --bs-body-color: #e2e8f0;
+
+  --bs-primary: var(--bindle-indigo-600);
+  --bs-primary-rgb: 129, 140, 248;
+  --bs-primary-text-emphasis: var(--bindle-indigo-800);
+  --bs-primary-bg-subtle: var(--bindle-indigo-50);
+  --bs-primary-border-subtle: var(--bindle-indigo-200);
+
+  --bs-link-color: var(--bindle-indigo-700);
+  --bs-link-color-rgb: 165, 180, 252;
+  --bs-link-hover-color: var(--bindle-indigo-800);
+  --bs-link-hover-color-rgb: 199, 210, 254;
+
+  --bs-tertiary-bg: var(--bindle-slate-50);
+  --bs-border-color: var(--bindle-slate-200);
+}
+
+/* The stock theme paints a fixed, hardcoded gradient on .bg-primary that a
+   CSS-variable retheme alone can't reach — flatten it back to a solid,
+   restrained navbar instead of leaving the old blue gradient showing
+   through the new accent color. */
+.navbar.bg-primary {
+  background-image: none;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .bindle-cta,
+  .bs-sidebar .nav-link {
+    transition: none;
+  }
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Typography and content rhythm                                          */
+/* ---------------------------------------------------------------------- */
+
+[role="main"] h1,
+[role="main"] h2,
+[role="main"] h3,
+[role="main"] h4 {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  scroll-margin-top: 5rem;
+}
+
+[role="main"] h1 {
+  font-size: 2rem;
+  margin-bottom: 1rem;
+}
+
+[role="main"] h2 {
+  font-size: 1.4rem;
+  margin-top: 2.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--bs-border-color);
+}
+
+[role="main"] h2:first-of-type {
+  margin-top: 1.75rem;
+  padding-top: 0;
+  border-top: none;
+}
+
+[role="main"] h3 {
+  font-size: 1.12rem;
+  margin-top: 1.75rem;
+}
+
+[role="main"] p,
+[role="main"] li {
+  line-height: 1.65;
+}
+
+[role="main"] {
+  max-width: 46rem;
+}
+
+[role="main"] blockquote {
+  border-left: 3px solid var(--bs-primary-border-subtle);
+  background: var(--bs-primary-bg-subtle);
+  color: var(--bs-primary-text-emphasis);
+  padding: 0.75rem 1.1rem;
+  border-radius: 0 0.35rem 0.35rem 0;
+}
+
+[role="main"] hr {
+  border-top: 1px solid var(--bs-border-color);
+  opacity: 1;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Code                                                                    */
+/* ---------------------------------------------------------------------- */
+
+[role="main"] :not(pre) > code {
+  background: var(--bs-tertiary-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 0.3rem;
+  padding: 0.1em 0.4em;
+  font-size: 0.87em;
+}
+
+[role="main"] pre {
+  border: 1px solid var(--bs-border-color);
+  border-radius: 0.5rem;
+  padding: 0.9rem 1.1rem;
+}
+
+[role="main"] pre code {
+  font-size: 0.87em;
+  line-height: 1.55;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Tables — the stock theme ships no table styling at all                 */
+/* ---------------------------------------------------------------------- */
+
+[role="main"] table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 1.25rem 0;
+  font-size: 0.94rem;
+}
+
+[role="main"] table th,
+[role="main"] table td {
+  border: 1px solid var(--bs-border-color);
+  padding: 0.5rem 0.85rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+[role="main"] table th {
+  background: var(--bs-tertiary-bg);
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Navbar and brand mark                                                  */
+/* ---------------------------------------------------------------------- */
+
+.navbar-brand {
+  font-weight: 700;
+  font-family: var(--bs-font-monospace);
+  letter-spacing: -0.02em;
+}
+
+.navbar .nav-link.active {
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Sidebar table-of-contents — current-section state                      */
+/* ---------------------------------------------------------------------- */
+
+.bs-sidebar .nav-link {
+  border-left: 2px solid transparent;
+  padding-left: 0.75rem;
+  color: var(--bs-secondary-color);
+  transition: border-color 120ms ease, color 120ms ease;
+}
+
+.bs-sidebar .nav-link:hover {
+  color: var(--bs-link-color);
+}
+
+.bs-sidebar .nav-link.active {
+  border-left-color: var(--bs-primary);
+  color: var(--bs-primary-text-emphasis);
+  font-weight: 600;
+  background: transparent;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Footer                                                                  */
+/* ---------------------------------------------------------------------- */
+
+footer.col-md-12 {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  color: var(--bs-secondary-color);
+  font-size: 0.9rem;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Homepage only (body.homepage — set by the stock theme's base.html)     */
+/* ---------------------------------------------------------------------- */
+
+body.homepage [role="main"] {
+  max-width: none;
+}
+
+/* The homepage's single H1 gave the local table-of-contents sidebar
+   nothing useful to show (one entry, repeating the page title). The
+   primary top navbar already carries full site navigation on every page,
+   so the homepage reclaims that column for the hero instead of showing an
+   empty-feeling duplicate. */
+body.homepage .col-md-3 {
+  display: none;
+}
+body.homepage .col-md-9 {
+  flex: 0 0 100%;
+  max-width: 100%;
+}
+
+.bindle-hero {
+  padding: 2.75rem 0 0.5rem;
+  max-width: 44rem;
+}
+
+.bindle-kicker {
+  font-family: var(--bs-font-monospace);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--bs-primary-text-emphasis);
+  margin-bottom: 0.5rem;
+}
+
+.bindle-hero-title {
+  font-size: 2.75rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0 0 0.9rem;
+}
+
+.bindle-hero-tagline {
+  font-size: 1.1rem;
+  line-height: 1.6;
+  color: var(--bs-secondary-color);
+  max-width: 40rem;
+}
+
+.bindle-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 1.5rem 0 0;
+}
+
+.bindle-cta {
+  display: inline-block;
+  padding: 0.55rem 1.1rem;
+  border-radius: 0.4rem;
+  font-weight: 600;
+  font-size: 0.95rem;
+  text-decoration: none;
+  border: 1px solid var(--bs-border-color);
+  color: var(--bs-body-color);
+  transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease;
+}
+
+.bindle-cta:hover {
+  border-color: var(--bs-primary);
+  color: var(--bs-primary-text-emphasis);
+}
+
+.bindle-cta-primary {
+  background: var(--bs-primary);
+  border-color: var(--bs-primary);
+  color: #fff;
+}
+
+.bindle-cta-primary:hover {
+  background: var(--bindle-indigo-700);
+  border-color: var(--bindle-indigo-700);
+  color: #fff;
+}
+
+.bindle-map {
+  margin: 2.25rem 0 1.5rem;
+  max-width: 46rem;
+}
+
+.bindle-map img {
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--bs-border-color);
+  border-radius: 0.6rem;
+  background: var(--bs-body-bg);
+}
+
+.bindle-map-caption {
+  font-size: 0.88rem;
+  color: var(--bs-secondary-color);
+  margin-top: 0.6rem;
+}
+
+.bindle-routes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 1rem;
+  margin: 2rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bindle-route {
+  border: 1px solid var(--bs-border-color);
+  border-radius: 0.5rem;
+  padding: 1rem 1.15rem;
+}
+
+.bindle-route a {
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.bindle-route p {
+  margin: 0.35rem 0 0;
+  font-size: 0.92rem;
+  color: var(--bs-secondary-color);
+  line-height: 1.5;
+}
+
+@media (max-width: 767px) {
+  .bindle-hero {
+    padding-top: 1.5rem;
+  }
+  .bindle-hero-title {
+    font-size: 2.1rem;
+  }
+}

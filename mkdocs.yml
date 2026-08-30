@@ -34,10 +34,21 @@ nav:
       - Toolchain: TOOLCHAIN.md
       - Decisions: DECISIONS.md
 
-# Built-in default presentation only — no third-party theme, no custom
-# CSS/JS (specs/006-public-documentation-site, human decision 2026-08-29).
+# Built-in MkDocs theme, no third-party theme dependency (docs/DECISIONS.md
+# D047 affirms this, superseding the narrower original "no custom CSS/JS"
+# reading of the 2026-08-29 human decision recorded in
+# specs/006-public-documentation-site/research.md Decision 1). D047
+# authorizes a restrained presentation-layer pass — theme config plus one
+# small stylesheet and homepage assets — once the site and information
+# architecture were already established; it does not authorize a
+# third-party theme, a frontend framework, or a broad branding system.
 theme:
   name: mkdocs
+  color_mode: auto
+  user_color_mode_toggle: true
+
+extra_css:
+  - assets/extra.css
 
 plugins:
   - search
