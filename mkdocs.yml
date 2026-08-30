@@ -22,6 +22,7 @@ site_description: >-
 nav:
   - Home: index.md
   - Getting Started: site/getting-started.md
+  - Spec Kit & Symphony: site/spec-kit-and-symphony.md
   - How Bindle Works: site/how-bindle-works.md
   - Reference:
       - Philosophy: PHILOSOPHY.md

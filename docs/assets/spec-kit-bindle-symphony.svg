@@ -1,0 +1,146 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 1200" font-family="Helvetica, Arial, sans-serif">
+  <title>How Spec Kit, Bindle, and Symphony fit together: Spec Kit's tasks.md flows into Bindle's coordination ledger, which forks into two alternative, equally valid execution paths — a manual path where a human or coding session selects a dispatchable task directly, and an optional Symphony path where Bindle publishes a dispatchable coordination surface for Symphony to dispatch from — both converging on Claude Code or Codex performing the work, Git/GitHub recording the resulting evidence, an evidence pointer recorded back into Bindle's coordination ledger, mechanical milestone review-readiness, and a final, explicit human accept/decline decision.</title>
+
+  <defs>
+    <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569" />
+    </marker>
+  </defs>
+
+  <!-- card background -->
+  <rect x="8" y="8" width="904" height="1184" rx="20" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5" />
+
+  <!-- straight connectors -->
+  <g stroke="#475569" stroke-width="2" fill="none" marker-end="url(#arrow2)">
+    <path d="M460,104 L460,138" />
+    <path d="M245,418 L245,446" />
+    <path d="M245,510 L245,538" />
+    <path d="M675,418 L675,446" />
+    <path d="M675,510 L675,538" />
+    <path d="M460,728 L460,756" />
+    <path d="M460,860 L460,888" />
+    <path d="M460,958 L460,986" />
+  </g>
+
+  <!-- plain connector into the fork point (no arrowhead; the fork itself carries the arrowheads) -->
+  <path d="M460,242 L460,270" stroke="#475569" stroke-width="2" fill="none" />
+
+  <!-- fork into two execution paths -->
+  <g stroke="#475569" stroke-width="2" fill="none" marker-end="url(#arrow2)">
+    <path d="M460,270 L460,290 L245,290 L245,320" />
+    <path d="M460,270 L460,290 L675,290 L675,320" />
+  </g>
+
+  <!-- convergence back to one Git/GitHub box -->
+  <g stroke="#475569" stroke-width="2" fill="none" marker-end="url(#arrow2)">
+    <path d="M245,610 L245,634 L450,634 L450,650" />
+    <path d="M675,610 L675,634 L470,634 L470,650" />
+  </g>
+
+  <!-- 1. Spec Kit -->
+  <g>
+    <rect x="290" y="40" width="340" height="64" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" />
+    <text x="460" y="66" text-anchor="middle" font-size="15" font-weight="700" fill="#1e293b">Spec Kit</text>
+    <text x="460" y="86" text-anchor="middle" font-size="12" fill="#475569">spec.md → plan.md → tasks.md</text>
+  </g>
+
+  <!-- 2. Coordination ledger #1 (Bindle-owned) -->
+  <g>
+    <rect x="210" y="138" width="500" height="104" rx="12" fill="#eef2ff" stroke="#4f46e5" stroke-width="2" />
+    <rect x="602" y="146" width="98" height="20" rx="10" fill="#4f46e5" />
+    <text x="651" y="160" text-anchor="middle" font-size="10" font-weight="700" fill="#ffffff" letter-spacing="0.4">BINDLE-OWNED</text>
+    <text x="460" y="184" text-anchor="middle" font-size="16" font-weight="700" fill="#312e81">Coordination ledger</text>
+    <text x="460" y="204" text-anchor="middle" font-size="12.5" fill="#3730a3">tasks · dependencies · status · claims · evidence pointers</text>
+    <text x="460" y="222" text-anchor="middle" font-size="11" font-style="italic" fill="#3730a3">computes which tasks are dispatchable now</text>
+  </g>
+
+  <!-- path pills -->
+  <g font-size="10.5" font-weight="700" fill="#334155" letter-spacing="0.3">
+    <rect x="170" y="296" width="150" height="24" rx="12" fill="#e2e8f0" />
+    <text x="245" y="312" text-anchor="middle">MANUAL PATH</text>
+
+    <rect x="600" y="296" width="150" height="24" rx="12" fill="#e2e8f0" />
+    <text x="675" y="312" text-anchor="middle">SYMPHONY · OPTIONAL</text>
+  </g>
+
+  <!-- 3a. Manual path -->
+  <g>
+    <rect x="75" y="330" width="340" height="64" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" />
+    <text x="245" y="354" text-anchor="middle" font-size="13" font-weight="700" fill="#1e293b">Bindle identifies dispatchable work</text>
+    <text x="245" y="374" text-anchor="middle" font-size="11" fill="#475569">bindle work status / bindle work forecast</text>
+  </g>
+  <g>
+    <rect x="75" y="422" width="340" height="64" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" />
+    <text x="245" y="446" text-anchor="middle" font-size="13" font-weight="700" fill="#1e293b">Human / coding session</text>
+    <text x="245" y="466" text-anchor="middle" font-size="11" fill="#475569">selects a dispatchable task, claims it</text>
+  </g>
+  <g>
+    <rect x="75" y="514" width="340" height="72" rx="10" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5" />
+    <text x="245" y="540" text-anchor="middle" font-size="14" font-weight="700" fill="#1e293b">Claude Code or Codex</text>
+    <text x="245" y="559" text-anchor="middle" font-size="11.5" fill="#475569">performs the work</text>
+    <text x="245" y="575" text-anchor="middle" font-size="10.5" font-style="italic" fill="#475569">(manual dispatch — always available)</text>
+  </g>
+
+  <!-- 3b. Symphony path -->
+  <g>
+    <rect x="505" y="330" width="340" height="64" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" />
+    <text x="675" y="354" text-anchor="middle" font-size="13" font-weight="700" fill="#1e293b">Bindle publishes dispatchable work</text>
+    <text x="675" y="374" text-anchor="middle" font-size="11" fill="#475569">bindle work publish → symphony-projection.sqlite3</text>
+  </g>
+  <g>
+    <rect x="505" y="422" width="340" height="64" rx="10" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5" />
+    <text x="675" y="448" text-anchor="middle" font-size="14" font-weight="700" fill="#1e293b">Symphony</text>
+    <text x="675" y="467" text-anchor="middle" font-size="11.5" fill="#475569">optional · external · independently run</text>
+  </g>
+  <g>
+    <rect x="505" y="514" width="340" height="72" rx="10" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5" />
+    <text x="675" y="540" text-anchor="middle" font-size="14" font-weight="700" fill="#1e293b">Claude Code or Codex</text>
+    <text x="675" y="559" text-anchor="middle" font-size="11.5" fill="#475569">performs the work</text>
+    <text x="675" y="575" text-anchor="middle" font-size="10.5" font-style="italic" fill="#475569">(dispatched by Symphony)</text>
+  </g>
+
+  <!-- 4. Git / GitHub -->
+  <g>
+    <rect x="260" y="650" width="400" height="78" rx="10" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5" />
+    <text x="460" y="678" text-anchor="middle" font-size="15" font-weight="700" fill="#1e293b">Git / GitHub</text>
+    <text x="460" y="698" text-anchor="middle" font-size="12" fill="#475569">commits · branches · pull requests</text>
+    <text x="460" y="715" text-anchor="middle" font-size="12" fill="#475569">(evidence and history)</text>
+  </g>
+
+  <!-- 5. Coordination ledger #2 (Bindle-owned) -->
+  <g>
+    <rect x="210" y="756" width="500" height="104" rx="12" fill="#eef2ff" stroke="#4f46e5" stroke-width="2" />
+    <rect x="602" y="764" width="98" height="20" rx="10" fill="#4f46e5" />
+    <text x="651" y="778" text-anchor="middle" font-size="10" font-weight="700" fill="#ffffff" letter-spacing="0.4">BINDLE-OWNED</text>
+    <text x="460" y="802" text-anchor="middle" font-size="16" font-weight="700" fill="#312e81">Coordination ledger</text>
+    <text x="460" y="822" text-anchor="middle" font-size="12.5" fill="#3730a3">evidence pointer recorded</text>
+    <text x="460" y="840" text-anchor="middle" font-size="11" font-style="italic" fill="#3730a3">(never a copy of the evidence itself)</text>
+  </g>
+
+  <!-- 6. Milestone review-readiness -->
+  <g>
+    <rect x="250" y="888" width="420" height="70" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="6 4" />
+    <text x="460" y="916" text-anchor="middle" font-size="14.5" font-weight="700" fill="#1e293b">Milestone review-readiness</text>
+    <text x="460" y="936" text-anchor="middle" font-size="12" fill="#475569">mechanical — computed from ledger state</text>
+  </g>
+
+  <!-- 7. Human decision -->
+  <g>
+    <rect x="190" y="986" width="540" height="100" rx="12" fill="#fffbeb" stroke="#b45309" stroke-width="3" />
+    <text x="460" y="1022" text-anchor="middle" font-size="18" font-weight="700" fill="#78350f">HUMAN DECISION</text>
+    <text x="460" y="1046" text-anchor="middle" font-size="15" font-weight="700" fill="#78350f">accept / decline</text>
+    <text x="460" y="1066" text-anchor="middle" font-size="12" font-style="italic" fill="#92400e">never automated from readiness alone</text>
+  </g>
+
+  <!-- legend -->
+  <g font-size="12" fill="#334155">
+    <rect x="150" y="1130" width="18" height="18" rx="4" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.5" />
+    <text x="174" y="1143">Bindle-owned</text>
+
+    <rect x="330" y="1130" width="18" height="18" rx="4" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5" />
+    <text x="354" y="1143">External / another owner</text>
+
+    <rect x="590" y="1130" width="18" height="18" rx="4" fill="#fffbeb" stroke="#b45309" stroke-width="1.5" />
+    <text x="614" y="1143">Human decision (never automated)</text>
+  </g>
+</svg>
