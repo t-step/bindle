@@ -16,7 +16,7 @@ Correct the specific stale/incomplete passages Grounding identified in `README.m
 
 **Language/Version**: Python 3.11+ (repository baseline, `pyproject.toml`, `requires-python = ">=3.11"`). MkDocs itself supports this range.
 
-**Primary Dependencies**: One new dependency: **MkDocs** (built-in default presentation only, no third-party theme, no third-party plugins — Research Decision 1). Everything else in this feature (the content-reconciliation edits, the new Markdown pages, the `scripts/check.sh` addition) uses only what the repository already has (Markdown files, Bash, the existing `bindle` CLI). No Python source (`src/bindle/`) is touched — this feature has no runtime/library code.
+**Primary Dependencies**: One new dependency: **MkDocs** (built-in default presentation only, no third-party theme, no third-party plugins — Research Decision 1), declared under `pyproject.toml`'s `[dependency-groups]` `dev` group — repository documentation tooling, not a Bindle runtime dependency, since nothing in `src/bindle/` imports or requires it (corrected 2026-08-29 during PR review; `uv run` includes the `dev` group by default). Everything else in this feature (the content-reconciliation edits, the new Markdown pages, the `scripts/check.sh` addition) uses only what the repository already has (Markdown files, Bash, the existing `bindle` CLI). No Python source (`src/bindle/`) is touched — this feature has no runtime/library code.
 
 **Storage**: N/A. This feature reads and writes only tracked Markdown/YAML/Bash files; it never touches `.bindle-work/*.sqlite3` (FR-013, SC-006) or any other repository-local state store.
 
@@ -30,7 +30,7 @@ Correct the specific stale/incomplete passages Grounding identified in `README.m
 
 **Constraints**: Must not read any `.bindle-work/*.sqlite3` file, start a server, or require authentication (FR-013/FR-014, SC-006). Must not edit `docs/DECISIONS.md`'s existing entries (FR-009, SC-005). Must not duplicate the substantive content of any existing canonical `docs/*.md` file (FR-008). Must not present any currently-interface-only stub command (`bindle list`, `update`, `upgrade`, `doctor`) as functional (FR-003, US2 Acceptance Scenario 5). Must not imply a published, installable Bindle package exists (FR-004). Must build and validate with no network access at build time (FR-011). Must not restructure or rename the existing `docs/` tree (spec.md Scope discipline).
 
-**Scale/Scope**: One small static site — three new orientation pages (`docs/site/index.md`, `getting-started.md`, `how-bindle-works.md`) plus eight existing `docs/*.md` files rendered directly (no new content authored for those eight), optionally one static diagram page/section at P3 — plus targeted edits to four existing files (`README.md`, `docs/SCOPE.md`, `docs/DATA-OWNERSHIP.md`, `docs/TOOLCHAIN.md`) and one existing script (`scripts/check.sh`).
+**Scale/Scope**: One small static site — three new orientation pages (`docs/index.md` (Home, the one narrow exception to `docs/site/` — see Research Decision 2's "Correction"), `docs/site/getting-started.md`, `docs/site/how-bindle-works.md`) plus eight existing `docs/*.md` files rendered directly (no new content authored for those eight), optionally one static diagram page/section at P3 — plus targeted edits to five existing files (`README.md`, `docs/SCOPE.md`, `docs/DATA-OWNERSHIP.md`, `docs/TOOLCHAIN.md`, `pyproject.toml`) and one existing script (`scripts/check.sh`).
 
 ## Constitution Check
 
@@ -77,9 +77,11 @@ No `data-model.md` and no `contracts/` are produced — see "Data model and cont
 mkdocs.yml                         # New — MkDocs project config; docs_dir left at its default (docs/), nav,
                                     #   built-in default theme only, bundled search plugin only
 
-docs/                               # docs_dir for MkDocs — existing tree plus one new subdirectory, no renames:
+docs/                               # docs_dir for MkDocs — existing tree plus Home and one new subdirectory,
+                                    #   no renames:
+├── index.md                        #   New — Home; MkDocs's own root-index convention, the one narrow
+                                     #     exception to docs/site/ (Research Decision 2's "Correction")
 ├── site/                           #   New — site-only orientation pages (decided location, human decision)
-│   ├── index.md                    #     Home
 │   ├── getting-started.md          #     Getting Started — the verified command walkthrough (Research Dec. 6)
 │   └── how-bindle-works.md         #     How Bindle Works — ownership/execution/human-review model (US3)
 ├── SCOPE.md                        #   Edited — "Bindle-owned state" section gains coordination-ledger
@@ -102,6 +104,12 @@ scripts/check.sh                    # Edited — new section: `uv run mkdocs bui
                                      #   `|| fail=1`, matching the file's existing section/fail convention
 
 .gitignore                          # Edited — ignore the MkDocs build output directory
+
+pyproject.toml                      # Edited — MkDocs declared under [dependency-groups] `dev`, not
+                                     #   [project].dependencies (documentation tooling, not a runtime
+                                     #   dependency — corrected 2026-08-29)
+
+uv.lock                             # Regenerated via `uv lock` — never hand-edited
 ```
 
 **Structure Decision**: This feature is content/tooling-only — it introduces no `src/bindle/` module and no `tests/test_*.py` file, unlike specs/001–005. The one new piece of executable-ish surface is a single new `scripts/check.sh` section (a shell command invocation, not new shell logic) and a new `mkdocs.yml` configuration file. New site-only prose content lives at `docs/site/`, nested inside the existing `docs/` tree by explicit human decision — this both keeps MkDocs's `docs_dir` at its zero-configuration default and lets every existing `docs/*.md` canonical document render directly as a site page (Research Decision 2) without being moved, renamed, or copied.
@@ -123,10 +131,11 @@ Reflecting spec.md's own user-story priorities:
 ## Deliberately deferred (not part of this feature; recorded so it isn't rediscovered as an oversight)
 
 - Concrete build-output directory name (e.g. `site/` vs `_site/`) — implementation-time detail with no behavioral consequence; must be gitignored either way.
-- The mechanical detail of making the built site's root URL resolve to `docs/site/index.md`'s content (a thin `docs/index.md` redirect stub, or accepting nav-only entry for a not-yet-deployed site) — Research Decision 2's "implementation-time nuance," verified by a task acceptance check, not a further planning decision.
 - Actual GitHub Pages activation or repository-visibility change — operator decision, out of scope (Research Decision 4).
 - Output-drift detection (documented example output going stale after a future CLI change) — named residual risk, not solved here (spec.md Assumptions).
 - The optional static diagram (US6) — P3, not designed in this plan.
 - Exact wording/diff for `README.md`/`docs/SCOPE.md`/`docs/DATA-OWNERSHIP.md`/`docs/TOOLCHAIN.md` beyond the specific Grounding-identified gaps and the decided MkDocs-adoption row — implementation-phase content authoring.
 
 **Resolved since initial planning** (2026-08-29 human decision pass, no longer open): site-only content location (`docs/site/`, fixed); whether existing `docs/*.md` are rendered directly by MkDocs (yes, superseding the original "link out" recommendation); whether `docs/TOOLCHAIN.md` records MkDocs's adoption (yes, now in the touch list); MkDocs presentation wording (its own built-in default theme, unmodified).
+
+**Resolved during PR review** (2026-08-29, same day, correction pass): the "mechanical detail" of making the built site's root URL reach Home is resolved as `docs/index.md` — MkDocs's own root-index convention, the one narrow exception to `docs/site/` (Research Decision 2's "Correction"), not a redirect stub and not nav-only entry; MkDocs's dependency placement is corrected from `[project].dependencies` to `[dependency-groups]` `dev` (documentation tooling, not a Bindle runtime dependency).

@@ -12,7 +12,7 @@ Modern software development has no shortage of excellent tools. Git remembers hi
 
 The interesting work happens somewhere in the middle. Bindle is an experiment in reducing the friction between them without replacing them. The goal isn’t to build another platform. It’s to build as little as possible while making the existing workshop feel more connected.
 
-Concretely, Bindle is a stateless toolchain bridge with respect to your history, knowledge, and transcripts. Each tool in the workshop owns its own domain — Git owns history, the harnesses own transcripts, the vault owns knowledge — and Bindle helps context and evidence cross the seams between them: it calls supported interfaces, collects deterministic facts, records evidence pointers other systems can embed, and holds pointers that the owning systems resolve. It keeps no database of your history, notes, or transcripts. Bindle does durably own one thing of its own: a small, repository-local coordination ledger — work-item status, blocking, claims, and evidence pointers (docs/DECISIONS.md D038) — tracking which specified work is currently schedulable; this is the state behind the `bindle work` commands below. If a better provider appears for any other responsibility, the provider gets replaced; Bindle doesn’t get rewritten. For the full newcomer picture — what Bindle owns, what it doesn't, and how a piece of work moves from specification to accepted evidence — see [How Bindle Works](docs/site/how-bindle-works.md); the underlying architecture rules and the admission test for new features live in [docs/PHILOSOPHY.md](docs/PHILOSOPHY.md), with data ownership and routing in [docs/DATA-OWNERSHIP.md](docs/DATA-OWNERSHIP.md).
+Concretely, Bindle is a stateless toolchain bridge with respect to your history, knowledge, and transcripts. Each tool in the workshop owns its own domain — Git owns history, the harnesses own transcripts, the vault owns knowledge — and Bindle helps context and evidence cross the seams between them: it calls supported interfaces, collects deterministic facts, records evidence pointers other systems can embed, and holds pointers that the owning systems resolve. It keeps no database of your history, notes, or transcripts. Bindle does durably own one thing of its own: a small, repository-local coordination ledger — work-item status, blocking, claims, and evidence pointers (docs/DECISIONS.md D038) — tracking which specified work is currently schedulable; this is the state behind the `bindle work` and `bindle milestone` commands below. If a better provider appears for any other responsibility, the provider gets replaced; Bindle doesn’t get rewritten. For the full newcomer picture — what Bindle owns, what it doesn't, and how a piece of work moves from specification to accepted evidence — see [How Bindle Works](docs/site/how-bindle-works.md); the underlying architecture rules and the admission test for new features live in [docs/PHILOSOPHY.md](docs/PHILOSOPHY.md), with data ownership and routing in [docs/DATA-OWNERSHIP.md](docs/DATA-OWNERSHIP.md).
 
 ## Principles
 
@@ -39,7 +39,29 @@ uv run bindle repo info --json
 * `bindle repo info` — repository/execution/code-state identity (docs/WORKTREES.md): repository root, current worktree root, Git directory, Git common directory, current branch (when attached), and HEAD SHA. Add `--json` for machine-readable output.
 * `bindle branch <name>` — creates a new feature branch off freshly-fetched `origin/main` in its own linked Git worktree, following the development-isolation model in AGENTS.md and docs/WORKTREES.md. `main` itself is left untouched as the clean baseline. Refuses to reuse an existing branch name or worktree path, and refuses to fall back to a stale local `main` if the fetch fails.
 
-The CLI stays intentionally small; it is infrastructure for future narrow capabilities, not a work-DAG or orchestration layer (see AGENTS.md, docs/SCOPE.md).
+The CLI stays intentionally small and provider-neutral. It is not an execution/orchestration engine — it never runs a coding agent, a build, or a test itself, and dispatch/execution stay with an external harness such as Symphony (see [How Bindle Works](docs/site/how-bindle-works.md), AGENTS.md, docs/SCOPE.md). What it does durably do is track dependency-ordered coordination state and expose which work is currently schedulable.
+
+### Work and milestone coordination
+
+`bindle work` loads a Spec Kit feature's `tasks.md` into the durable, repository-local coordination ledger and reports which tasks are currently schedulable; `bindle milestone` is the human-facing review/accept/decline surface over that same ledger. The commands below are illustrative CLI syntax — see [Getting Started](docs/site/getting-started.md) for the safe, isolated-`BINDLE_HOME` version to actually run:
+
+```sh
+uv run bindle work load-speckit specs/005-work-state-visibility
+uv run bindle work status
+uv run bindle work status --json
+uv run bindle work forecast
+uv run bindle milestone review <milestone-id>
+```
+
+* `bindle work load-speckit <feature-dir>` — loads one Spec Kit feature's `tasks.md` into the ledger.
+* `bindle work status` (`--json` for the stable machine-readable read model, `--watch` for continuous refresh) — a snapshot of every task's and milestone's dispatchable/blocked/claim state.
+* `bindle work forecast` — the dependency frontier: what's dispatchable now, and what would become eligible next if a given blocker resolved.
+* `bindle work claim` / `release` / `done` — claim, release, or complete a task through the ledger's own atomic primitives.
+* `bindle work publish` — regenerate the read-only, versioned Symphony-facing projection.
+* `bindle milestone review` / `list` / `enter-review` / `claim` / `release` — inspect and manage milestone review state.
+* `bindle milestone accept` / `decline` — the explicit, human-invoked decision on a milestone in review; never inferred from readiness alone.
+
+See [Getting Started](docs/site/getting-started.md) for the full, execution-verified walkthrough, and [How Bindle Works](docs/site/how-bindle-works.md) for what this ledger owns versus what it hands off to an execution harness.
 
 ### Lifecycle commands
 
@@ -103,9 +125,7 @@ These aren’t dependencies so much as assumptions. Bindle should adapt to them 
 
 ## Current focus
 
-The repository is intentionally starting small.
-
-Before writing a memory system, graph database, or orchestration framework, the project is defining:
+The repository-local coordination ledger and its `bindle work`/`bindle milestone` CLI surface (above) are real and implemented, not planned. Beyond that ledger, the project is intentionally still small: before writing a memory system, graph database, or general orchestration framework, it is defining:
 
 * the toolchain
 * shared conventions

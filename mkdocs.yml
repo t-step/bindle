@@ -9,9 +9,18 @@ site_description: >-
 # orientation pages) and every existing canonical docs/*.md reference
 # document, with no override (specs/006-public-documentation-site/research.md
 # Decision 2/3).
+#
+# docs/index.md (Home) is the one narrow, deliberate exception to
+# docs/site/ holding every site-only orientation page: MkDocs maps a
+# source page's output path to its path relative to docs_dir, so only a
+# page actually named docs/index.md builds to the site root's own
+# index.html. This is the ordinary MkDocs root-index convention, not a
+# reopening of docs/site/'s information architecture — every other
+# site-only page still lives under docs/site/
+# (specs/006-public-documentation-site/research.md Decision 2).
 
 nav:
-  - Home: site/index.md
+  - Home: index.md
   - Getting Started: site/getting-started.md
   - How Bindle Works: site/how-bindle-works.md
   - Reference:
@@ -32,11 +41,6 @@ theme:
 plugins:
   - search
 
-# The site's bare root has no thin redirect stub to site/index.html by
-# deliberate choice — this is a local/newcomer-facing site with no public
-# root URL yet, so "reachable within a small, bounded number of navigation
-# steps" (FR-007) is satisfied via the nav above, not a root-URL redirect
-# (research.md Decision 2, "implementation-time nuance").
 validation:
   nav:
     omitted_files: warn
