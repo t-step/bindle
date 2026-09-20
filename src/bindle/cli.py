@@ -775,6 +775,41 @@ def _cmd_branch(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_history(args: argparse.Namespace) -> int:
+    # A thin, read-only wrapper: the report itself lives in the package-owned
+    # Git hook dispatcher (docs/DECISIONS.md D048), so `bindle history` and
+    # the pre-push hook can never disagree. Output is captured and re-emitted
+    # so it stays on this process's own stdout/stderr.
+    try:
+        info = get_repo_info()
+    except NotAGitRepositoryError as exc:
+        print(f"bindle history: {exc}", file=sys.stderr)
+        return 1
+
+    dispatcher = _installer_path().parent / "git-hook-dispatch.sh"
+    if not dispatcher.is_file():
+        print(
+            f"bindle history: git hook dispatcher not found at {dispatcher} "
+            "(this Bindle installation is missing a required runtime asset)",
+            file=sys.stderr,
+        )
+        return 1
+
+    command = ["bash", str(dispatcher), "--history"]
+    if args.base:
+        command += ["--base", args.base]
+    if args.ref:
+        command.append(args.ref)
+    # The report echoes repository-controlled text (subjects, paths) that need
+    # not be valid in this locale's encoding; never crash on it.
+    result = subprocess.run(
+        command, cwd=info.worktree_root, capture_output=True, text=True, errors="replace"
+    )
+    sys.stdout.write(result.stdout)
+    sys.stderr.write(result.stderr)
+    return result.returncode
+
+
 def _cmd_repo_info(args: argparse.Namespace) -> int:
     try:
         info = get_repo_info()
@@ -1243,6 +1278,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     branch_parser.add_argument("name", help="Name for the new branch")
 
+    history_parser = subparsers.add_parser(
+        "history",
+        help="Report mechanical history hygiene for a branch (read-only).",
+        description=(
+            "Print the history-hygiene report the pre-push hook prints: BLOCK lines "
+            "for pending fixup!/squash!/amend! commits and non-conforming "
+            "Conventional Commit subjects, WARN/INFO lines for mechanically "
+            "observable churn (tiny, rework-shaped, and test-only commits; "
+            "merge and revert commits; lockfile and repeatedly-touched-file "
+            "churn). Deterministic counts only — no scoring, no semantic "
+            "judgment, and it never modifies history or the working tree. "
+            "Exits 1 if any BLOCK line is printed."
+        ),
+    )
+    history_parser.add_argument(
+        "ref", nargs="?", default=None, help="Branch or commit to report on (default: HEAD)"
+    )
+    history_parser.add_argument(
+        "--base",
+        default=None,
+        help="Ref to measure against (default: bindle.historyBase, else origin/main, else main)",
+    )
+
     skills_parser = subparsers.add_parser(
         "skills",
         help="Manage repository skill kits.",
@@ -1488,6 +1546,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "branch":
         return _cmd_branch(args)
+
+    if args.command == "history":
+        return _cmd_history(args)
 
     if args.command == "skills":
         if args.skills_command == "list":
