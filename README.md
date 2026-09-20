@@ -38,6 +38,7 @@ uv run bindle repo info --json
 * `bindle --version` — deterministic package version.
 * `bindle repo info` — repository/execution/code-state identity (docs/WORKTREES.md): repository root, current worktree root, Git directory, Git common directory, current branch (when attached), and HEAD SHA. Add `--json` for machine-readable output.
 * `bindle branch <name>` — creates a new feature branch off freshly-fetched `origin/main` in its own linked Git worktree, following the development-isolation model in AGENTS.md and docs/WORKTREES.md. `main` itself is left untouched as the clean baseline. Refuses to reuse an existing branch name or worktree path, and refuses to fall back to a stale local `main` if the fetch fails.
+* `bindle history [ref] [--base ref]` — read-only history-hygiene report for a branch (the same one the pre-push hook prints): BLOCK for pending `fixup!`/`squash!`/`amend!` commits and non-conforming Conventional Commit subjects; WARN/INFO counts for mechanically observable churn (tiny, rework-shaped, and test-only commits; merge and revert commits; lockfile and repeatedly-touched-file churn). Deterministic counts only — no scoring, no semantic judgment, never modifies history or the working tree (docs/DECISIONS.md D048).
 
 The CLI stays intentionally small and provider-neutral. It is not an execution/orchestration engine — it never runs a coding agent, a build, or a test itself, and dispatch/execution stay with an external harness such as Symphony (see [How Bindle Works](docs/site/how-bindle-works.md), AGENTS.md, docs/SCOPE.md). What it does durably do is track dependency-ordered coordination state and expose which work is currently schedulable.
 
@@ -78,8 +79,11 @@ interface-only placeholders ahead of later slices:
   `bindle list`, `bindle update`, `bindle upgrade`, `bindle doctor`.
 
 `bindle init`/`bindle remove` manage the repo-local guardrail capability —
-a Git hook layer (protected `main`, hook composition, installed via
-repo-local `core.hooksPath`) and a Claude Code PreToolUse guard plus
+a Git hook layer (protected `main`, a Conventional Commit `commit-msg`
+check that also accepts `fixup!`/`squash!`/`amend!`, a pre-push
+history-hygiene report that blocks unfolded autosquash commits, hook
+composition, installed via repo-local `core.hooksPath`; docs/DECISIONS.md
+D048) and a Claude Code PreToolUse guard plus
 `permissions.deny` hardening (installed into the target repository's own
 `.claude/settings.local.json`) — plus, with `bindle init --projectmem`,
 Projectmem: `--projectmem` ensures Projectmem is initialized for the
@@ -115,7 +119,7 @@ lifecycle commands target the current repository rather than the whole
 machine:
 
 * Global/machine-level: `bindle list` (inventory of repositories that have opted into Bindle), `bindle update` (refresh Bindle's own component/catalog knowledge — never mutates a managed repository), and `bindle migrate-legacy-global` (remove a recognized legacy machine-global guardrail install — never touches an unrelated global value).
-* Repository-targeted (current repository by default): `bindle init`, `bindle remove`, `bindle status`, `bindle upgrade` (upgrade this repository's installed components), `bindle doctor`, and `bindle repo info`.
+* Repository-targeted (current repository by default): `bindle init`, `bindle remove`, `bindle status`, `bindle upgrade` (upgrade this repository's installed components), `bindle doctor`, `bindle repo info`, and `bindle history`.
 
 ## Current workshop
 
