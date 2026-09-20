@@ -255,6 +255,8 @@ It may reduce rediscovery and preserve useful local working context, but durable
 
 Its detailed operating rules live in AGENTS.md.
 
+The projectmem MCP server (read in 0.2.0) resolves its project root from `--root`, then `$PROJECTMEM_ROOT`, then a walk up from its startup directory, and pins that root at startup. Inferred, not exercised: a session that later moves to another linked worktree (D018) keeps writing to the startup root's `.projectmem/`.
+
 ### QMD
 
 QMD (`tobi/qmd`, published as `@tobilu/qmd`) is an optional, repository-scoped local search index over a repository's own durable Markdown — BM25 full-text search always available, vector/hybrid retrieval available once embedding models are pulled explicitly via QMD's own CLI.

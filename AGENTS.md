@@ -50,6 +50,8 @@ Scope and safety
 * Use established repository verification commands.
 * `bash scripts/check.sh` is the canonical repository verification gate. Run it locally before opening a PR, and rerun it before declaring an updated PR ready for review whenever relevant repository changes were made.
 * Do not use GitHub CI as the first execution of a check. GitHub Actions (.github/workflows/ci.yml) reruns `scripts/check.sh` independently on each PR revision as a backstop, not as the first execution of these checks.
+* shellcheck 0.9.0 reports SC2317 where 0.11 reports SC2329 for functions invoked only indirectly, and CI may run an older version than a local install, so test scripts disable both codes. Lint with the older version via `uvx --quiet --from shellcheck-py==0.9.0.6 shellcheck <files>`.
+* Tracked decisions, specs, and tests cite code docstrings by name (for example D036 cites the `qmd.py` module docstring). Grep `docs/`, `specs/`, and `tests/` for such citations before trimming or moving a docstring.
 * Do not commit unless explicitly requested.
 * Do not bypass repository hooks.
 
