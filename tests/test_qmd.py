@@ -38,7 +38,7 @@ _REAL_INDEX_YML_ONE_COLLECTION = """\
 collections:
   repo:
     path: /repo-example/dev/bindle
-    pattern: "{*.md,docs/**/*.md,plans/**/*.md}"
+    pattern: "{*.md,docs/**/*.md,plans/**/*.md,specs/**/*.md}"
 models:
   embed: hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf
   generate: hf:tobil/qmd-query-expansion-1.7B-gguf/qmd-query-expansion-1.7B-q4_k_m.gguf
@@ -61,7 +61,7 @@ collections:
     pattern: "**/*.md"
   repo:
     path: /repo-example/dev/bindle
-    pattern: "{*.md,docs/**/*.md,plans/**/*.md}"
+    pattern: "{*.md,docs/**/*.md,plans/**/*.md,specs/**/*.md}"
 models:
   embed: hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf
 """
@@ -130,12 +130,12 @@ class TestCollectionAddArgs(unittest.TestCase):
             ),
         )
 
-    def test_mask_scopes_to_root_docs_and_plans_only(self):
+    def test_mask_scopes_to_root_docs_plans_and_specs_only(self):
         # Regression guard for the deliberately narrow boundary (module
         # docstring "Collection identity"): this must never silently widen
         # to "every *.md in the tree" (which would sweep in
         # .projectmem/'s own generated Markdown).
-        self.assertEqual(COLLECTION_MASK, "{*.md,docs/**/*.md,plans/**/*.md}")
+        self.assertEqual(COLLECTION_MASK, "{*.md,docs/**/*.md,plans/**/*.md,specs/**/*.md}")
 
 
 class TestQmdInitArgs(unittest.TestCase):

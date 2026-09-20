@@ -115,9 +115,10 @@ reconcile the ignore rule against.
 
 One fixed collection name, `COLLECTION_NAME`, indexing a fixed, narrow
 mask (`COLLECTION_MASK`) of this repository's existing durable Markdown:
-root-level `*.md` (AGENTS.md, CLAUDE.md, PLAN.md, README.md), `docs/`, and
-`plans/`, verified empirically against a fixture reproducing this
-repository's real Markdown layout (including a `src/**/*.md`-style
+root-level `*.md` (AGENTS.md, CLAUDE.md, PLAN.md, README.md), `docs/`,
+`plans/`, and `specs/` (Spec Kit planning authority; D049), verified
+empirically against a fixture reproducing this repository's real Markdown
+layout (including a `src/**/*.md`-style
 decoy, correctly excluded) — a deliberately narrower boundary than "every
 `*.md` in the tree" (excludes `.projectmem/`'s own generated Markdown,
 any future vendored content, and anything outside the durable-knowledge
@@ -206,9 +207,9 @@ COLLECTION_NAME = "repo"
 # 2.8.3, installed separately for the deeper upstream investigation). The
 # brace-form union below was verified to index the correct files under
 # BOTH 2.5.3 and 2.8.3, so it — not the form shown first in the CLI's own
-# README — is what this integration uses. Root-level Markdown, docs/, and
-# plans/ — see module docstring's "Collection identity".
-COLLECTION_MASK = "{*.md,docs/**/*.md,plans/**/*.md}"
+# README — is what this integration uses. Root-level Markdown, docs/,
+# plans/, and specs/ — see module docstring's "Collection identity".
+COLLECTION_MASK = "{*.md,docs/**/*.md,plans/**/*.md,specs/**/*.md}"
 
 # `qmd init` — creates (or, run again, safely leaves alone; verified
 # empirically idempotent) the project-local `.qmd/index.yml` +
