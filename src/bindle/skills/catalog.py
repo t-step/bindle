@@ -1,11 +1,8 @@
 """The skill-kit catalog: the small, fixed set of kits Bindle knows how to manage.
 
-Not a registry, not a remote index — an in-repo dict of the two kits this
-slice supports (docs/DECISIONS.md D035). Each entry pairs a human-facing
-description with the kit module that implements
-`status()`/`add()`/`remove()` for it (software_engineering.py,
-spec_kit.py). Adding a third kit later means adding one more module and
-one more CATALOG entry, not extending a generic plugin/provider framework.
+An in-repo dict, not a registry or remote index (D035). Each entry pairs a
+description with the kit module implementing `status()`/`add()`/`remove()`; a
+new kit is one more module and one more entry, not a plugin framework.
 """
 
 from __future__ import annotations

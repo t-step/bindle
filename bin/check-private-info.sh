@@ -40,12 +40,7 @@ set -uo pipefail # not -e: aggregate every finding, then fail once
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT" || exit 1
 
-# Denylist resolution. An explicit BINDLE_DENYLIST/CLAUDE_KIT_DENYLIST always
-# wins; otherwise the denylist lives at the NOTES HOME ROOT (docs/PRIVACY.md,
-# "Private configuration"). That home is BINDLE_NOTES_DIR when set
-# (deprecated: CLAUDE_KIT_NOTES_DIR), so relocating the notes home — to an
-# Obsidian vault, say — moves the denylist with it. ~/.bindle and ~/.claude-kit
-# are the defaults when no notes home is configured.
+# Explicit override wins; else the denylist follows the notes home (PRIVACY.md).
 if [ -n "${BINDLE_DENYLIST:-}" ]; then
   DENYLIST="$BINDLE_DENYLIST"
 elif [ -n "${CLAUDE_KIT_DENYLIST:-}" ]; then
@@ -60,10 +55,8 @@ else
   DENYLIST="$HOME/.claude-kit/private-denylist.txt"
 fi
 
-# Where a MISSING denylist should be created. This is advertising, not
-# resolution: ~/.claude-kit stays readable above but is never suggested (#289),
-# because a reader who acts on it loses the denylist the moment a notes home is
-# set or moved. An explicit override names itself — you asked for that path.
+# Where to advise creating a MISSING denylist: never ~/.claude-kit (#289), which
+# stops being read once a notes home is set or moved.
 if [ -n "${BINDLE_DENYLIST:-}" ] || [ -n "${CLAUDE_KIT_DENYLIST:-}" ]; then
   DENYLIST_SUGGESTED="$DENYLIST"
 elif [ -n "${BINDLE_NOTES_DIR:-}" ]; then
@@ -74,8 +67,7 @@ else
   DENYLIST_SUGGESTED="$HOME/.bindle/private-denylist.txt"
 fi
 
-# Files allowed to contain the patterns below, because documenting/encoding
-# them is their job. Keep this list short and literal.
+# Files whose job is to document/encode the patterns; keep short and literal.
 SKIP_FILES=(
   ".gitleaks.toml"
   "bin/check-private-info.sh"
@@ -87,8 +79,7 @@ local-home-path	/Users/[A-Za-z][A-Za-z0-9._-]*
 obsidian-vault-path	iCloud~md~obsidian|Mobile Documents/[^ ]*[Oo]bsidian
 chat-transcript	^(Human|Assistant|USER|ASSISTANT): |^You said:|^(ChatGPT|Claude) said:"
 
-# Tracked paths that should never be committed at all (the .gitignore patterns,
-# enforced against force-adds). .env.example is the one allowed exception.
+# Paths never to commit (.gitignore's, enforced vs force-adds); .env.example ok.
 PRIVATE_PATH_RE='(^|/)(\.claude-(private|local|session|scratch)|\.superpowers|notes-private|session-notes|personal-notes)(/|$)|\.private\.md$|\.local\.md$|(^|/)\.scratch\.md$|(^|/)\.env(\.[^/]*)?$'
 
 fail=0
@@ -106,12 +97,8 @@ is_skipped() {
   return 1
 }
 
-# scan_bytes FILE — run every content pattern (and the denylist) over the
-# bytes on stdin, reporting findings labeled as FILE. Lines carrying a
-# 'private-ok' marker are vouched-for and skipped. Content comes from stdin
-# rather than always reading FILE's working-tree copy, so callers can feed
-# it the actual bytes about to be committed (see scan_staged below) instead
-# of whatever happens to be sitting in the working tree at scan time.
+# scan_bytes FILE — scan stdin, labeled FILE, skipping 'private-ok' lines. Stdin
+# lets callers feed the bytes about to be committed, not the working tree.
 scan_bytes() {
   local f="$1" content label re hits
   is_skipped "$f" && return 0
@@ -139,7 +126,6 @@ scan_bytes() {
   fi
 }
 
-# scan_file FILE — scan_bytes fed from FILE's working-tree copy.
 scan_file() {
   local f="$1"
   [ -f "$f" ] || return 0
@@ -147,23 +133,16 @@ scan_file() {
   scan_bytes "$f" <"$f"
 }
 
-# scan_staged FILE — scan_bytes fed from FILE's staged (index) blob: the
-# bytes a commit would actually write, regardless of what the working tree
-# currently holds. Staging private content and then cleaning the working
-# tree before commit must not slip past the guard — this is what closes
-# that gap. A file with no index entry (nothing staged there) scans as
-# empty, which is not a finding.
+# Scans the index blob, so staging private content then cleaning the working
+# tree can't slip past. No index entry scans as empty, which is not a finding.
 scan_staged() {
   local f="$1"
-  # Process substitution, not a pipe: `git show | scan_bytes` would run
-  # scan_bytes in a subshell, and finding()'s fail=1 would never reach the
-  # real scan's fail flag — the exact class of bug scan_verdict's own
-  # subshell isolation (below) is deliberate about, here by accident.
+  # Not a pipe: scan_bytes in a subshell would lose finding()'s fail=1.
   scan_bytes "$f" < <(git show ":$f" 2>/dev/null)
 }
 
-# scan_verdict FILE — echo the fail flag scan_file would set, in isolation.
-# The subshell keeps the fixture verdicts away from the real scan's fail flag.
+# Echoes the fail flag scan_file would set; the subshell isolates it from the
+# real scan's fail flag.
 # shellcheck disable=SC2030,SC2031
 scan_verdict() {
   (
@@ -205,9 +184,7 @@ self_test() {
     printf '  ✗ self-test: denylist.md NOT flagged\n'
     failed=1
   fi
-  # env -u clears the operator's own denylist vars so an ambient BINDLE_DENYLIST
-  # (higher precedence, line ~44) can't shadow the alias under test and produce
-  # a false pass/fail depending on what happens to be exported in this shell.
+  # env -u: an ambient BINDLE_DENYLIST outranks the alias under test.
   if env -u CLAUDE_KIT_DENYLIST BINDLE_DENYLIST="$t/deny.txt" "$0" "$t/denylist.md" >/dev/null 2>&1; then
     printf '  ✗ self-test: BINDLE_DENYLIST alias NOT honored\n'
     failed=1
@@ -241,10 +218,8 @@ self_test() {
   else
     pass=$((pass + 1))
   fi
-  # The denylist follows the NOTES HOME (session-continuity's contract), not a
-  # hardcoded ~/.bindle. These run the real script so the resolution chain — not
-  # just scan_file — is what is under test. `env -u` clears the operator's own
-  # notes-home vars so a real one can't decide a fixture's verdict.
+  # Denylist follows the notes home (session-continuity contract); run the real
+  # script so the resolution chain is under test, env -u drops the operator's.
   mkdir -p "$t/notes" "$t/kitnotes" "$t/nohome"
   cp "$t/deny.txt" "$t/notes/private-denylist.txt"
   cp "$t/deny.txt" "$t/kitnotes/private-denylist.txt"
@@ -262,8 +237,7 @@ self_test() {
   else
     pass=$((pass + 1))
   fi
-  # BINDLE_DENYLIST still outranks the notes home: an empty override must win
-  # over a notes-home denylist that would otherwise flag this fixture.
+  # An empty BINDLE_DENYLIST must outrank a notes-home denylist that would flag.
   if env -u CLAUDE_KIT_DENYLIST -u CLAUDE_KIT_NOTES_DIR \
     BINDLE_DENYLIST=/dev/null BINDLE_NOTES_DIR="$t/notes" \
     "$0" "$t/denylist.md" >/dev/null 2>&1; then
@@ -272,9 +246,7 @@ self_test() {
     printf '  ✗ self-test: BINDLE_DENYLIST no longer outranks BINDLE_NOTES_DIR\n'
     failed=1
   fi
-  # A clean verdict must say whether personal terms were actually checked —
-  # "no denylist loaded" and "denylist loaded, nothing matched" are different
-  # facts and must not print the same line.
+  # A clean verdict must tell "no denylist loaded" from "nothing matched".
   if env -u BINDLE_DENYLIST -u CLAUDE_KIT_DENYLIST -u BINDLE_NOTES_DIR \
     -u CLAUDE_KIT_NOTES_DIR HOME="$t/nohome" "$0" "$t/clean.md" 2>&1 |
     grep -q 'pattern rules only'; then
@@ -291,11 +263,9 @@ self_test() {
     printf '  ✗ self-test: clean verdict does not disclose that a denylist WAS loaded\n'
     failed=1
   fi
-  # The path the message ADVERTISES is where a denylist should be created, not
-  # the deprecated ~/.claude-kit read fallback (#289) — a reader who follows it
-  # must land somewhere that survives setting or moving $BINDLE_NOTES_DIR.
-  # Captured, not piped: with pipefail a `grep -q` that matches early SIGPIPEs
-  # the scanner, and the pipeline then reports 141 even though the match hit.
+  # The advertised path must not be the deprecated ~/.claude-kit (#289).
+  # Captured, not piped: under pipefail an early `grep -q` match SIGPIPEs the
+  # scanner and the pipeline reports 141.
   advice="$(env -u BINDLE_DENYLIST -u CLAUDE_KIT_DENYLIST -u CLAUDE_KIT_NOTES_DIR \
     BINDLE_NOTES_DIR="$t/nohome" HOME="$t/nohome" "$0" "$t/clean.md" 2>&1)"
   if grep -qF "no personal denylist at $t/nohome/private-denylist.txt" <<<"$advice"; then
@@ -312,9 +282,8 @@ self_test() {
     printf '  ✗ self-test: missing-denylist message does not default to ~/.bindle\n'
     failed=1
   fi
-  # A 0-term denylist (a freshly scaffolded comments-only template) must
-  # yield a clean ONE-LINE verdict — `grep -c … || echo 0` prints "0" twice
-  # when the count is 0, splitting the verdict across two lines.
+  # A comments-only denylist must give a ONE-LINE verdict (`grep -c || echo 0`
+  # prints "0" twice on no match).
   printf '# only comments, no terms yet\n' >"$t/deny-empty.txt"
   advice="$(env -u CLAUDE_KIT_DENYLIST -u BINDLE_NOTES_DIR -u CLAUDE_KIT_NOTES_DIR \
     BINDLE_DENYLIST="$t/deny-empty.txt" "$0" "$t/clean.md" 2>&1)"
@@ -350,17 +319,8 @@ if [ "${1:-}" = "--self-test" ]; then
   fi
 fi
 
-# --- denylist audit (#271) --------------------------------------------------
-#
-# The selection rule (docs/PRIVACY.md): a term belongs on the denylist only
-# if it has ZERO UNVOUCHED tracked occurrences, forever — a term that
-# legitimately appears somewhere floods every commit with findings unless
-# that specific occurrence is vouched. This mode proves each term BEFORE it
-# starts doing that, using the same 'private-ok' vouch the normal scan
-# honors: a vouched occurrence proves the term appearing there is a known,
-# accepted false positive, not a reason to distrust the term everywhere.
-# SKIP_FILES still doesn't apply here — a skipped file's content is real
-# tracked content too, just not scanned by the normal sweep.
+# Denylist audit (#271): a term needs ZERO unvouched tracked hits (PRIVACY.md).
+# SKIP_FILES doesn't apply: a skipped file's content is still tracked content.
 if [ "${1:-}" = "--audit-denylist" ]; then
   echo "denylist audit:"
   if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -401,11 +361,6 @@ fi
 
 echo "private-info scan:"
 
-# Scope selection. Three modes:
-#   --staged   the index content a commit would actually write (safe pre-commit
-#              mode — reads git-show'd blobs, never the working tree)
-#   FILE...    explicit working-tree files, caller-scoped
-#   (nothing)  the full tracked tree, working-tree content
 MODE="tree"
 noun="files"
 SCAN_FILES=()
@@ -416,8 +371,7 @@ if [ "${1:-}" = "--staged" ]; then
     echo "  ✗ not inside a git repository — nothing staged to scan"
     exit 1
   fi
-  # mapfile/readarray is bash 4+; the macOS system /usr/bin/env bash this
-  # script's shebang can resolve to is still 3.2, so build the array by hand.
+  # mapfile is bash 4+ but macOS system bash is 3.2: build the array by hand.
   while IFS= read -r f; do
     SCAN_FILES+=("$f")
   done < <(git diff --cached --name-only --diff-filter=ACMRT)
@@ -430,7 +384,6 @@ else
   done < <(git ls-files)
 fi
 
-# --- 1. no private-by-path files are in scope -------------------------------
 if [ "${#SCAN_FILES[@]}" -gt 0 ]; then
   path_hits="$(printf '%s\n' "${SCAN_FILES[@]}" | grep -E "$PRIVATE_PATH_RE" | grep -v '\.env\.example$' || true)"
 else
@@ -442,20 +395,13 @@ if [ -n "$path_hits" ]; then
   done <<<"$path_hits"
 fi
 
-# --- 2. content patterns + denylist ----------------------------------------
-#
-# SCOPE, not just verdict (#347). The tree-mode enumeration above is
-# `git ls-files`, so an UNTRACKED file is outside this scan entirely — and
-# "no private info found" reads identically whether the tree was clean or the
-# files under test were simply invisible. PR #345 shipped three home-path
-# hits through exactly that gap: green before `git add`, red after. Ignored
-# files are out of scope by intent and are not counted; a banner that is
-# always on is never read.
+# Tree mode is `git ls-files`, so untracked files are invisible and a clean
+# verdict can hide that (#347; PR #345 shipped home-path hits that way).
+# Ignored files are out of scope by intent; an always-on banner is never read.
 scanned=0
 SKIPPED=""
-# bash <4.4 (still the macOS system /usr/bin/env bash on some machines) treats
-# "${arr[@]}" on a zero-element array as unbound under set -u; guard the
-# expansion rather than drop set -u.
+# bash <4.4 treats "${arr[@]}" on an empty array as unbound under set -u; guard
+# the expansion rather than drop set -u.
 if [ "${#SCAN_FILES[@]}" -gt 0 ]; then
   for f in "${SCAN_FILES[@]}"; do
     if [ "$MODE" = "staged" ]; then
@@ -467,17 +413,14 @@ if [ "${#SCAN_FILES[@]}" -gt 0 ]; then
   done
 fi
 if [ "$MODE" = "tree" ]; then
-  # staged and explicit-file mode: the scope IS the enumerated list, so
-  # there is nothing undisclosed to report.
+  # Staged/explicit modes scan exactly the enumerated list: nothing undisclosed.
   SKIPPED="$(git ls-files --others --exclude-standard)"
 fi
 
-# Whether personal terms were checked at all is part of the verdict: a clean
-# run with no denylist proves the PATTERNS held, not that your personal terms
-# were absent. Never let those two print the same line.
+# A clean run with no denylist proves only the PATTERNS held; never print it
+# like one with a denylist loaded.
 if [ -f "$DENYLIST" ]; then
-  # Not `|| echo 0`: grep -c already prints 0 (and exits 1) on no match, so
-  # the fallback would print a SECOND 0 and split the verdict across lines.
+  # Not `|| echo 0`: grep -c already prints 0 on no match, so it prints twice.
   denylist_terms="$(grep -cvE '^[[:space:]]*(#|$)' "$DENYLIST" 2>/dev/null)"
   [ -n "$denylist_terms" ] || denylist_terms=0
   DENYLIST_VERDICT="$denylist_terms denylist terms checked"
@@ -488,8 +431,7 @@ else
   echo "    else ~/.bindle — or point \$BINDLE_DENYLIST at it directly"
 fi
 
-# Scope banner. Prints on a red run too: fixing the findings must not silently
-# promote a partial scan into an unqualified pass.
+# Prints on a red run too: fixing findings must not promote a partial scan.
 if [ -n "$SKIPPED" ]; then
   skipped_n="$(grep -c . <<<"$SKIPPED")"
   echo

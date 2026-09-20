@@ -68,10 +68,6 @@ class TestStatus(unittest.TestCase):
         self.assertEqual(status.codex, "not-installed")
 
     def test_status_command_failure_reports_unavailable_not_not_installed(self):
-        # A provider error ("I could not determine state") must never be
-        # silently collapsed into "state is absent" — .specify/ existing
-        # but the native status command failing is a real "can't tell",
-        # reported as `unavailable` on both harnesses.
         os.makedirs(os.path.join(self.repo, ".specify"))
 
         def fake_run(cmd, **kwargs):
@@ -100,13 +96,8 @@ class TestStatus(unittest.TestCase):
         self.assertEqual(status.codex, "unavailable")
 
     def test_status_trusts_valid_installed_integrations_even_on_nonzero_exit(self):
-        # Real, verified specify behavior: `integration status --json`
-        # exits 1 once every integration has been removed
-        # (.specify/integration.json missing), but still emits a
-        # well-formed installed_integrations: [] — a genuine "zero
-        # installed" answer, not a failed query. Exit-code gating would
-        # misreport this as `unavailable`; the correct report is
-        # `not-installed` for both harnesses.
+        # Real specify exits 1 once every integration is gone, yet emits `[]`.
+        # Exit-code gating would misreport this as `unavailable`.
         os.makedirs(os.path.join(self.repo, ".specify"))
 
         def fake_run(cmd, **kwargs):
@@ -225,9 +216,6 @@ class TestAddRemoveMocked(unittest.TestCase):
         self.assertTrue(all("already not installed" in line for line in outcome.lines))
 
     def test_remove_refuses_and_preserves_state_when_specify_dir_present_but_binary_missing(self):
-        # .specify/ existing but no `specify` binary means removal cannot
-        # be safely performed — this must never report success/"nothing
-        # to remove" while leaving real integration state untouched.
         os.makedirs(os.path.join(self.repo, ".specify"))
 
         with mock.patch.object(sk, "_specify_executable", return_value=None), mock.patch(
@@ -254,10 +242,7 @@ class TestAddRemoveMocked(unittest.TestCase):
         self.assertTrue(all("unavailable" in line for line in outcome.lines))
 
     def test_install_one_does_not_crash_when_status_check_fails(self):
-        # _installed_integrations() returning None (a failed status
-        # check) must not crash `key in None` inside _install_one — it
-        # should just attempt the install rather than assume "already
-        # installed".
+        # A None status must not crash `key in None`; attempt the install.
         os.makedirs(os.path.join(self.repo, ".specify"))
         calls = []
 
@@ -281,10 +266,7 @@ class TestAddRemoveMocked(unittest.TestCase):
 
 @unittest.skipUnless(_HAS_REAL_SPECIFY, "specify CLI not installed")
 class TestRealSpecifyIntegration(unittest.TestCase):
-    """Exercises the real `specify` CLI. Confirmed empirically (this
-    session) that `specify` operates entirely within the target
-    directory (`--here`) and touches no global/user-level state, so no
-    isolation env override is needed here — unlike the Claude harness."""
+    """Real `specify` CLI; it stays within `--here`, so needs no isolation."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -314,13 +296,8 @@ class TestRealSpecifyIntegration(unittest.TestCase):
         self.assertTrue(all("already installed" in line for line in second.lines))
 
     def test_add_from_a_linked_worktree_is_worktree_local_since_specify_leaves_its_output_untracked(self):
-        # `specify init`/`specify integration install` create .specify/,
-        # .claude/skills/speckit-*, and .agents/skills/speckit-* as
-        # UNTRACKED files (confirmed empirically this session) — Spec
-        # Kit's own choice, not Bindle's. Untracked content is
-        # worktree-local (docs/WORKTREES.md), so a sibling linked
-        # worktree genuinely does not see it unless the repository
-        # commits it itself. Bindle does not force that decision.
+        # Spec Kit leaves .specify/ and speckit-* untracked: worktree-local.
+        # Bindle doesn't force committing them (docs/WORKTREES.md).
         wt_path = os.path.join(self.tmp.name, "wt")
         _run(["git", "worktree", "add", "-b", "wt-branch", wt_path], self.repo)
         wt_info = get_repo_info(wt_path)
@@ -328,14 +305,10 @@ class TestRealSpecifyIntegration(unittest.TestCase):
         sk.add(self.info)
         self.assertEqual(sk.status(self.info), sk.KitStatus(claude="installed", codex="installed"))
 
-        # The sibling worktree runs `specify` from ITS OWN directory, and
-        # correctly reports no adoption there — it never crashes or
-        # misattributes the main checkout's state (`.git` being a file,
-        # not a directory, in a linked worktree does not confuse it).
+        # The sibling reports no adoption from its dir despite its `.git` file.
         status = sk.status(wt_info)
         self.assertEqual(status, sk.KitStatus(claude="not-installed", codex="not-installed"))
 
-        # Adding it independently from the worktree works correctly too.
         wt_outcome = sk.add(wt_info)
         self.assertTrue(wt_outcome.ok, wt_outcome.lines)
         self.assertEqual(sk.status(wt_info), sk.KitStatus(claude="installed", codex="installed"))

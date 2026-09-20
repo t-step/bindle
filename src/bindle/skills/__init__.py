@@ -1,11 +1,9 @@
 """Skill kits: repository-scoped adoption of agent-facing skill collections.
 
-A skill kit is a named collection of agent-facing skills/capabilities
-Bindle can make available to Claude Code and Codex through each harness's
-own native mechanism (docs/DECISIONS.md D035). This package is the third
-lifecycle specimen after repo-local guardrails and Projectmem — see
-`catalog.py` for the fixed, tiny set of known kits and `config.py` for
-where a repository's desired kits are recorded.
+A kit is a named collection of agent-facing skills Bindle makes available to
+Claude Code and Codex through each harness's native mechanism (D035).
+`catalog.py` holds the fixed set of known kits; `config.py` records a
+repository's desired kits.
 """
 
 from __future__ import annotations

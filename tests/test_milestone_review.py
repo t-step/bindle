@@ -11,10 +11,7 @@ from bindle import milestone_review, work_ledger
 
 
 class LedgerTestCase(unittest.TestCase):
-    """Mirrors tests/test_work_ledger.py's own `LedgerTestCase` fixture: a
-    temp directory standing in for a repository's Git common-directory-
-    resolved `repo_root` (`RepoInfo.repo_root`) — this module never itself
-    shells out to Git, so no real repository is needed."""
+    """Mirrors test_work_ledger's `LedgerTestCase`; no Git repo needed."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -45,9 +42,7 @@ class LedgerTestCase(unittest.TestCase):
 
 
 class TestReviewMilestone(LedgerTestCase):
-    """T008 (US1): review_milestone() rejects not-found/not-a-milestone
-    ids, reports the specific unmet readiness condition when not ready,
-    and never disagrees with a direct is_review_ready() call (SC-001)."""
+    """T008 (US1, SC-001): review_milestone() errors and readiness detail."""
 
     def test_not_found_is_rejected(self):
         result = milestone_review.review_milestone(self.ledger, "does-not-exist")
@@ -88,8 +83,7 @@ class TestReviewMilestone(LedgerTestCase):
         )
 
     def test_blocking_ids_names_every_still_blocking_dependency(self):
-        # spec.md Acceptance Scenario US1.4: "identifies the blocking
-        # dependency" — not just a boolean.
+        # spec.md US1.4: identifies the blocking dependency, not just a boolean.
         self._create_task("Blocker-1")
         self._create_task("Blocker-2")
         self._create_milestone("M-1")
@@ -137,8 +131,6 @@ class TestReviewMilestone(LedgerTestCase):
         self.assertEqual(
             result.view.review_ready, self.ledger.is_review_ready(milestone_id)
         )
-
-    # -- T014 (US2): evidence, blocking, and claim detail on the view --
 
     def test_child_with_multiple_evidence_kinds_lists_every_pointer(self):
         self._create_milestone("M-1")
@@ -192,9 +184,7 @@ class TestReviewMilestone(LedgerTestCase):
 
 
 class TestListMilestones(LedgerTestCase):
-    """T009 (US1): list_milestones() enumerates only milestones, in
-    list_work_items()'s own id order, each with correct status/
-    review_ready."""
+    """T009 (US1): list_milestones() returns only milestones, in id order."""
 
     def test_empty_ledger_returns_empty_list(self):
         self.assertEqual(milestone_review.list_milestones(self.ledger), [])
@@ -227,9 +217,7 @@ class TestListMilestones(LedgerTestCase):
 
 
 class TestEnterReviewClaimRelease(LedgerTestCase):
-    """T016 (US3): enter_review()/claim_milestone()/release_milestone()
-    are thin, type-checked wrappers delegating directly to
-    mark_in_review()/claim()/release_claim() — no new arbitration."""
+    """T016 (US3): the milestone wrappers delegate to the ledger primitives."""
 
     def test_enter_review_succeeds_only_when_ready_and_open(self):
         self._create_milestone("M-1")
@@ -309,11 +297,7 @@ class TestEnterReviewClaimRelease(LedgerTestCase):
 
 
 class TestAcceptDecline(LedgerTestCase):
-    """T020 (US4): accept()/decline() are guarded transitions that
-    optionally record a rationale-locator evidence pointer only after
-    the transition itself succeeds (FR-010), with the transition and the
-    rationale recording as two separately committed operations
-    (FR-010a)."""
+    """T020 (US4, FR-010, FR-010a): guarded accept()/decline() transitions."""
 
     def _in_review_milestone(self, milestone_id="M-1", child_id="T-1"):
         self._ready_milestone(milestone_id, child_id)
@@ -471,10 +455,7 @@ class TestAcceptDecline(LedgerTestCase):
 
 
 class TestMilestoneOnlyGuard(LedgerTestCase):
-    """T024 (US5): every function this module adds rejects a `task` id
-    with `not_a_milestone` and leaves the task's own record, evidence,
-    and claim state completely unchanged — the mirror of
-    task-write-surface.md's "categorically rejected" milestone guard."""
+    """T024 (US5): milestone functions reject a task id and change nothing."""
 
     def test_every_function_rejects_a_task_id_without_side_effects(self):
         self._create_task("T-1")

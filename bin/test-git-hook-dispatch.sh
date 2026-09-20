@@ -10,9 +10,7 @@
 #
 set -uo pipefail
 
-# Same gotcha as bin/test-check-private-info.sh: under a git hook, git
-# exports GIT_DIR and friends to subprocesses; a fixture git call would
-# otherwise hit the real invoking repository.
+# Under a git hook, exported GIT_DIR would aim fixture git at the real repo.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -54,7 +52,6 @@ new_fixture() {
   "$INSTALLER" --apply --git-only --repo "$FIX" >/dev/null
 }
 
-# ===========================================================================
 echo "install:"
 new_fixture
 check "install --apply --git-only --repo installs repo-locally" bash -c \
@@ -63,7 +60,6 @@ check "install --apply is idempotent" "$INSTALLER" --apply --git-only --repo "$F
 check "the global core.hooksPath was never touched" bash -c \
   '! git config --global --get core.hooksPath >/dev/null 2>&1'
 
-# ===========================================================================
 echo "opt-in boundary: a repository that never ran the installer is unaffected:"
 
 UNOPTED="$TMP/unopted-repo"
@@ -83,7 +79,6 @@ check "a direct commit on 'main' in the never-opted-in repo is NOT blocked" bash
 check "the never-opted-in repo has no local core.hooksPath" bash -c \
   "! git -C '$UNOPTED' config --local --get core.hooksPath >/dev/null 2>&1"
 
-# ===========================================================================
 echo "protected-main boundaries:"
 
 # shellcheck disable=SC2317,SC2329
@@ -133,7 +128,6 @@ git -C "$FIX" commit -q -m "ff commit"
 git -C "$FIX" switch -q main
 check "fast-forward sync of main is allowed" git -C "$FIX" merge -q --ff-only ff-src
 
-# ===========================================================================
 echo "mutation-path coverage (verified, not assumed):"
 
 git -C "$FIX" switch -q -c cp-src main
@@ -186,7 +180,6 @@ noverify_blocked() (
 )
 check "'git commit --no-verify' does not bypass the guard on main" noverify_blocked
 
-# ===========================================================================
 echo "a brand-new repository's first commit is not blocked (unborn main):"
 
 NEWREPO="$TMP/brand-new-repo"
@@ -197,7 +190,6 @@ echo one >"$NEWREPO/f.txt"
 git -C "$NEWREPO" add f.txt
 check "the very first commit on a fresh 'main' is allowed" git -C "$NEWREPO" commit -q -m init
 
-# ===========================================================================
 echo "composition: repository-local hooks still fire through Bindle's repo-local layer:"
 
 COMPOSE_LOG="$TMP/native-hooks-fired.log"
@@ -227,7 +219,6 @@ check "repository's own post-commit still fires through the repo-local layer" \
 check "repository's own pre-commit still fires through the repo-local layer" \
   grep -q "^FIRED:pre-commit" "$COMPOSE_LOG"
 
-# Exit-code preservation: a rejecting native hook must still block the commit.
 cat >"$FIX/.git/hooks/pre-commit" <<'EOF'
 #!/bin/sh
 exit 7
@@ -243,7 +234,6 @@ native_rejection_propagates() (
 check "a rejecting repository-local pre-commit hook still blocks the commit" native_rejection_propagates
 rm -f "$FIX/.git/hooks/pre-commit" "$FIX/.git/hooks/commit-msg" "$FIX/.git/hooks/post-commit" "$FIX/.git/hooks/post-merge"
 
-# ===========================================================================
 echo "installer safety:"
 
 git -C "$FIX" config --local core.hooksPath /some/other/hook/manager
@@ -255,7 +245,6 @@ check "the conflicting repo-local core.hooksPath is left untouched" bash -c \
 git -C "$FIX" config --local --unset core.hooksPath
 "$INSTALLER" --apply --git-only --repo "$FIX" >/dev/null
 
-# ===========================================================================
 echo "linked worktree: repo-local config is shared through the common directory:"
 
 git -C "$FIX" switch -q -c side-branch main
@@ -275,7 +264,6 @@ git -C "$FIX" worktree remove -f "$WT"
 git -C "$FIX" switch -q main
 git -C "$FIX" branch -D side-branch >/dev/null
 
-# ===========================================================================
 echo "uninstall:"
 
 "$INSTALLER" --uninstall --git-only --repo "$FIX" >/dev/null
@@ -287,6 +275,5 @@ check "uninstall never touched the global core.hooksPath" bash -c \
   '! git config --global --get core.hooksPath >/dev/null 2>&1'
 "$INSTALLER" --apply --git-only --repo "$FIX" >/dev/null
 
-# ===========================================================================
 printf '\n  git-hook-dispatch: %d/%d checks passed\n' "$pass" "$((pass + fail))"
 exit "$fail"

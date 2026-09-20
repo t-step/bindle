@@ -61,14 +61,8 @@ def _chdir(path):
 
 
 def _normalize_ws(text):
-    # argparse wraps description/help text to the terminal width, so a
-    # multi-sentence description can gain line breaks mid-phrase. Compare
-    # on whitespace-normalized text so wrapping never causes a spurious
-    # mismatch. argparse's wrapping can also break a hyphenated word (e.g.
-    # `migrate-legacy-global`) across the line boundary; collapse a
-    # trailing hyphen's following whitespace first so that split doesn't
-    # reintroduce a space no hyphenated word in this CLI's help text
-    # actually has.
+    # argparse wraps help text to terminal width, even mid-hyphenated-word
+    # (`migrate-legacy-global`); normalize so wrapping never mismatches.
     return " ".join(re.sub(r"-\s+", "-", text).split())
 
 
@@ -157,8 +151,6 @@ class TestTopLevelHelpSurface(unittest.TestCase):
                 self.assertEqual(cm.exception.code, 0)
                 text = out.getvalue()
                 self.assertIn(f"usage: bindle {name}", text)
-                # The command's own --help must show its full description,
-                # not merely the usage line.
                 self.assertIn(_normalize_ws(description), _normalize_ws(text))
 
 
@@ -166,14 +158,8 @@ _ANSI_ESCAPE_RE = re.compile(r"\x1b\[")
 
 
 class TestHelpOutputIsPlainText(unittest.TestCase):
-    # Python 3.14 made argparse.ArgumentParser(color=True) the default —
-    # a styling policy Bindle never opted into (every other CLI surface
-    # is deterministic plain text). _BindleArgumentParser forces it off.
-    # PYTHON_COLORS=1 forces `_colorize.can_colorize()` to return True
-    # unconditionally (verified against the installed argparse/_colorize
-    # source this session), so this test cannot pass merely because
-    # stdout isn't attached to a terminal — only because `color` is
-    # actually False on every parser/subparser instance.
+    # Python 3.14 defaults argparse color=True; Bindle's parser forces it off.
+    # PYTHON_COLORS=1 forces can_colorize(), so non-TTY can't mask a regression.
     def _help_text_forced_color(self, argv):
         out = io.StringIO()
         with mock.patch.dict(os.environ, {"PYTHON_COLORS": "1"}):
@@ -194,21 +180,14 @@ class TestHelpOutputIsPlainText(unittest.TestCase):
                 self.assertIsNone(_ANSI_ESCAPE_RE.search(text), text)
 
     def test_nested_subparser_help_has_no_ansi_escapes(self):
-        # Two levels of nesting (skills -> add), the deepest subparser
-        # this CLI has — proves add_subparsers()'s parser_class
-        # propagation actually reaches nested subparsers, not just the
-        # top level.
+        # skills -> add is the deepest nesting; checks parser_class propagation.
         for argv in (["repo", "info", "--help"], ["skills", "--help"], ["skills", "add", "--help"]):
             with self.subTest(argv=argv):
                 text = self._help_text_forced_color(argv)
                 self.assertIsNone(_ANSI_ESCAPE_RE.search(text), text)
 
     def test_subparser_instances_use_the_bindle_parser_class(self):
-        # A direct structural check, not just a behavioral one: every
-        # subparser argparse constructs must actually be
-        # _BindleArgumentParser, confirming add_subparsers()'s
-        # parser_class default (type(self)) is doing the propagation —
-        # not merely that color happens to end up False some other way.
+        # Structural check: every subparser must be a _BindleArgumentParser.
         from bindle.cli import _BindleArgumentParser, build_parser
 
         parser = build_parser()
@@ -223,10 +202,7 @@ class TestHelpOutputIsPlainText(unittest.TestCase):
 
 
 class TestGlobalVsRepositoryContract(unittest.TestCase):
-    # Regression coverage for the documented split: `list`/`update` are
-    # global/machine-level, everything else (init/remove/status/upgrade/
-    # doctor/repo info) targets the current repository, with `upgrade`
-    # specifically repository-targeted by default (no fleet-wide mutation).
+    # list/update are global; all else (upgrade too) targets the current repo.
     def _help_text(self, argv):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
@@ -270,9 +246,6 @@ class TestUnimplementedLifecycleCommands(unittest.TestCase):
                 self.assertEqual(out.getvalue(), "")
 
     def test_stubs_do_not_shell_out(self):
-        # Regression guard: an unimplemented command must not invoke any
-        # script or installer (e.g. scripts/doctor.sh) on its way to
-        # reporting "not implemented yet".
         with mock.patch("subprocess.run", side_effect=AssertionError("must not shell out")):
             for name in _STILL_UNIMPLEMENTED:
                 with self.subTest(command=name):
@@ -286,11 +259,7 @@ _REAL_SUBPROCESS_RUN = subprocess.run
 
 
 def _intercept_installer_call(on_installer_call):
-    # get_repo_info() legitimately shells out to `git` on the way to
-    # resolving init/remove's target repository — only the installer
-    # invocation itself (`["bash", ".../install-guardrails.sh", ...]`)
-    # should be faked or forbidden, so real `git` calls always pass
-    # through unmodified.
+    # get_repo_info() really runs git; only the installer call is faked.
     def fake_run(cmd, **kwargs):
         if cmd and cmd[0] == "bash":
             return on_installer_call(cmd)
@@ -300,9 +269,6 @@ def _intercept_installer_call(on_installer_call):
 
 
 class TestGuardrailLifecycleCommands(unittest.TestCase):
-    # `init`/`remove` are the one real lifecycle behavior so far: driving
-    # bin/install-guardrails.sh's Git layer, scoped to the current
-    # repository, via --git-only --repo <worktree root>.
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = os.path.join(self.tmp.name, "repo")
@@ -326,9 +292,7 @@ class TestGuardrailLifecycleCommands(unittest.TestCase):
         self.assertEqual(cmd[0], "bash")
         self.assertTrue(cmd[1].endswith("_bin/install-guardrails.sh"))
         self.assertEqual(cmd[2], "--apply")
-        # Both layers are repo-scoped now, so init/remove no longer need
-        # --git-only to avoid also toggling a separately-scoped global
-        # Claude layer — that layer doesn't exist anymore.
+        # Both layers are repo-scoped, so neither --git-only nor --claude-only.
         self.assertNotIn("--git-only", cmd)
         self.assertNotIn("--claude-only", cmd)
         self.assertIn("--repo", cmd)
@@ -371,9 +335,7 @@ class TestGuardrailLifecycleCommands(unittest.TestCase):
             os.rmdir(outside)
 
     def test_init_passes_bindle_python_env_for_the_installer(self):
-        # settings_json.py (the Claude-layer JSON helper) must run under
-        # the exact interpreter already running `bindle` itself — no
-        # external JSON tool (jq) is required. See _installer_env().
+        # settings_json.py must run under bindle's interpreter; no jq needed.
         captured = {}
 
         def fake_run(cmd, **kwargs):
@@ -405,8 +367,7 @@ class TestGuardrailLifecycleCommands(unittest.TestCase):
 
 
 class TestMigrateLegacyGlobalCommand(unittest.TestCase):
-    # `migrate-legacy-global` is global/machine-level: unlike init/remove,
-    # it does not resolve a current repository and passes no --repo.
+    # Global: unlike init/remove, resolves no repo and passes no --repo.
     def test_invokes_the_installer_with_remove_legacy_global(self):
         captured = {}
 
@@ -477,9 +438,7 @@ class TestMigrateLegacyGlobalCommand(unittest.TestCase):
 
 
 def _intercept_installer_calls(on_installer_call):
-    # Like _intercept_installer_call, but for commands (status) that shell
-    # out to the installer more than once per invocation — collects every
-    # `["bash", ".../install-guardrails.sh", ...]` call in order.
+    # Like _intercept_installer_call, but records every call in order.
     calls = []
 
     def fake_run(cmd, **kwargs):
@@ -492,14 +451,8 @@ def _intercept_installer_calls(on_installer_call):
 
 
 class TestStatusCommand(unittest.TestCase):
-    # `bindle status` (read-only) drives detect_git_guardrails/
-    # detect_claude_guardrails (guardrails.py), each a separate
-    # install-guardrails.sh --status invocation scoped to one layer via
-    # --git-only/--claude-only. See tests/test_guardrails.py for the
-    # detector functions' own real-fixture coverage, and
-    # bin/test-guardrail-status.sh for the full five-state matrix at the
-    # installer level — this class covers the CLI wiring and output
-    # formatting.
+    # Wiring/formatting only; detectors: tests/test_guardrails.py,
+    # five-state matrix: bin/test-guardrail-status.sh.
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = os.path.join(self.tmp.name, "repo")
@@ -534,7 +487,6 @@ class TestStatusCommand(unittest.TestCase):
             self.assertIn("--status", cmd)
             self.assertIn("--repo", cmd)
             self.assertEqual(cmd[cmd.index("--repo") + 1], os.path.realpath(self.repo))
-            # Genuinely read-only: never any mutation/migration mode flag.
             self.assertNotIn("--apply", cmd)
             self.assertNotIn("--uninstall", cmd)
             self.assertNotIn("--remove-legacy-global", cmd)
@@ -621,9 +573,6 @@ class TestStatusCommand(unittest.TestCase):
         self.assertIn("something broke", err.getvalue())
 
     def test_real_end_to_end_reflects_init_and_remove_with_no_mutation(self):
-        # No mocking: proves the whole `bindle status` -> guardrails.py ->
-        # install-guardrails.sh --status chain against a real repository,
-        # and that status itself never changes what it reports.
         out = io.StringIO()
         with _chdir(self.repo), contextlib.redirect_stdout(out):
             code = main(["status"])
@@ -631,7 +580,6 @@ class TestStatusCommand(unittest.TestCase):
         self.assertIn("Git       not-installed", out.getvalue())
         self.assertIn("Claude    not-installed", out.getvalue())
 
-        # Repeating it changes nothing (still not-installed).
         out2 = io.StringIO()
         with _chdir(self.repo), contextlib.redirect_stdout(out2):
             main(["status"])
@@ -658,9 +606,6 @@ class TestStatusCommand(unittest.TestCase):
         self.assertIn("Claude    not-installed", out4.getvalue())
 
     def test_projectmem_row_not_installed_by_default(self):
-        # No mocking of the guardrail installer here: proves the real
-        # detect_projectmem wiring against a repository with no
-        # .projectmem/ directory at all.
         out = io.StringIO()
         with _chdir(self.repo), contextlib.redirect_stdout(out):
             code = main(["status"])
@@ -681,8 +626,6 @@ class TestStatusCommand(unittest.TestCase):
         self.assertIn("Projectmem  installed", out.getvalue())
 
     def test_mixed_guardrail_and_projectmem_rendering(self):
-        # Guardrails partially installed, Projectmem not installed at all —
-        # each row renders its own independently observed state.
         _, patch = _intercept_installer_calls(self._fake_status_output(git="installed", claude="partial"))
         out = io.StringIO()
         with _chdir(self.repo), patch, contextlib.redirect_stdout(out):
@@ -761,11 +704,8 @@ class TestStatusCommand(unittest.TestCase):
 
 
 class TestHistoryCommand(unittest.TestCase):
-    # `bindle history` is a thin wrapper over the dispatcher's `--history`
-    # mode (the report itself is exercised exhaustively by
-    # bin/test-history-hygiene.sh); these tests pin the wrapper's contract:
-    # stream routing, exit status, argument pass-through, and that it stays
-    # read-only.
+    # Thin wrapper over the dispatcher's --history (report tested in
+    # bin/test-history-hygiene.sh); pins streams, exit status, read-only.
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = os.path.join(self.tmp.name, "repo")
@@ -884,11 +824,7 @@ class TestHistoryCommand(unittest.TestCase):
 
 
 class TestBranchCommand(unittest.TestCase):
-    # `bindle branch <name>` closes the "forking gap": a single command
-    # that creates an isolated worktree + branch off freshly-fetched
-    # origin/main, rather than a raw multi-step git dance that can silently
-    # branch off stale local main (see docs/DECISIONS.md, the forking-gap
-    # design discussion this implements).
+    # Forking gap (DECISIONS.md): branch off fresh origin/main, not stale main.
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.remote = os.path.join(self.tmp.name, "remote")
@@ -916,9 +852,7 @@ class TestBranchCommand(unittest.TestCase):
         ).stdout.strip()
 
     def test_creates_worktree_off_fresh_origin_main_not_stale_local_main(self):
-        # Advance the remote's main without ever updating the local clone's
-        # own main, so a naive "branch off local main" would silently pick
-        # up stale history.
+        # Advance only the remote's main: local main is stale by construction.
         with open(os.path.join(self.remote, "NEW.md"), "w") as f:
             f.write("advance\n")
         _run(["git", "add", "NEW.md"], self.remote)
@@ -996,16 +930,8 @@ class TestBranchCommand(unittest.TestCase):
 
 
 class TestInitLedgerAndSymphonyProvisioning(unittest.TestCase):
-    # `bindle init` unconditionally provisions Bindle's own SQLite work
-    # ledger and its published, empty, current Symphony-readable projection
-    # (docs/DECISIONS.md D043) — unlike --projectmem/--qmd, no flag gates
-    # this: it is Bindle's own substrate, not a third-party provider. These
-    # tests prove the actual product behavior (schema objects exist, zero
-    # semantic work state, idempotent, existing ledger contents survive a
-    # rerun, an older valid schema is migrated forward), not just that
-    # `WorkLedger.ensure_schema()`/`symphony_projection.publish()` exist in
-    # isolation — that unit-level coverage already lives in
-    # test_work_ledger.py/test_symphony_projection.py.
+    # init always provisions the ledger and projection (D043); no flag gates it.
+    # Unit coverage: test_work_ledger.py, test_symphony_projection.py.
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = os.path.join(self.tmp.name, "repo")
@@ -1091,8 +1017,7 @@ class TestInitLedgerAndSymphonyProvisioning(unittest.TestCase):
 
         info = get_repo_info(self.repo)
         ledger = WorkLedger(info.repo_root)
-        # A normal ledger-touching command works right away — no separate
-        # schema/bootstrap step of its own is needed after `bindle init`.
+        # No separate bootstrap step is needed after init.
         ledger.create_work_item(
             id="T-1",
             title="First task",
@@ -1101,8 +1026,7 @@ class TestInitLedgerAndSymphonyProvisioning(unittest.TestCase):
         )
         self.assertIsNotNone(ledger.get_work_item("T-1"))
 
-        # The coordinator/Symphony projection opens and queries directly,
-        # with no special-cased first-run initialization of its own.
+        # The projection opens and queries with no first-run initialization.
         proj_path = symphony_projection.projection_path(info.repo_root)
         conn = sqlite3.connect(proj_path)
         try:
@@ -1265,20 +1189,14 @@ class TestInitLedgerAndSymphonyProvisioning(unittest.TestCase):
         with _chdir(worktree):
             self.assertEqual(main(["init"]), 0)
 
-        # Storage resolves to the shared Git common directory (the main
-        # checkout), never the linked worktree's own directory — every
-        # linked worktree must see the same ledger.
+        # Storage is in the Git common dir, so all worktrees share one ledger.
         self.assertTrue(os.path.isfile(self._ledger_path()))
         self.assertFalse(
             os.path.exists(os.path.join(worktree, ".bindle-work", "ledger.sqlite3"))
         )
 
     def test_init_with_qmd_flag_also_provisions_the_ledger(self):
-        # --projectmem/--qmd remain opt-in provider layers; the ledger and
-        # projection are not gated behind either — this seeds `.qmd/` as
-        # already-ready (mirrors TestInitQmdFlag's own
-        # test_qmd_flag_is_noop_when_already_ready) so this test needs no
-        # real `qmd` CLI and stays focused on the ledger/projection outcome.
+        # Seeds .qmd/ as ready (as TestInitQmdFlag does): no real qmd needed.
         qmd_dir = os.path.join(self.repo, ".qmd")
         os.makedirs(qmd_dir)
         with open(os.path.join(qmd_dir, "index.yml"), "w") as f:
@@ -1300,14 +1218,9 @@ class TestInitLedgerAndSymphonyProvisioning(unittest.TestCase):
 
 
 class TestInitLedgerLocalIgnoreAndCollisionSafety(unittest.TestCase):
-    # Follow-up to TestInitLedgerAndSymphonyProvisioning above: `bindle
-    # init` must also (1) locally ignore exactly the two canonical
-    # coordination-artifact SQLite files and their WAL/SHM/journal
-    # sidecars, via the repository's machine-local
-    # `<git-common-dir>/info/exclude` (never the tracked `.gitignore`,
-    # never a broader `.bindle-work/` rule), and (2) refuse cleanly,
-    # before any mutation, when either canonical path is already tracked
-    # in Git or occupied by an unrecognizable foreign file.
+    # init excludes exactly the two SQLite files and sidecars via info/exclude,
+    # never .gitignore, and refuses before mutating if either path is tracked
+    # in Git or occupied by a foreign file.
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = os.path.join(self.tmp.name, "repo")
@@ -1350,8 +1263,6 @@ class TestInitLedgerLocalIgnoreAndCollisionSafety(unittest.TestCase):
         lines = self._exclude_lines()
         for expected in self._EXPECTED_LINES:
             self.assertIn(expected, lines)
-        # Nothing broader: no bare `.bindle-work/` directory rule and no
-        # generic `*.sqlite3` glob.
         self.assertNotIn(".bindle-work/", lines)
         self.assertNotIn("/.bindle-work/", lines)
         self.assertNotIn("*.sqlite3", lines)
@@ -1399,10 +1310,7 @@ class TestInitLedgerLocalIgnoreAndCollisionSafety(unittest.TestCase):
         with _chdir(self.repo):
             self.assertEqual(main(["init"]), 0)
 
-        # WAL mode (set by work_ledger.connect()) means a live ledger
-        # ordinarily carries -wal/-shm sidecars; simulate a journal file
-        # too (legacy rollback-journal mode) to prove all three are
-        # actually ignored, not merely declared.
+        # WAL leaves -wal/-shm; fake a legacy -journal so all three are tested.
         for suffix in ("-wal", "-shm", "-journal"):
             with open(self._ledger_path() + suffix, "w") as f:
                 f.write("x")
@@ -1453,10 +1361,7 @@ class TestInitLedgerLocalIgnoreAndCollisionSafety(unittest.TestCase):
         self.assertEqual(detect_claude_guardrails(info), "not-installed")
 
     def test_tracked_path_preflight_fails_closed_on_git_error(self):
-        # The tracked-path check is safety-critical: if Git itself cannot
-        # answer whether either canonical path is tracked, `bindle init`
-        # must refuse rather than silently treat that as "not tracked"
-        # and continue mutating.
+        # Safety-critical: if Git can't answer "tracked?", init must refuse.
         err = io.StringIO()
         with _chdir(self.repo), mock.patch(
             "bindle.git_local_exclude.is_path_tracked",
@@ -1497,9 +1402,7 @@ class TestInitLedgerLocalIgnoreAndCollisionSafety(unittest.TestCase):
             conn.close()
 
     def test_valid_premarker_ledger_remains_usable_after_init(self):
-        # A ledger created by pre-marker Bindle code (no application_id
-        # ever stamped) is a legitimate, migratable artifact — `bindle
-        # init` must adopt it, not refuse it as foreign.
+        # A pre-marker ledger is legitimate and migratable: adopt, don't refuse.
         os.makedirs(os.path.dirname(self._ledger_path()))
         conn = sqlite3.connect(self._ledger_path())
         for stmt in work_ledger._SCHEMA_STATEMENTS:
@@ -1537,9 +1440,7 @@ class TestInitLedgerLocalIgnoreAndCollisionSafety(unittest.TestCase):
         with _chdir(worktree):
             self.assertEqual(main(["init"]), 0)
 
-        # The exclude entries land in the shared Git common directory, so
-        # they take effect for every linked worktree, not just the one
-        # `bindle init` was run from.
+        # Exclude entries land in the Git common dir, so all worktrees get them.
         info_from_main = get_repo_info(self.repo)
         info_from_linked = get_repo_info(worktree)
         self.assertEqual(info_from_main.git_common_dir, info_from_linked.git_common_dir)
@@ -1548,19 +1449,14 @@ class TestInitLedgerLocalIgnoreAndCollisionSafety(unittest.TestCase):
         for expected in self._EXPECTED_LINES:
             self.assertIn(expected, lines)
 
-        # And the artifacts themselves live at the shared repo root, not
-        # under the linked worktree's own directory.
         self.assertTrue(os.path.isfile(self._ledger_path()))
         self.assertFalse(
             os.path.exists(os.path.join(worktree, ".bindle-work", "ledger.sqlite3"))
         )
 
     def test_failed_ignore_write_is_reported_not_silently_swallowed(self):
-        # Local-ignore hygiene is this feature's own stated postcondition
-        # (unlike QMD's convenience-only ensure_gitignored): if writing
-        # the exclude entries fails after both SQLite artifacts are
-        # already validly provisioned, `bindle init` must report that
-        # failure rather than printing "Initialized Bindle." anyway.
+        # Local-ignore is a stated postcondition, unlike QMD's convenience-only
+        # ensure_gitignored: report the failure, not "Initialized Bindle."
         with _chdir(self.repo), mock.patch(
             "bindle.work_ledger.ensure_gitignored", return_value=False
         ):
@@ -1576,21 +1472,9 @@ class TestInitLedgerLocalIgnoreAndCollisionSafety(unittest.TestCase):
 
 
 class TestInitProjectmemFlag(unittest.TestCase):
-    # `bindle init --projectmem` is a second, independent provider-lifecycle
-    # seam alongside the guardrail installer (TestGuardrailLifecycleCommands
-    # above): detection is the same read-only bindle.projectmem
-    # .detect_projectmem() `bindle status` already uses (see
-    # tests/test_projectmem.py for its own real-fixture coverage), and
-    # initialization goes through Projectmem's native `pjm init` CLI —
-    # Bindle never constructs `.projectmem/` state itself. Every test here
-    # mocks `bindle.cli.pjm_executable`/`subprocess.run`, so none of them
-    # require the real `pjm` CLI to be installed; see
-    # TestInitProjectmemRealPjm below for real-CLI coverage.
-    #
-    # Ordering under test throughout: known Projectmem preconditions
-    # (partial/conflicting `.projectmem/`, a missing `pjm` executable) are
-    # checked BEFORE guardrails mutate anything — a Projectmem-side refusal
-    # must never leave guardrails newly installed/reconciled behind it.
+    # Mocked pjm; real-CLI coverage is TestInitProjectmemRealPjm.
+    # Ordering: Projectmem preconditions are checked BEFORE guardrails mutate,
+    # so a Projectmem refusal never leaves guardrails newly installed.
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = os.path.join(self.tmp.name, "repo")
@@ -1618,9 +1502,7 @@ class TestInitProjectmemFlag(unittest.TestCase):
         self.assertFalse(os.path.exists(self._mem_dir()))
 
     def test_projectmem_flag_is_noop_when_already_installed(self):
-        # "installed" still requires no `pjm` executable at all, but
-        # guardrails ARE still applied — only the Projectmem mutation step
-        # is skipped.
+        # "installed" needs no pjm; guardrails apply, Projectmem is skipped.
         os.makedirs(self._mem_dir())
         with open(os.path.join(self._mem_dir(), "config.toml"), "w") as f:
             f.write("")
@@ -1696,9 +1578,7 @@ class TestInitProjectmemFlag(unittest.TestCase):
         self._assert_guardrails_untouched()
 
     def test_projectmem_flag_succeeds_when_installed_even_with_pjm_missing(self):
-        # "installed" never requires a `pjm` executable — Bindle is
-        # accepting a healthy existing provider installation, not claiming
-        # ownership of it.
+        # "installed" never requires pjm: Bindle accepts, not owns, the install.
         os.makedirs(self._mem_dir())
         with open(os.path.join(self._mem_dir(), "config.toml"), "w") as f:
             f.write("")
@@ -1764,10 +1644,7 @@ class TestInitProjectmemFlag(unittest.TestCase):
         self.assertEqual(code, 0)
         hooks_cmd, hooks_cwd = pjm_calls[1]
         self.assertEqual(hooks_cmd, ["/usr/bin/fake-pjm", "hooks", "install"])
-        # In an ordinary (non-worktree) checkout, repo_root == worktree_root,
-        # so this doesn't by itself distinguish the two — the dedicated
-        # TestInitProjectmemLinkedWorktree class below proves the real
-        # divergence.
+        # repo_root == worktree_root here; see TestInitProjectmemLinkedWorktree.
         info = get_repo_info(self.repo)
         self.assertEqual(hooks_cwd, info.repo_root)
 
@@ -1812,17 +1689,14 @@ class TestInitProjectmemFlag(unittest.TestCase):
         # `pjm init` failed — `pjm hooks install` must never be attempted.
         self.assertEqual(len(pjm_calls), 1)
         self.assertEqual(pjm_calls[0][1], "init")
-        # Guardrails already succeeded and are never rolled back merely
-        # because the later Projectmem step failed.
+        # Guardrails already succeeded and are not rolled back.
         info = get_repo_info(self.repo)
         self.assertEqual(detect_git_guardrails(info), "installed")
 
     def test_projectmem_flag_propagates_hooks_install_failure_and_preserves_state(self):
         def fake_run(cmd, **kwargs):
             if cmd and cmd[0] == "/usr/bin/fake-pjm" and cmd[1] == "init":
-                # Real `pjm init` also creates .projectmem/ as a side
-                # effect — reproduce that so the "preserved on failure"
-                # assertion below is meaningful.
+                # Mimic pjm init's .projectmem/ so "preserved" is meaningful.
                 os.makedirs(self._mem_dir(), exist_ok=True)
                 with open(os.path.join(self._mem_dir(), "config.toml"), "w") as f:
                     f.write("")
@@ -1839,16 +1713,13 @@ class TestInitProjectmemFlag(unittest.TestCase):
 
         self.assertEqual(code, 5)
         self.assertIn("hooks install", err.getvalue())
-        # Neither Projectmem storage nor guardrails are rolled back merely
-        # because hook installation failed.
+        # Neither Projectmem storage nor guardrails are rolled back.
         self.assertTrue(os.path.isfile(os.path.join(self._mem_dir(), "config.toml")))
         info = get_repo_info(self.repo)
         self.assertEqual(detect_git_guardrails(info), "installed")
 
     def test_projectmem_init_never_attempted_when_guardrails_fail(self):
-        # Preflight passes (pjm resolved) before guardrails ever run; a
-        # guardrail failure must still stop the invocation before `pjm
-        # init` (or `pjm hooks install`) is actually invoked.
+        # pjm resolves, yet a guardrail failure must stop before `pjm init`.
         pjm_calls = []
 
         def fake_run(cmd, **kwargs):
@@ -1867,10 +1738,7 @@ class TestInitProjectmemFlag(unittest.TestCase):
         self.assertEqual(code, 3)
         self.assertEqual(pjm_calls, [])
         self.assertFalse(os.path.exists(self._mem_dir()))
-        # A guardrail failure must also stop `bindle init` before it
-        # reaches the unconditional ledger/projection provisioning step
-        # (docs/DECISIONS.md D043) — never partially provision Bindle's own
-        # substrate when an earlier step in the same invocation failed.
+        # A guardrail failure also stops init before ledger provisioning (D043).
         self.assertFalse(os.path.exists(os.path.join(self.repo, ".bindle-work")))
 
     def test_remove_never_touches_projectmem(self):
@@ -1906,22 +1774,9 @@ class TestInitProjectmemFlag(unittest.TestCase):
 
 @unittest.skipUnless(_HAS_REAL_PJM, "requires the real `pjm` CLI on PATH")
 class TestInitProjectmemRealPjm(unittest.TestCase):
-    # Exercises the actual native Projectmem CLI (not mocked) — skipped
-    # wherever `pjm` isn't installed, which includes CI: this repository
-    # declares no Projectmem dependency (AGENTS.md), and .github/workflows
-    # /ci.yml never installs it. Verified locally this session against
-    # projectmem 0.2.0 (`uv tool install projectmem`).
-    #
-    # PROJECTMEM_HOME isolation: Projectmem 0.2.0's `initialize()`
-    # unconditionally calls `register_project()`, which appends this
-    # fixture's absolute path to a cross-project registry
-    # (`$PROJECTMEM_HOME/projects.json`, defaulting to
-    # `~/.projectmem/projects.json`) — this happens regardless of
-    # `--no-global` (that flag only skips *inheriting* global memory, a
-    # separate mechanism; see docs/DECISIONS.md D033). Every real `pjm`
-    # invocation below runs with `PROJECTMEM_HOME` redirected to a disposable
-    # temp directory so this never touches the developer's real global
-    # Projectmem state (AGENTS.md "Runtime isolation").
+    # Real (unmocked) pjm; skipped where pjm is absent, incl. CI (AGENTS.md).
+    # PROJECTMEM_HOME goes to a temp dir: projectmem 0.2.0 initialize() always
+    # appends to $PROJECTMEM_HOME/projects.json, even with --no-global (D033).
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = os.path.join(self.tmp.name, "repo")
@@ -1950,8 +1805,7 @@ class TestInitProjectmemRealPjm(unittest.TestCase):
         info = get_repo_info(self.repo)
         self.assertEqual(detect_projectmem(info), "installed")
 
-        # Positive proof PROJECTMEM_HOME isolation is actually in effect
-        # (registration lands in the isolated registry, not the real one).
+        # Proves isolation: registration lands in the temp registry.
         registry = os.path.join(self.registry_home.name, "projects.json")
         self.assertTrue(os.path.isfile(registry))
         with open(registry) as f:
@@ -1986,11 +1840,7 @@ class TestInitProjectmemRealPjm(unittest.TestCase):
         self.assertEqual(hooks_cmd[1:], ["hooks", "install"])
 
     def test_real_pjm_init_does_not_create_claude_md(self):
-        # --no-claude-md: Bindle is provider-neutral — Projectmem must not
-        # silently append its own Claude-specific bridge prose into
-        # repository policy files as a side effect of Bindle setup. The
-        # fixture starts with no CLAUDE.md (_init_repo only writes
-        # README.md); it must still have none afterward.
+        # --no-claude-md: provider-neutral, so no CLAUDE.md may appear.
         with _chdir(self.repo):
             code = main(["init", "--projectmem"])
 
@@ -1998,10 +1848,7 @@ class TestInitProjectmemRealPjm(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.repo, "CLAUDE.md")))
 
     def test_real_pjm_init_does_not_print_mcp_config(self):
-        # --no-mcp-config: Projectmem MCP registration/configuration is a
-        # separate concern, not part of this seam. _print_mcp_config only
-        # ever writes to stdout (no file artifact), so stdout content is
-        # the only observable signal.
+        # --no-mcp-config: _print_mcp_config writes only stdout; check that.
         out = io.StringIO()
         with _chdir(self.repo), contextlib.redirect_stdout(out):
             code = main(["init", "--projectmem"])
@@ -2011,11 +1858,7 @@ class TestInitProjectmemRealPjm(unittest.TestCase):
         self.assertNotIn("mcpServers", out.getvalue())
 
     def test_real_pjm_init_does_not_backfill_git_history(self):
-        # --no-backfill: `bindle init` must not unexpectedly ingest existing
-        # Git history into working memory. _init_repo already made one
-        # commit before `bindle init --projectmem` runs; without backfill,
-        # events.jsonl must stay empty (the only other event-producing path,
-        # git hook auto-capture, only fires on a *future* commit/merge).
+        # --no-backfill: history is not ingested, so events.jsonl stays empty.
         with _chdir(self.repo):
             code = main(["init", "--projectmem"])
 
@@ -2025,8 +1868,7 @@ class TestInitProjectmemRealPjm(unittest.TestCase):
             self.assertEqual(f.read().strip(), "")
 
     def test_real_pjm_init_does_not_build_structure_cache(self):
-        # --no-structure: Bindle setup should not trigger Projectmem's
-        # repository code-structure analysis.
+        # --no-structure: no repository code-structure analysis.
         with _chdir(self.repo):
             code = main(["init", "--projectmem"])
 
@@ -2034,11 +1876,7 @@ class TestInitProjectmemRealPjm(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self._mem_dir(), "structure.json")))
 
     def test_real_pjm_init_does_not_run_stack_detection(self):
-        # --no-stack-detect: Bindle setup should not trigger Projectmem's
-        # stack/manifest analysis merely to initialize provider storage.
-        # Without it, PROJECT_MAP.md keeps its native placeholder ("Status:
-        # not created yet") instead of being rewritten to "Status:
-        # auto-detected from project manifests ...".
+        # --no-stack-detect: PROJECT_MAP.md keeps "Status: not created yet".
         with _chdir(self.repo):
             code = main(["init", "--projectmem"])
 
@@ -2048,10 +1886,7 @@ class TestInitProjectmemRealPjm(unittest.TestCase):
         self.assertIn("Status: not created yet", content)
 
     def test_real_pjm_init_does_not_start_a_watcher(self):
-        # --no-watch: no long-running daemon started by `bindle init`. The
-        # watcher writes a PID file only when actually running — its
-        # absence is the repo-local, safe-to-check signal (no need to scan
-        # system processes).
+        # --no-watch: a running watcher writes a PID file, a repo-local signal.
         with _chdir(self.repo):
             code = main(["init", "--projectmem"])
 
@@ -2059,12 +1894,8 @@ class TestInitProjectmemRealPjm(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self._mem_dir(), "watch.pid")))
 
     def test_real_pjm_init_still_installs_git_hooks(self):
-        # `pjm init` itself skips hook installation (--no-hooks); Bindle
-        # installs them separately via `pjm hooks install` right after.
-        # This is an ordinary (non-worktree) checkout, where repo_root ==
-        # worktree_root, so `.git/hooks` here is the same directory either
-        # way — see TestInitProjectmemLinkedWorktree for the case where
-        # that matters.
+        # `pjm init` skips hooks (--no-hooks); Bindle installs them separately.
+        # Here repo_root == worktree_root; see TestInitProjectmemLinkedWorktree.
         with _chdir(self.repo):
             code = main(["init", "--projectmem"])
 
@@ -2081,8 +1912,7 @@ class TestInitProjectmemRealPjm(unittest.TestCase):
         config = os.path.join(self._mem_dir(), "config.toml")
         before = os.path.getmtime(config)
 
-        # The second run must short-circuit on "installed" and never invoke
-        # pjm again — proven by making a second real invocation impossible.
+        # Must short-circuit on "installed"; real pjm calls are made impossible.
         with _chdir(self.repo), mock.patch(
             "bindle.cli.pjm_executable",
             side_effect=AssertionError("must not re-invoke pjm once already installed"),
@@ -2103,9 +1933,6 @@ class TestInitProjectmemRealPjm(unittest.TestCase):
         self.assertEqual(detect_claude_guardrails(info), "not-installed")
 
     def test_git_hook_composition_with_bindle_guardrails(self):
-        # Empirically verified once already this session in a disposable
-        # fixture (see the session report); automated here so it's covered
-        # by scripts/check.sh wherever `pjm` is installed.
         with _chdir(self.repo):
             self.assertEqual(main(["init", "--projectmem"]), 0)
 
@@ -2122,9 +1949,7 @@ class TestInitProjectmemRealPjm(unittest.TestCase):
         )
         self.assertEqual(commit.returncode, 0, commit.stderr)
 
-        # Projectmem's post-commit auto-capture hook backgrounds itself
-        # (`... &`), so the event may land a moment after `git commit`
-        # returns — poll briefly rather than assuming synchronous capture.
+        # The capture hook backgrounds itself; poll, don't assume sync.
         events_path = os.path.join(self._mem_dir(), "events.jsonl")
         deadline = time.time() + 5
         captured_event = False
@@ -2140,10 +1965,7 @@ class TestInitProjectmemRealPjm(unittest.TestCase):
             "Bindle's dispatcher — hook composition is broken",
         )
 
-        # Protected main is unaffected by Projectmem's own hooks being
-        # present: the dispatcher's policy check still runs (and still
-        # blocks) before it would ever delegate to `.git/hooks/pre-commit`
-        # (Projectmem's own precheck warning).
+        # Dispatcher policy still blocks main before delegating to pjm's hook.
         _run(["git", "checkout", "-q", "main"], self.repo)
         with open(os.path.join(self.repo, "MAIN.md"), "w") as f:
             f.write("direct main write\n")
@@ -2160,13 +1982,8 @@ class TestInitProjectmemRealPjm(unittest.TestCase):
 
 @unittest.skipUnless(_HAS_REAL_PJM, "requires the real `pjm` CLI on PATH")
 class TestInitProjectmemLinkedWorktree(unittest.TestCase):
-    # Regression coverage for the linked-worktree hook-installation fix
-    # (docs/DECISIONS.md D033): Projectmem's native hook installer resolves
-    # `<cwd>/.git/hooks` directly, which does not exist as a directory in a
-    # linked worktree (`.git` there is a file, not a directory) — so
-    # `bindle init --projectmem` must install Projectmem's storage
-    # worktree-locally but its hooks against the repository's shared Git
-    # common directory (RepoInfo.repo_root), not silently skip them.
+    # D033: pjm's hook installer resolves <cwd>/.git/hooks, absent in a linked
+    # worktree (.git is a file); hooks go to repo_root, storage stays local.
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.main_repo = os.path.join(self.tmp.name, "main")
@@ -2204,10 +2021,7 @@ class TestInitProjectmemLinkedWorktree(unittest.TestCase):
         info = get_repo_info(self.worktree)
         self.assertEqual(detect_projectmem(info), "installed")
 
-        # Hooks land in the SHARED repository hook directory (the main
-        # checkout's `.git/hooks`) — never skipped merely because
-        # `<worktree>/.git` is a file, and never present under the
-        # worktree's own (nonexistent) `.git/hooks`.
+        # Hooks land in the shared hook dir; the worktree has no .git/hooks.
         self.assertFalse(os.path.isdir(os.path.join(self.worktree, ".git", "hooks")))
         for hook_name in ("pre-commit", "post-commit", "post-merge"):
             hook_path = os.path.join(self.main_repo, ".git", "hooks", hook_name)
@@ -2231,9 +2045,7 @@ class TestInitProjectmemLinkedWorktree(unittest.TestCase):
         )
         self.assertEqual(commit.returncode, 0, commit.stderr)
 
-        # Auto-capture backgrounds itself — poll briefly rather than
-        # assuming synchronous capture (same as the ordinary-checkout
-        # composition test).
+        # Auto-capture backgrounds itself; poll rather than assume sync.
         events_path = os.path.join(self._mem_dir(), "events.jsonl")
         deadline = time.time() + 5
         captured_event = False
@@ -2267,14 +2079,7 @@ class TestInitProjectmemLinkedWorktree(unittest.TestCase):
 
 
 class TestInitQmdFlag(unittest.TestCase):
-    # `bindle init --qmd` mirrors TestInitProjectmemFlag's shape: detection
-    # is the same read-only bindle.qmd.detect_qmd() `bindle status` already
-    # uses (see tests/test_qmd.py for its own real-fixture coverage), and
-    # initialization goes through QMD's native CLI — Bindle never
-    # constructs `.qmd/index.yml` itself. Every test here mocks
-    # `bindle.qmd.qmd_executable`/`subprocess.run`, so none require the
-    # real `qmd` CLI to be installed; see TestInitQmdRealCli below for real
-    # -CLI coverage.
+    # Mocked qmd; real-CLI coverage is TestInitQmdRealCli.
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = os.path.join(self.tmp.name, "repo")
@@ -2375,10 +2180,7 @@ class TestInitQmdFlag(unittest.TestCase):
         def on_installer_call(cmd):
             raise AssertionError("guardrails must not be touched when QMD preflight refuses")
 
-        # detect_qmd() always checks qmd availability first (unlike
-        # detect_projectmem, which never calls pjm_executable at all) — a
-        # fake resolved path is fine here since this test's point is that
-        # guardrails must never mutate, not that qmd resolution is skipped.
+        # detect_qmd() checks availability first, so a fake path is fine here.
         err = io.StringIO()
         with _chdir(self.repo), mock.patch(
             "bindle.qmd.qmd_executable", return_value="/usr/bin/fake-qmd"
@@ -2407,10 +2209,7 @@ class TestInitQmdFlag(unittest.TestCase):
         self._assert_guardrails_untouched()
 
     def test_qmd_flag_runs_qmd_init_before_collection_add_always(self):
-        # The single most safety-critical ordering in this integration
-        # (see qmd.py's module docstring): `qmd collection add` run
-        # without a prior `qmd init` in the same directory falls back to
-        # the machine-global default index. This must never regress.
+        # qmd.py: `collection add` w/o `qmd init` hits the global index.
         calls = []
 
         def fake_run(cmd, **kwargs):
@@ -2488,9 +2287,7 @@ class TestInitQmdFlag(unittest.TestCase):
         self.assertEqual(calls[0][1], "init")
         info = get_repo_info(self.repo)
         self.assertEqual(detect_git_guardrails(info), "installed")
-        # A failed `--qmd` mutation must also stop `bindle init` before the
-        # unconditional ledger/projection provisioning step
-        # (docs/DECISIONS.md D043).
+        # A failed --qmd mutation also stops init before the ledger (D043).
         self.assertFalse(os.path.exists(os.path.join(self.repo, ".bindle-work")))
 
     def test_qmd_flag_propagates_collection_add_failure_and_preserves_state(self):
@@ -2515,9 +2312,7 @@ class TestInitQmdFlag(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(self._qmd_dir(), "index.yml")))
         info = get_repo_info(self.repo)
         self.assertEqual(detect_git_guardrails(info), "installed")
-        # A failed `--qmd` mutation must also stop `bindle init` before the
-        # unconditional ledger/projection provisioning step
-        # (docs/DECISIONS.md D043).
+        # A failed --qmd mutation also stops init before the ledger (D043).
         self.assertFalse(os.path.exists(os.path.join(self.repo, ".bindle-work")))
 
     def test_qmd_mutation_never_attempted_when_guardrails_fail(self):
@@ -2539,10 +2334,7 @@ class TestInitQmdFlag(unittest.TestCase):
         self.assertEqual(code, 3)
         self.assertEqual(calls, [])
         self.assertFalse(os.path.exists(self._qmd_dir()))
-        # Same guarantee as TestInitProjectmemFlag's own
-        # test_projectmem_init_never_attempted_when_guardrails_fail: a
-        # guardrail failure stops `bindle init` before the unconditional
-        # ledger/projection provisioning step (docs/DECISIONS.md D043).
+        # A guardrail failure stops init before ledger provisioning (D043).
         self.assertFalse(os.path.exists(os.path.join(self.repo, ".bindle-work")))
 
     def test_remove_never_touches_qmd(self):
@@ -2571,11 +2363,7 @@ class TestInitQmdFlag(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(qmd_dir, "index.yml")))
         self.assertIn("QMD: left untouched", out.getvalue())
 
-        # detect_qmd() itself resolves qmd_executable() (see qmd.py) — on a
-        # machine with no real `qmd` on PATH (CI) this would otherwise
-        # report "unavailable" regardless of the file state actually left
-        # behind, so this final check stays inside the same fake-qmd mock
-        # as the calls above rather than depending on a real PATH lookup.
+        # Without real qmd (CI), detect_qmd() is "unavailable"; keep the mock.
         info = get_repo_info(self.repo)
         with mock.patch("bindle.qmd.qmd_executable", return_value="/usr/bin/fake-qmd"):
             self.assertEqual(detect_qmd(info), "ready")
@@ -2616,18 +2404,13 @@ class TestInitQmdFlag(unittest.TestCase):
             code = main(["init", "--projectmem", "--qmd"])
 
         self.assertEqual(code, 0)
-        # Guardrails mutate exactly once, before either opt-in; Projectmem
-        # (init, hooks) runs before QMD (init, collection add) — a fixed,
-        # documented order, not a race.
+        # Fixed order: guardrails, then Projectmem, then QMD.
         self.assertEqual(
             order,
             ["guardrails", "pjm-init", "pjm-hooks", "qmd-init", "qmd-collection"],
         )
 
     def test_projectmem_refusal_leaves_qmd_preflight_unreached_and_guardrails_untouched(self):
-        # Projectmem preflight is checked first (fixed order) — a
-        # Projectmem-side refusal must never let QMD preflight run, let
-        # alone mutate anything.
         with open(os.path.join(self.repo, ".projectmem"), "w") as f:
             f.write("occupied")
 
@@ -2651,23 +2434,9 @@ class TestInitQmdFlag(unittest.TestCase):
 
 @unittest.skipUnless(_HAS_REAL_QMD, "requires the real `qmd` CLI on PATH")
 class TestInitQmdRealCli(unittest.TestCase):
-    # Exercises the actual native QMD CLI (not mocked) — skipped wherever
-    # `qmd` isn't installed, which includes CI: this repository declares no
-    # QMD dependency (AGENTS.md), and .github/workflows/ci.yml never
-    # installs it. Verified locally this session against the real
-    # `@tobilu/qmd` CLI (2.5.3 on PATH; 2.8.3 via a disposable local
-    # install used for the deeper upstream investigation).
-    #
-    # Isolation: QMD_CONFIG_DIR and XDG_CACHE_HOME are redirected to a
-    # disposable temp directory for every real invocation below, exactly
-    # mirroring TestInitProjectmemRealPjm's PROJECTMEM_HOME isolation
-    # (AGENTS.md "Runtime isolation"). This integration's whole design
-    # already keeps QMD state inside the repository's own `.qmd/` (see
-    # qmd.py's module docstring) rather than the machine-global registry —
-    # this env redirection is defense in depth, verified this session to
-    # also be where QMD's own trust bookkeeping
-    # (~/.config/qmd/trusted.json) lands, which is otherwise unconditional
-    # global state outside `.qmd/` itself.
+    # Real (unmocked) qmd; skipped where qmd is absent, incl. CI (AGENTS.md).
+    # QMD_CONFIG_DIR/XDG_CACHE_HOME go to a temp dir: defense in depth, and
+    # QMD's trust file (~/.config/qmd/trusted.json) would otherwise be global.
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = os.path.join(self.tmp.name, "repo")
@@ -2715,10 +2484,7 @@ class TestInitQmdRealCli(unittest.TestCase):
 
         self.assertEqual(detect_qmd(info), "ready")
 
-        # The real disposable smoke test this slice's plan calls for: BM25
-        # full-text search (no embeddings needed) actually finds the
-        # indexed content, and the deliberately out-of-scope decoy doc is
-        # excluded by COLLECTION_MASK.
+        # BM25 finds the indexed doc; COLLECTION_MASK excludes the decoy.
         qmd_bin = shutil.which("qmd")
         qmd_env = qmd_mod.subprocess_env(os.path.realpath(self.repo))
         alpha = subprocess.run(
@@ -2779,12 +2545,8 @@ class TestInitQmdRealCli(unittest.TestCase):
         index_path = os.path.join(self._qmd_dir(), "index.yml")
         before = os.path.getmtime(index_path)
 
-        # The second run must short-circuit on "ready" and never mutate
-        # qmd's state again — proven by making a real `qmd init`/
-        # `collection add` invocation impossible. detect_qmd() itself
-        # still legitimately resolves qmd_executable() as part of
-        # computing "ready" (see qmd.py), so only the mutating subcommands
-        # (init, collection) are forbidden here, not resolution itself.
+        # Must short-circuit on "ready": forbid only mutating subcommands (init,
+        # collection); detect_qmd() legitimately resolves qmd_executable().
         def forbid_mutation(cmd, **kwargs):
             if cmd and os.path.basename(cmd[0]) == "qmd" and cmd[1] in ("init", "collection"):
                 raise AssertionError(f"must not re-invoke qmd once already ready: {cmd}")
@@ -2797,9 +2559,7 @@ class TestInitQmdRealCli(unittest.TestCase):
         self.assertEqual(os.path.getmtime(index_path), before)
 
     def test_real_qmd_update_makes_newly_added_markdown_searchable(self):
-        # This slice's own "how does retrieval become fresh?" answer:
-        # QMD's native `qmd update`, run directly by the user/agent — never
-        # a Bindle-owned watcher or hook.
+        # Freshness is native `qmd update`, never a Bindle watcher or hook.
         self._write_doc("docs/SCOPE.md", "# SCOPE\noriginal content\n")
         with _chdir(self.repo):
             self.assertEqual(main(["init", "--qmd"]), 0)
@@ -2845,10 +2605,7 @@ class TestInitQmdRealCli(unittest.TestCase):
         self.assertEqual(detect_claude_guardrails(info), "not-installed")
 
     def test_real_qmd_init_never_creates_the_global_default_index(self):
-        # Positive proof of this integration's central safety finding
-        # (qmd.py's module docstring): even against the real CLI, no
-        # global default index (`<config-dir>/index.yml`) is ever created
-        # — everything lands inside this worktree's own `.qmd/`.
+        # Safety (qmd.py): no global <config-dir>/index.yml is ever created.
         self._write_doc("docs/SCOPE.md", "# SCOPE\nhello\n")
         with _chdir(self.repo):
             self.assertEqual(main(["init", "--qmd"]), 0)
@@ -2862,22 +2619,7 @@ class TestInitQmdRealCli(unittest.TestCase):
     _HAS_REAL_PJM and _HAS_REAL_QMD, "requires the real `pjm` and `qmd` CLIs on PATH"
 )
 class TestAdditiveInitRealCli(unittest.TestCase):
-    # `bindle init`'s own docstring promises it is "safe to run repeatedly
-    # as more integrations are added later" — i.e. a repository already
-    # Bindle-managed (bare, or with one optional layer already installed)
-    # can pick up another optional layer via a LATER, separate `bindle
-    # init` invocation without disturbing anything already healthy. Every
-    # real-CLI test above (TestInitProjectmemRealPjm, TestInitQmdRealCli)
-    # exercises exactly one optional layer per fixture; the mocked
-    # composition tests in TestInitQmdFlag
-    # (test_projectmem_and_qmd_compose_guardrails_once_each_opt_in_once and
-    # its refusal-order sibling) only cover both flags in a SINGLE
-    # invocation. None re-invoke `bindle init` a second time, later, with a
-    # *different* flag, against real provider state — this class closes
-    # that gap. Isolation mirrors
-    # TestInitProjectmemRealPjm/TestInitQmdRealCli exactly (both providers'
-    # env redirected to disposable temp dirs; AGENTS.md "Runtime
-    # isolation").
+    # Later, separate init with another flag; init is documented repeat-safe.
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = os.path.join(self.tmp.name, "repo")
@@ -2948,10 +2690,7 @@ class TestAdditiveInitRealCli(unittest.TestCase):
         self.assertIn("docs/ADDITIVE.md", found.stdout)
 
     def _exercise_additive_pair(self, first_flags, second_flags, marker):
-        # Seeded up front so QMD, whenever it becomes active, has
-        # something distinctive to index — the positive proof a later
-        # init doesn't blow away its collection rather than merely
-        # reporting "ready".
+        # Seeded so QMD has content: proves a later init keeps its collection.
         self._seed_markdown("docs/ADDITIVE.md", f"# Additive\n{marker} lives here.\n")
 
         self.assertEqual(self._run_init(*first_flags), 0)
@@ -2969,9 +2708,7 @@ class TestAdditiveInitRealCli(unittest.TestCase):
         self.assertEqual(self._run_init(*second_flags), 0)
         self._assert_guardrails_installed()
 
-        # Whatever the first step installed must survive the second
-        # step's own mutation completely untouched, not merely "still
-        # reported healthy" — the mtime proves it wasn't recreated.
+        # First step's install survives untouched; mtime proves no recreation.
         if mem_before is not None:
             self._assert_projectmem_installed()
             self.assertEqual(os.path.getmtime(mem_config), mem_before)
@@ -2979,7 +2716,6 @@ class TestAdditiveInitRealCli(unittest.TestCase):
             self._assert_qmd_ready_and_marker_indexed(marker)
             self.assertEqual(os.path.getmtime(qmd_index), qmd_before)
 
-        # And whatever the second step newly requested must now be active.
         if "--projectmem" in second_flags:
             self._assert_projectmem_installed()
         if "--qmd" in second_flags:
@@ -3034,8 +2770,7 @@ class TestAdditiveInitRealCli(unittest.TestCase):
         with open(pre_commit_hook) as f:
             hook_before = f.read()
 
-        # Second, identical invocation: both requested flags a pure no-op
-        # end to end, not just individually.
+        # An identical second invocation must be a pure no-op end to end.
         self.assertEqual(self._run_init("--projectmem", "--qmd"), 0)
 
         self._assert_guardrails_installed()
@@ -3053,11 +2788,7 @@ class TestAdditiveInitRealCli(unittest.TestCase):
             self.assertEqual(f.read(), hook_before)
 
     def test_qmd_conflict_after_prior_projectmem_init_preserves_projectmem_and_guardrails(self):
-        # Failure-order sanity: a known preflight failure for a newly
-        # requested optional integration must refuse before touching
-        # anything already healthy from an earlier, separate `bindle
-        # init` invocation — not just before touching guardrails in the
-        # single-invocation case the existing mocked tests cover.
+        # Preflight failure must refuse before touching anything healthy.
         self.assertEqual(self._run_init("--projectmem"), 0)
         self._assert_guardrails_installed()
         self._assert_projectmem_installed()
@@ -3103,10 +2834,8 @@ class TestAdditiveInitRealCli(unittest.TestCase):
 
 
 class _FakeKitModule:
-    """A stand-in for a real kit module (software_engineering.py,
-    spec_kit.py) used to test the `skills` CLI's own logic — argument
-    wiring, desired-state read/write, exit codes — without depending on
-    any real provider CLI or network access."""
+    """Stand-in kit module: tests the `skills` CLI's own logic without a real
+    provider CLI or network."""
 
     def __init__(self):
         self.status_calls = []
@@ -3224,8 +2953,7 @@ class TestSkillsCommand(unittest.TestCase):
             self.assertIn("kits = []", f.read())
 
     def test_remove_on_a_never_added_kit_is_a_clean_no_op(self):
-        # No bindle.toml exists yet, and the kit was never desired — remove
-        # must not fabricate a config file just to record an empty list.
+        # remove must not fabricate bindle.toml just to record an empty list.
         with _chdir(self.repo), mock.patch.dict("bindle.skills.catalog.CATALOG", self.fake_catalog, clear=True):
             code = main(["skills", "remove", "fake-kit"])
         self.assertEqual(code, 0)
@@ -3274,10 +3002,8 @@ _TASKS_MD_FIXTURE = """\
 
 
 class TestWorkCliSubcommands(unittest.TestCase):
-    # T023 (specs/003-symphony-task-integration): the `bindle work`
-    # subcommand family is a thin wrapper over speckit_loader.load_feature
-    # and symphony_projection.publish/claim_task/release_task/
-    # complete_task — one success case and one rejection case per verb.
+    # T023 (specs/003): thin wrapper over speckit_loader.load_feature and
+    # symphony_projection.publish/claim_task/release_task/complete_task.
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = os.path.join(self.tmp.name, "repo")
@@ -3353,14 +3079,9 @@ class TestWorkCliSubcommands(unittest.TestCase):
 
 
 class TestWorkStatusCliSubcommand(unittest.TestCase):
-    # T007/T012 (specs/005-work-state-visibility, Phase 3/4 - US1/US2):
-    # `bindle work status`/`bindle work status --json` is a thin wrapper
-    # over work_status.build_snapshot()/render_status_text()/
-    # snapshot_to_json() — mirrors TestMilestoneCliSubcommands' fixture
-    # shape. Strictly read-only and synchronous: no HTTP server or socket
-    # of any kind is imported by cli.py or work_status.py for this
-    # command (FR-007), so "no network-accessible interface is started"
-    # holds by construction rather than needing a runtime probe here.
+    # T007/T012 (specs/005, US1/US2): thin wrapper over work_status.
+    # Read-only and no HTTP server/socket imported (FR-007), so no runtime
+    # network probe is needed.
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = os.path.join(self.tmp.name, "repo")
@@ -3488,14 +3209,7 @@ class TestWorkStatusCliSubcommand(unittest.TestCase):
 
 
 class TestWorkStatusWatch(unittest.TestCase):
-    # T016/T017 (specs/005-work-state-visibility, Phase 5 - US3): CLI
-    # wiring for `bindle work status --watch`. `work_status.watch_snapshots`
-    # is itself exhaustively tested against a real ledger (with an
-    # injected `sleep` seam) in tests/test_work_status.py; these tests
-    # only confirm _cmd_work_status wires it correctly — same renderer
-    # as the one-shot path, correct interval clamping, NDJSON framing
-    # under --json, and a clean (non-propagating) exit on
-    # KeyboardInterrupt.
+    # T016/T017 (specs/005, US3): wiring only; logic: tests/test_work_status.py.
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = os.path.join(self.tmp.name, "repo")
@@ -3587,9 +3301,7 @@ class TestWorkStatusWatch(unittest.TestCase):
         self.assertEqual(seen["interval"], 10.0)
 
     def test_watch_interval_rejects_non_finite_values(self):
-        # "-inf" is passed as "--interval=-inf" (not a separate argv token)
-        # so argparse doesn't mistake it for an unrecognized option — an
-        # argparse-level quirk unrelated to the finiteness check under test.
+        # "--interval=-inf" is one token: argparse would treat "-inf" as a flag.
         for args in (
             ["--interval", "nan"],
             ["--interval", "inf"],
@@ -3640,10 +3352,7 @@ class TestWorkStatusWatch(unittest.TestCase):
 
 
 class TestWorkForecastCliSubcommand(unittest.TestCase):
-    # US4 (specs/005-work-state-visibility, Phase 6): `bindle work
-    # forecast` is a thin renderer over
-    # work_status.build_snapshot()/build_forecast()/render_forecast_text()
-    # — mirrors TestWorkStatusCliSubcommand's fixture shape.
+    # US4 (specs/005): thin renderer over work_status.build_forecast().
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = os.path.join(self.tmp.name, "repo")
@@ -3732,12 +3441,7 @@ class TestWorkForecastCliSubcommand(unittest.TestCase):
 
 
 class TestMilestoneCliSubcommands(unittest.TestCase):
-    # T010 (specs/004-milestone-review-surface): the `bindle milestone`
-    # subcommand family is a thin wrapper over milestone_review.py —
-    # mirrors TestWorkCliSubcommands' shape for the milestone-facing
-    # surface. review/list here (US1); enter-review/claim/release (US3),
-    # accept/decline (US4), and the task-rejection guard (US5) are added
-    # by later test classes/extensions in this file.
+    # T010 (specs/004): thin wrapper over milestone_review.py.
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = os.path.join(self.tmp.name, "repo")
@@ -3837,8 +3541,7 @@ class TestMilestoneCliSubcommands(unittest.TestCase):
         self.assertIn("M-1", text)
         self.assertIn("M-2", text)
 
-    # -- T015 (US2): review output carries per-child evidence/blocked
-    # state and the milestone's own claim line.
+    # T015 (US2)
 
     def test_review_output_includes_child_evidence_and_blocked_state(self):
         self._create_milestone("M-1")
@@ -3864,15 +3567,12 @@ class TestMilestoneCliSubcommands(unittest.TestCase):
         self.assertEqual(code, 0)
         text = out.getvalue()
         self.assertIn("claimed by alice", text)
-        # spec.md FR-004/User Story 2: the claim's claimed-at time must be
-        # visible too, not merely the owner.
+        # FR-004/US2: the claimed-at time must be visible, not just the owner.
         claimed_at = self.ledger.get_claim("M-1").claimed_at
         self.assertIn(claimed_at, text)
 
     def test_review_output_includes_evidence_recorded_at_and_note(self):
-        # spec.md FR-003/User Story 2: every evidence pointer's recorded
-        # time and note must be visible in the review view, not merely
-        # retained on the Python object and dropped by the CLI.
+        # FR-003/US2: recorded time and note must reach the CLI output.
         self._create_milestone("M-1")
         self._create_task("T-1", parent_id="M-1")
         self.ledger.add_evidence("T-1", "commit", "abc123", note="the actual fix")
@@ -3886,9 +3586,7 @@ class TestMilestoneCliSubcommands(unittest.TestCase):
         self.assertIn("the actual fix", text)
 
     def test_review_output_names_the_specific_blocking_dependency(self):
-        # spec.md Acceptance Scenario US1.4: a blocked milestone's review
-        # view must identify the blocking dependency, not just report
-        # "blocked".
+        # US1.4: name the blocking dependency, not just "blocked".
         self._create_task("Blocker-1")
         self._create_milestone("M-1")
         self._create_task("T-1", parent_id="M-1")
@@ -3901,7 +3599,7 @@ class TestMilestoneCliSubcommands(unittest.TestCase):
         self.assertIn("not ready", text)
         self.assertIn("Blocker-1", text)
 
-    # -- T017 (US3): enter-review, claim, release ---------------------
+    # T017 (US3)
 
     def test_enter_review_success_and_rejection(self):
         self._create_milestone("M-1")
@@ -3946,7 +3644,7 @@ class TestMilestoneCliSubcommands(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("not_a_milestone", err.getvalue())
 
-    # -- T021 (US4): accept, decline -----------------------------------
+    # T021 (US4)
 
     def test_accept_success_with_evidence(self):
         self._ready_milestone()
@@ -4024,14 +3722,8 @@ class TestMilestoneCliSubcommands(unittest.TestCase):
 
 
 class TestMilestoneCommandsRejectTasks(unittest.TestCase):
-    # T025 (US5): the CLI-level mirror of
-    # TestMilestoneOnlyGuard.test_every_function_rejects_a_task_id_without_side_effects
-    # — every `bindle milestone <verb>` invoked against a task id, exit
-    # code 1, "not a milestone" (not_a_milestone) in stderr, no ledger
-    # state change. TestWorkCliSubcommands.test_done_rejects_milestone
-    # (unmodified, run as part of the same full suite) demonstrates
-    # `bindle work done`'s existing milestone guard is untouched by this
-    # feature.
+    # T025 (US5): CLI mirror of TestMilestoneOnlyGuard's task-id rejection test:
+    # exit 1, not_a_milestone in stderr, no ledger change.
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = os.path.join(self.tmp.name, "repo")

@@ -1,61 +1,38 @@
-"""The `spec-kit` skill kit — GitHub Spec Kit, upstream-owned.
+"""The `spec-kit` skill kit: GitHub Spec Kit, upstream-owned.
 
-Spec Kit remains upstream-owned (github/spec-kit); this module never
-reimplements its installer or copies its skill files by hand
-(docs/DECISIONS.md D035). Every mutation and every status read goes
-through the native `specify` CLI (verified against the installed
-`specify-cli` 1.0.1 this session), exactly like guardrails.py shells out
-to install-guardrails.sh's own `--status` mode rather than
-reimplementing its predicates in Python.
+This module never reimplements Spec Kit's installer or copies its skill files by
+hand (D035). Every mutation and status read goes through the native `specify`
+CLI, as guardrails.py shells out to install-guardrails.sh's `--status` rather
+than reimplementing its predicates.
 
-Verified this session, against a realistic repository snapshot (not an
-empty scratch directory): `specify integration install claude` and
-`specify integration install codex` coexist safely in one project,
-`specify integration status --json` gives a stable, parseable
-`installed_integrations` list, and `specify integration uninstall <key>`
-removes exactly that integration's own tracked files while leaving the
-other integration, `.specify/`, and every unrelated repository file
-byte-for-byte untouched (confirmed via sha1 comparison before/after).
+Observed `specify-cli` 1.0.1 behavior: installing the claude and codex
+integrations coexist in one project; `integration status --json` gives a
+parseable `installed_integrations` list; `integration uninstall <key>` removes
+only that integration's tracked files.
 
-Spec Kit's own skills are not self-contained: their `SKILL.md` files
-declare `compatibility: "Requires spec-kit project structure with
-.specify/ directory"` and shell out to `.specify/scripts/...`. So the
-"spec-kit" kit is a Spec Kit *integration*, not a folder of skill files —
-if the target repository has no `.specify/` yet, `add()` bootstraps it
-via Spec Kit's own `specify init --here`, never by hand-constructing
-`.specify/`.
+Spec Kit's skills are not self-contained: their `SKILL.md` declares
+`compatibility: "Requires spec-kit project structure with .specify/ directory"`
+and shells out to `.specify/scripts/...`. So this kit is a Spec Kit
+*integration*, not a folder of skill files: when `.specify/` is absent `add()`
+bootstraps it with `specify init --here`, never by hand.
 
-`specify bundle` was evaluated as a possible reusable distribution
-mechanism and rejected for this purpose: its own `--help` text describes
-it as installing "a bundle's full component set through each primitive's
-machinery" over Spec Kit's own primitive types (extensions, presets,
-steps, workflows) — composition over Spec Kit's own primitives, not a
-generic package manager arbitrary content could ride on.
+`specify bundle` was evaluated as a reusable distribution mechanism and
+rejected: it composes Spec Kit's own primitives (extensions, presets, steps,
+workflows) and is not a generic package manager.
 
-`remove()` only ever runs `specify integration uninstall claude`/`codex`
-— it never deletes `.specify/` itself (no such command exists, and other
-integrations or the repository's own use of Spec Kit may still depend on
-it) and never touches the `specify` executable.
+`remove()` only runs `specify integration uninstall claude`/`codex`. It never
+deletes `.specify/` (no such command exists, and other integrations or the
+repository's own Spec Kit use may depend on it) and never touches the `specify`
+executable.
 
-Provider errors are never silently collapsed into absence. `.specify/`
-missing is the one case genuinely equivalent to "not installed" — an
-objective filesystem fact needing no `specify` binary to observe. Once
-`.specify/` exists, "I could not determine state" (no `specify` binary,
-or `specify integration status --json` returning genuinely unparseable
-output) is reported as `unavailable`, never silently as `not-installed`.
-This is deliberately NOT the same as gating on the command's exit code:
-verified this session that `specify integration status --json` exits 1
-once every integration has been removed, while still emitting a
-well-formed, trustworthy `"installed_integrations": []` — trusting that
-body is more truthful than exit-code gating would be, not less. The same
-distinction applies to `remove()`: it is only ever a clean
-no-op when `.specify/` genuinely does not exist; if `.specify/` exists
-but the state or the uninstall itself cannot be safely performed (no
-`specify` binary, or the CLI errors), the command reports failure and
-leaves `.specify/` and its integrations exactly as they are rather than
-claiming "nothing to remove".
+Provider errors are never collapsed into absence. A missing `.specify/` is the
+one case equivalent to "not installed" (a filesystem fact needing no `specify`
+binary). Once it exists, a missing `specify` binary or unparseable status output
+reports `unavailable`, never `not-installed`; see `_installed_integrations` for
+why the exit code is deliberately not gated on. `remove()` is a clean no-op only
+when `.specify/` is absent; otherwise a state or uninstall it cannot safely
+perform reports failure and leaves `.specify/` and its integrations as they are.
 """
-
 from __future__ import annotations
 
 import json
@@ -69,10 +46,7 @@ from .types import KitOpOutcome, KitStatus
 _HARNESS_KEYS = ("claude", "codex")
 _HARNESS_LABELS = {"claude": "Claude", "codex": "Codex"}
 
-# The integration bindle uses to bootstrap `.specify/` when it doesn't
-# exist yet. Arbitrary but deliberate: something must be picked to
-# perform the one-shot `specify init`, and this repository always wants
-# both harnesses regardless of which one bootstraps the shared scaffolding.
+# Arbitrary: `specify init` needs one integration; both harnesses get installed.
 _BOOTSTRAP_INTEGRATION = "claude"
 _BOOTSTRAP_SCRIPT = "sh"
 
@@ -90,22 +64,14 @@ def _specify_dir(repo_info: RepoInfo) -> str:
 
 
 def _installed_integrations(specify: str, repo_info: RepoInfo) -> set[str] | None:
-    """Read-only. Returns None when state genuinely could not be determined
-    — the caller must never treat that the same as an empty,
-    successfully-read set (see module docstring: provider errors are
-    never silently collapsed into "not installed").
+    """Read-only; None means state could not be determined (not an empty set).
 
-    Deliberately does NOT gate on the command's exit code: verified this
-    session that `specify integration status --json` exits 1 once every
-    integration has been removed (`.specify/integration.json` missing,
-    `"status": "error"` in the body) while still emitting a well-formed,
-    trustworthy `"installed_integrations": []` — a real, structured
-    answer ("genuinely zero installed"), not a failed query. Trusting a
-    valid `installed_integrations` list whenever the JSON parses as one
-    is MORE truthful than exit-code gating would be here, not less —
-    exit-code gating would misreport this legitimate all-removed state as
-    `unavailable`. Only unparseable/malformed output (a real "can't
-    tell") falls back to None.
+    Deliberately does NOT gate on the exit code: `specify integration status
+    --json` exits 1 once every integration is removed
+    (`.specify/integration.json` missing, `"status": "error"`) yet still emits a
+    trustworthy `"installed_integrations": []`, so gating would misreport that
+    state as `unavailable`. Only unparseable or malformed output falls back to
+    None.
     """
     result = subprocess.run(
         [specify, "integration", "status", "--json"],
@@ -127,21 +93,14 @@ def _installed_integrations(specify: str, repo_info: RepoInfo) -> set[str] | Non
 
 def status(repo_info: RepoInfo) -> KitStatus:
     if not os.path.isdir(_specify_dir(repo_info)):
-        # Objective filesystem fact, resolvable with no `specify` binary at
-        # all: nothing has been bootstrapped here yet.
         return KitStatus(claude="not-installed", codex="not-installed")
 
     specify = _specify_executable()
     if specify is None:
-        # .specify/ exists, but there's no native interface left to
-        # interrogate it with on this machine.
         return KitStatus(claude="unavailable", codex="unavailable")
 
     installed = _installed_integrations(specify, repo_info)
     if installed is None:
-        # .specify/ exists, `specify` is present, but the native status
-        # command itself failed or returned something unparseable — a
-        # real "can't tell" state, not silent absence.
         return KitStatus(claude="unavailable", codex="unavailable")
 
     return KitStatus(
@@ -225,12 +184,7 @@ def add(repo_info: RepoInfo) -> KitOpOutcome:
 
 
 def remove(repo_info: RepoInfo) -> KitOpOutcome:
-    # .specify/ absent is the one case genuinely equivalent to "nothing
-    # to remove" — an objective filesystem fact, checked first and
-    # requiring no `specify` binary at all. Once .specify/ exists, a
-    # missing/failing `specify` means removal cannot be safely performed
-    # and must say so, never silently claim success while leaving
-    # `.claude/settings.json`-style drift behind (see module docstring).
+    # Only an absent .specify/ is a clean no-op; else report failure.
     if not os.path.isdir(_specify_dir(repo_info)):
         return KitOpOutcome(
             ok=True,

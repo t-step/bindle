@@ -12,10 +12,7 @@ from bindle import symphony_projection, work_ledger
 
 
 class LedgerTestCase(unittest.TestCase):
-    """Mirrors tests/test_work_ledger.py's own `LedgerTestCase` fixture: a
-    temp directory standing in for a repository's Git common-directory-
-    resolved `repo_root` (`RepoInfo.repo_root`) — this module never itself
-    shells out to Git, so no real repository is needed."""
+    """Mirrors test_work_ledger's `LedgerTestCase`; no Git repo needed."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -42,12 +39,7 @@ class LedgerTestCase(unittest.TestCase):
 
 
 class TestPublish(LedgerTestCase):
-    """specs/003-symphony-task-integration T016 (Acceptance Scenario 2.6,
-    FR-018): `publish()` writes a `task_projection` table matching
-    contracts/symphony-projection-v1.md's schema exactly, readable via a
-    real `mode=ro` URI connection, with `PRAGMA user_version` reporting
-    `1` from the export file alone — no internal ledger table need ever
-    be opened by an external reader."""
+    """T016 (FR-018): publish() writes the v1 task_projection schema."""
 
     def test_publish_returns_the_documented_path(self):
         self._create_task("T-1")
@@ -108,7 +100,6 @@ class TestPublish(LedgerTestCase):
         finally:
             conn.close()
 
-        # Task-only, exactly (FR-014): the milestone never appears.
         self.assertNotIn("M-1", rows)
         self.assertEqual(
             set(rows), {"T-open", "T-blocker", "T-blocked", "T-done"}
@@ -120,8 +111,7 @@ class TestPublish(LedgerTestCase):
         self.assertEqual(rows["T-open"][2], "Title T-open")
         self.assertIsNotNone(rows["T-open"][6])  # created_at preserved
 
-        # T-blocker is itself open/unclaimed/unblocked, so it remains
-        # dispatchable even though it blocks another task.
+        # T-blocker is itself open and unblocked, so stays dispatchable.
         self.assertEqual(rows["T-blocker"][4], "open")
         self.assertEqual(rows["T-blocker"][5], 1)
 
@@ -187,9 +177,7 @@ class TestPublish(LedgerTestCase):
 
 
 class TestPublishDeterminism(LedgerTestCase):
-    """specs/003-symphony-task-integration T017 (Acceptance Scenario 2.5,
-    SC-006): two `publish()` calls against an unchanged ledger produce an
-    equal `task_projection` result both times."""
+    """T017 (SC-006): unchanged ledger, two publishes, equal tables."""
 
     def test_two_publishes_from_unchanged_ledger_produce_equal_tables(self):
         self._create_task("T-a")
@@ -224,9 +212,7 @@ class TestPublishDeterminism(LedgerTestCase):
         self.assertEqual(first_version, second_version)
 
     def test_publish_fully_rewrites_rather_than_accumulates(self):
-        # A row present at the first publish but no longer eligible under
-        # the query (archived) must not linger in the export from a prior
-        # publish — the table is dropped and recreated, never patched.
+        # An archived row must not linger: the table is rebuilt, never patched.
         self._create_task("T-1")
         symphony_projection.publish(self.ledger)
         self.assertTrue(self.ledger.mark_done("T-1"))
@@ -242,12 +228,7 @@ class TestPublishDeterminism(LedgerTestCase):
 
 
 class TestClaimTaskConcurrency(LedgerTestCase):
-    """specs/003-symphony-task-integration T020 (Acceptance Scenario 3.2,
-    SC-008): mirrors tests/test_work_ledger.py's own
-    `test_concurrent_claim_attempts_have_exactly_one_winner` real-thread
-    technique — of any number of concurrent `claim_task()` attempts
-    against one never-before-claimed task, exactly one succeeds and every
-    other receives an immediate, unambiguous rejection."""
+    """T020 (SC-008): concurrent claim_task() calls have exactly one winner."""
 
     def test_concurrent_claim_task_attempts_have_exactly_one_winner(self):
         self._create_task("T-race")
@@ -279,12 +260,7 @@ class TestClaimTaskConcurrency(LedgerTestCase):
 
 
 class TestReleaseAndCompleteTask(LedgerTestCase):
-    """specs/003-symphony-task-integration T021 (Acceptance Scenarios
-    3.1, 3.3, 3.4): `release_task()` by the recorded owner succeeds and
-    is a no-op when the claim is already absent or held by someone else;
-    `complete_task()` transitions an open, claimed task to done and is
-    rejected — not silently reapplied — against a task that is not
-    currently open."""
+    """T021: owner release, no-op release, and complete_task() guards."""
 
     def test_claim_then_release_by_recorded_owner_succeeds(self):
         self._create_task("T-1")
@@ -301,7 +277,6 @@ class TestReleaseAndCompleteTask(LedgerTestCase):
 
         result = symphony_projection.release_task(self.ledger, "T-1", "someone-else")
         self.assertTrue(result.ok)
-        # The claim is untouched — still held by the real owner.
         self.assertTrue(self.ledger.is_claimed("T-1"))
         item = self.ledger.get_work_item("T-1")
         self.assertEqual(item.status, "open")
@@ -354,10 +329,7 @@ class TestReleaseAndCompleteTask(LedgerTestCase):
 
 
 class TestWriteSurfaceRejectsMilestone(LedgerTestCase):
-    """specs/003-symphony-task-integration T022 (Acceptance Scenario 3.5,
-    FR-024): `claim_task`/`release_task`/`complete_task` each return a
-    `not_a_task` result against a milestone id, rather than silently
-    treating it as a task."""
+    """T022 (FR-024): write functions return `not_a_task` for a milestone."""
 
     def test_claim_task_rejects_milestone(self):
         self._create_milestone("M-1")
@@ -368,9 +340,7 @@ class TestWriteSurfaceRejectsMilestone(LedgerTestCase):
 
     def test_release_task_rejects_milestone(self):
         self._create_milestone("M-1")
-        # Even a real milestone claim (acquired directly through the
-        # underlying ledger primitive, not through this write surface)
-        # must not be released through the task-only surface.
+        # A real milestone claim must not be releasable via the task surface.
         self.assertTrue(self.ledger.claim("M-1", "reviewer"))
         result = symphony_projection.release_task(self.ledger, "M-1", "reviewer")
         self.assertFalse(result.ok)
@@ -398,11 +368,7 @@ _QUICKSTART_TASKS_MD = """\
 
 
 class TestQuickstartEndToEnd(LedgerTestCase):
-    """specs/003-symphony-task-integration/quickstart.md, Scenarios 1-4,
-    end to end: load a Spec Kit feature, publish the projection, and
-    claim/release/complete a task through the write surface — mirroring
-    tests/test_work_ledger.py's own `TestQuickstartEndToEnd` convention.
-    """
+    """quickstart.md Scenarios 1-4 end to end."""
 
     def test_quickstart_scenarios_1_through_4(self):
         from bindle import speckit_loader
@@ -413,7 +379,7 @@ class TestQuickstartEndToEnd(LedgerTestCase):
         with open(os.path.join(feature_dir_abs, "tasks.md"), "w") as f:
             f.write(_QUICKSTART_TASKS_MD)
 
-        # -- Scenario 1: load, then reload idempotently ------------------
+        # Scenario 1: load, then reload idempotently
         result = speckit_loader.load_feature(self.ledger, feature_dir_rel)
         self.assertEqual(len(result.created), 3)
         self.assertEqual(result.resynced, ())
@@ -434,7 +400,7 @@ class TestQuickstartEndToEnd(LedgerTestCase):
         self.assertEqual(self.ledger.get_work_item(t1).status, "done")
         self.assertTrue(self.ledger.is_claimed(t3))
 
-        # -- Scenario 2: publish, task-only, dispatchable is correct ------
+        # Scenario 2: publish, task-only, dispatchable is correct
         milestone_id = "M-1"
         self._create_milestone(milestone_id)
         export_path = symphony_projection.publish(self.ledger)
@@ -457,7 +423,7 @@ class TestQuickstartEndToEnd(LedgerTestCase):
         self.assertEqual(rows[t2][3], 1)  # unblocked now that t1 is done
         self.assertEqual(rows[t3][3], 0)  # claimed
 
-        # -- Scenario 3: regeneration is deterministic --------------------
+        # Scenario 3: regeneration is deterministic
         export_path_2 = symphony_projection.publish(self.ledger)
         conn = sqlite3.connect(f"file:{export_path_2}?mode=ro", uri=True)
         try:
@@ -475,7 +441,7 @@ class TestQuickstartEndToEnd(LedgerTestCase):
             conn.close()
         self.assertEqual(rows_1, rows_2)
 
-        # -- Scenario 4: claim / release / complete through the write surface
+        # Scenario 4: claim / release / complete through the write surface
         self.ledger.release_claim(t3, owner="agent-A")
         claim_result = symphony_projection.claim_task(self.ledger, t2, owner="agent-B")
         self.assertTrue(claim_result.ok)  # t1 is done, so t2 is now unblocked
@@ -500,12 +466,7 @@ class TestQuickstartEndToEnd(LedgerTestCase):
 
 
 class TestApplicationIdOwnership(LedgerTestCase):
-    # Mirrors tests/test_work_ledger.py's own TestApplicationIdOwnership,
-    # applied to the disposable, regenerated projection file: an absent
-    # file is always safe to create; one already carrying
-    # `_APPLICATION_ID`, or a pre-marker file whose `user_version`/table
-    # set positively match the known projection shape, is safe to adopt
-    # and regenerate; anything else must fail closed.
+    # Mirrors test_work_ledger's TestApplicationIdOwnership for the projection.
     def _db_path(self):
         return symphony_projection.projection_path(self.repo_root)
 
@@ -608,11 +569,7 @@ class TestApplicationIdOwnership(LedgerTestCase):
             conn.close()
 
     def test_preexisting_zero_byte_file_refuses(self):
-        # A 0-byte file already occupying the canonical path BEFORE
-        # publish() ever runs is a placeholder Bindle never created —
-        # unlike the identical-looking state connect() itself produces
-        # for an absent path, this must refuse rather than be silently
-        # adopted as fresh.
+        # Refuse a 0-byte file present BEFORE publish(), unlike connect()'s own.
         os.makedirs(os.path.dirname(self._db_path()), exist_ok=True)
         open(self._db_path(), "w").close()
         self.assertEqual(os.path.getsize(self._db_path()), 0)
@@ -623,9 +580,6 @@ class TestApplicationIdOwnership(LedgerTestCase):
         self.assertEqual(os.path.getsize(self._db_path()), 0)
 
     def test_matching_table_name_and_version_but_wrong_column_shape_refuses(self):
-        # Adversarial case: a foreign database that happens to reuse
-        # Bindle's exact table name and a recognized user_version, but
-        # whose columns don't actually match.
         os.makedirs(os.path.dirname(self._db_path()), exist_ok=True)
         conn = sqlite3.connect(self._db_path())
         conn.execute(
@@ -654,11 +608,7 @@ class TestApplicationIdOwnership(LedgerTestCase):
             conn.close()
 
     def test_preexisting_nonzero_empty_sqlite_file_refuses_regardless_of_size(self):
-        # File size is not a trustworthy ownership signal: an unrelated,
-        # genuinely empty SQLite database (application_id=0, user_version=0,
-        # no tables) that happens to be nonzero-size (e.g. because some
-        # other process already opened it) must refuse exactly like a
-        # literal 0-byte placeholder.
+        # Size is no ownership signal: a nonzero empty SQLite DB refuses too.
         db_path = self._db_path()
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         conn = sqlite3.connect(db_path, isolation_level=None)
@@ -683,12 +633,7 @@ class TestApplicationIdOwnership(LedgerTestCase):
             conn.close()
 
     def test_fresh_creation_is_stamped_before_publish_can_fail_and_retry_succeeds(self):
-        # Mirrors work_ledger's identical retry-safety test: a path absent
-        # before this invocation is stamped `_APPLICATION_ID` immediately,
-        # before the regenerate transaction runs — so a crash mid-publish
-        # still leaves a file the next `publish()` attempt positively
-        # recognizes as its own, purely from the marker (no filesize/
-        # content heuristic).
+        # Mirrors work_ledger's retry test: recognition rests on the marker.
         db_path = self._db_path()
         self.assertFalse(os.path.exists(db_path))
 
@@ -717,7 +662,6 @@ class TestApplicationIdOwnership(LedgerTestCase):
         finally:
             raw_conn.close()
 
-        # A retry succeeds — recognized via the marker alone.
         symphony_projection.publish(self.ledger)
         conn = sqlite3.connect(db_path)
         try:
@@ -730,9 +674,7 @@ class TestApplicationIdOwnership(LedgerTestCase):
 
 
 class TestProjectionEnsureGitignored(unittest.TestCase):
-    # docs/DECISIONS.md: `bindle init` locally ignores exactly the
-    # canonical projection artifact and its SQLite sidecars — never the
-    # tracked `.gitignore`, never a broader `.bindle-work/` rule.
+    # `bindle init` ignores only the projection file and its sidecars.
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = os.path.join(self.tmp.name, "repo")

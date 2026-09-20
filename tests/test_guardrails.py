@@ -40,13 +40,8 @@ def _apply_guardrails(repo):
 
 
 class TestDetectGuardrailsRealFixtures(unittest.TestCase):
-    # These functions are the read-only inspection seam `bindle status`
-    # (cli.py) drives — proven here directly against real repository state,
-    # not mocked away, since they're exactly the ownership predicates
-    # install-guardrails.sh's --apply/--uninstall already enforce (see
-    # bin/test-guardrail-status.sh for the full five-state matrix at the
-    # installer level; this proves the Python entry points parse that
-    # correctly).
+    # Read-only seam `bindle status` drives, tested on real repo state.
+    # bin/test-guardrail-status.sh covers the installer-level five-state matrix.
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = os.path.join(self.tmp.name, "repo")

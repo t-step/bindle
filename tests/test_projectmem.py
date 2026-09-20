@@ -29,12 +29,7 @@ def _init_repo(path):
 
 
 class TestDetectProjectmemRealFixtures(unittest.TestCase):
-    # No dependency on the `pjm` CLI being installed: fixtures reproduce
-    # exactly the marker projectmem's own storage.py
-    # (`_is_project_mem_dir`) uses to recognize an initialized project —
-    # a `.projectmem/` directory containing `config.toml` — rather than
-    # shelling out to a tool that may not be on PATH, and rather than
-    # duplicating projectmem's own test suite.
+    # Fixtures mirror projectmem's marker (`.projectmem/config.toml`): no `pjm`.
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = os.path.join(self.tmp.name, "repo")
@@ -55,9 +50,7 @@ class TestDetectProjectmemRealFixtures(unittest.TestCase):
         self.assertEqual(detect_projectmem(self.info), "installed")
 
     def test_installed_recognizes_directory_via_native_marker_alone(self):
-        # Matches projectmem's own _is_project_mem_dir predicate: existence
-        # of config.toml is sufficient, regardless of which other files
-        # (events.jsonl, issues/, summary.md, ...) are present.
+        # Mirrors projectmem's `_is_project_mem_dir`: config.toml suffices.
         mem_dir = os.path.join(self.repo, ".projectmem")
         os.makedirs(mem_dir)
         with open(os.path.join(mem_dir, "config.toml"), "w") as f:
@@ -78,25 +71,16 @@ class TestDetectProjectmemRealFixtures(unittest.TestCase):
         self.assertEqual(detect_projectmem(self.info), "conflict")
 
     def test_conflict_when_projectmem_is_a_dangling_symlink(self):
-        # os.path.exists() is false for a dangling symlink, which would
-        # otherwise misread this as "not-installed" even though the path
-        # entry is occupied and `pjm init`'s own
-        # `project_dir.mkdir(exist_ok=True)` would fail against it.
+        # exists() misses a dangling symlink, yet `pjm init` would fail on it.
         link = os.path.join(self.repo, ".projectmem")
         os.symlink(os.path.join(self.repo, "nonexistent-target"), link)
         self.assertEqual(detect_projectmem(self.info), "conflict")
-        # Never followed or repaired: the dangling symlink is left exactly
-        # as it was.
+        # Never followed or repaired.
         self.assertTrue(os.path.islink(link))
         self.assertFalse(os.path.exists(link))
 
     def test_installed_when_config_toml_is_not_a_regular_file(self):
-        # Projectmem's own _is_project_mem_dir predicate is
-        # `candidate.is_dir() and (candidate / CONFIG_FILE).exists()` —
-        # plain existence, not is_file(). A config.toml that is itself a
-        # directory still satisfies Projectmem's own recognition, so
-        # Bindle must report "installed" here too rather than tightening
-        # the marker into a stronger, non-native check.
+        # Projectmem's marker is plain .exists(); don't tighten to is_file().
         mem_dir = os.path.join(self.repo, ".projectmem")
         os.makedirs(mem_dir)
         os.makedirs(os.path.join(mem_dir, "config.toml"))
@@ -114,10 +98,7 @@ class TestDetectProjectmemRealFixtures(unittest.TestCase):
         self.assertEqual(before, after)
 
     def test_scoped_to_worktree_root_not_a_parent_directory(self):
-        # A .projectmem/ that exists in a linked worktree's parent
-        # directory (e.g. a sibling worktree created by `bindle branch`,
-        # both under the same parent) must not be reported as installed
-        # for a worktree that has no .projectmem/ of its own.
+        # A parent directory's .projectmem/ (sibling worktree) must not count.
         parent = os.path.dirname(self.repo)
         parent_mem_dir = os.path.join(parent, ".projectmem")
         os.makedirs(parent_mem_dir)
@@ -131,9 +112,7 @@ class TestDetectProjectmemRealFixtures(unittest.TestCase):
 
 
 class TestPjmExecutable(unittest.TestCase):
-    # pjm_executable() is a thin shutil.which() wrapper — Bindle declares no
-    # Projectmem package dependency (AGENTS.md), so this is the only
-    # supported way it locates the native CLI.
+    # Thin shutil.which() wrapper; no Projectmem dependency (AGENTS.md).
     def test_returns_none_when_pjm_is_not_on_path(self):
         with mock.patch("shutil.which", return_value=None) as which:
             self.assertIsNone(pjm_executable())
@@ -145,15 +124,9 @@ class TestPjmExecutable(unittest.TestCase):
 
 
 class TestPjmInitArgs(unittest.TestCase):
-    # Narrowed to core repository-local storage setup only: every flag
-    # suppresses a native `pjm init` convenience that reaches outside that
-    # scope (docs/DECISIONS.md D033). --no-hooks IS included — Projectmem's
-    # own hook installer resolves `<cwd>/.git/hooks` directly, which
-    # silently no-ops in a linked worktree (`.git` is a file there, not
-    # that directory). Hooks are installed separately via
-    # PJM_HOOKS_INSTALL_ARGS, against the repository's shared Git common
-    # directory, so they still take effect and still compose with Bindle's
-    # dispatcher — see cli.py's `_cmd_init`.
+    # Core repo-local setup only; each flag drops a `pjm init` extra (D033).
+    # --no-hooks: pjm resolves <cwd>/.git/hooks, a no-op in linked worktrees;
+    # hooks go in via PJM_HOOKS_INSTALL_ARGS instead (cli.py `_cmd_init`).
     def test_narrows_to_core_repo_local_setup_only(self):
         self.assertEqual(
             PJM_INIT_ARGS,

@@ -1,42 +1,37 @@
 """Guardrail installer access + read-only status inspection.
 
 `installer_path`/`installer_env` locate and configure Bindle's guardrail
-installer (install-guardrails.sh) — shared by cli.py's `bindle init`/`bindle
-remove`/`bindle migrate-legacy-global` (which mutate) and the
-`detect_git_guardrails`/`detect_claude_guardrails` functions below (which
-never do).
+installer (install-guardrails.sh), shared by cli.py's mutating `bindle
+init`/`bindle remove`/`bindle migrate-legacy-global` and the read-only
+`detect_git_guardrails`/`detect_claude_guardrails` below.
 
-Detection never reimplements install-guardrails.sh's ownership/intactness
-predicates in Python: it shells out to the installer's own `--status` mode,
-which computes each layer's state using the exact same functions
-(hooks_dir_is_intact, pretooluse_entry_present, valid-json,
-read_owned_json, the tracked-file check) that `--apply`/`--uninstall`
-already rely on — so `bindle status` can never drift from what `bindle
-init`/`bindle remove` actually enforce. See install-guardrails.sh's
-detect_git_status/detect_claude_status for the state definitions.
+Detection never reimplements the installer's ownership/intactness predicates in
+Python: it shells out to the installer's `--status` mode, which uses the same
+functions (hooks_dir_is_intact, pretooluse_entry_present, valid-json,
+read_owned_json, the tracked-file check) as `--apply`/`--uninstall`, so `bindle
+status` cannot drift from what `bindle init`/`bindle remove` enforce. See
+install-guardrails.sh's detect_git_status/detect_claude_status for the state
+definitions.
 
 Five states:
-  installed      — the complete expected Bindle-owned configuration is
-                   present and intact.
-  not-installed  — no relevant Bindle configuration exists.
-  partial        — recognizable Bindle-owned state exists, but the
-                   installation is incomplete.
-  conflict       — the integration point is occupied by something that is
-                   not Bindle-owned (a foreign core.hooksPath for Git; a
-                   tracked, team-shared settings.local.json for Claude).
-  invalid        — Bindle-owned-looking state exists but is malformed or
-                   broken enough that ownership/operation cannot safely be
-                   established (e.g. settings.local.json isn't valid
-                   JSON, or the owned-deny bookkeeping file is unreadable
-                   as a JSON array).
+  installed      the complete expected Bindle-owned configuration is present
+                 and intact.
+  not-installed  no relevant Bindle configuration exists.
+  partial        recognizable Bindle-owned state exists, but the installation
+                 is incomplete.
+  conflict       the integration point is occupied by something not
+                 Bindle-owned (a foreign core.hooksPath for Git; a tracked,
+                 team-shared settings.local.json for Claude).
+  invalid        Bindle-owned-looking state exists but is malformed enough that
+                 ownership or operation cannot safely be established (e.g.
+                 settings.local.json isn't valid JSON, or the owned-deny
+                 bookkeeping file isn't a JSON array).
 
-There is no separate "invalid" state for the Git layer: install-guardrails.sh
-never validates the dispatcher's actual script content (only its executable
-bit and each hook symlink's target name), so a content-corrupted-but-
-correctly-shaped dispatcher is indistinguishable from a good one, and
-anything that fails the shape check already reports as "partial" — there is
-no remaining, objectively-observable signal that would let this tell
-"malformed" apart from "incomplete" for Git.
+The Git layer has no "invalid" state: install-guardrails.sh never validates the
+dispatcher's script content (only its executable bit and each hook symlink's
+target name), so a content-corrupted but correctly-shaped dispatcher is
+indistinguishable from a good one, and anything failing the shape check already
+reports "partial"; no objective signal separates "malformed" from "incomplete".
 """
 
 from __future__ import annotations
@@ -59,22 +54,12 @@ class GuardrailDetectionError(RuntimeError):
 
 
 def installer_path() -> Path:
-    # Package-owned runtime asset (src/bindle/_bin/), included in every
-    # wheel/sdist build and resolved through the installed package's own
-    # location — not relative to cwd or a Bindle source checkout, so this
-    # works identically for `uv run bindle` (editable/dev) and a normally
-    # installed `bindle` release alike.
+    # Resolved via the installed package, not cwd or a source checkout.
     return Path(str(importlib.resources.files("bindle") / "_bin" / "install-guardrails.sh"))
 
 
 def installer_env() -> dict[str, str]:
-    # The installer's Claude-layer settings.local.json merge (and, for
-    # detection, its JSON reads) needs generic JSON structural operations
-    # (settings_json.py, package-owned) but no external tool: BINDLE_PYTHON
-    # tells it to reuse the exact interpreter already running `bindle`
-    # itself, so this works identically whether `bindle` is invoked via
-    # `uv run` or from a normally installed package, with no new runtime
-    # prerequisite beyond Python itself.
+    # BINDLE_PYTHON: the installer reuses this interpreter for settings_json.py.
     return {**os.environ, "BINDLE_PYTHON": sys.executable}
 
 

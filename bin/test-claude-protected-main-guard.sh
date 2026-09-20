@@ -2,10 +2,9 @@
 #
 # test-claude-protected-main-guard.sh — regression suite for
 # bin/claude-protected-main-guard.sh and bin/allow-main-write.sh, driven with
-# synthetic PreToolUse stdin JSON (the same shape documented for Claude Code
-# hooks and used by ~/.claude/hooks/subagent-limit-guard on this machine) —
-# no live Claude Code session is needed. Fully isolated: its own HOME and
-# fixture repos, never the real ~/.claude or ~/.local/share/bindle.
+# synthetic PreToolUse stdin JSON (no live Claude Code session needed). Fully
+# isolated: its own HOME and fixture repos, never the real ~/.claude or
+# ~/.local/share/bindle.
 #
 # Usage: bin/test-claude-protected-main-guard.sh
 #
@@ -65,11 +64,8 @@ guard_decision() {
   fi
 }
 
-# guard_denies_cleanly FILE — true only if the guard exits 0 AND produces a
-# well-formed deny decision. A bare "was stdout empty?" check (guard_decision
-# above) cannot tell a real "allow" apart from an unhandled crash (nonzero
-# exit, no output) — this distinguishes them, which is exactly what the
-# fail-closed malformed-token behavior below needs to prove.
+# guard_denies_cleanly FILE — true only if the guard exits 0 AND emits a
+# well-formed deny; guard_decision can't tell an allow from a crash (no output).
 # shellcheck disable=SC2317,SC2329
 guard_denies_cleanly() {
   local out rc
@@ -79,7 +75,6 @@ guard_denies_cleanly() {
   jq -e '.hookSpecificOutput.permissionDecision == "deny"' >/dev/null 2>&1 <<<"$out"
 }
 
-# ===========================================================================
 echo "branch gating:"
 
 # shellcheck disable=SC2317,SC2329
@@ -96,7 +91,6 @@ git -C "$FIX" switch -q main
 edit_outside_git_allowed() { [ "$(cd /tmp && echo '{}' | "$GUARD" "$HELPER")" = "" ]; }
 check "a tool call with no resolvable Git repo is allowed (not this guard's concern)" edit_outside_git_allowed
 
-# ===========================================================================
 echo "one-shot authorization capability:"
 
 (cd "$FIX" && "$HELPER" >/dev/null)
@@ -114,10 +108,7 @@ sleep 2
 expired_denied() { [ "$(guard_decision "$FIX/f.txt")" = deny ]; }
 check "an expired token is denied" expired_denied
 
-# A token whose recorded worktree/common_dir does not match the current
-# repository is denied even though it is otherwise well-formed and unexpired
-# — content-validated, not just presence-checked (defense in depth beyond
-# the physical per-worktree token path).
+# Content-validated, not just presence-checked (defense in depth beyond path).
 GIT_DIR_ABS="$(git -C "$FIX" rev-parse --absolute-git-dir)"
 jq -n --arg common_dir "$(git -C "$FIX" rev-parse --path-format=absolute --git-common-dir)" \
   --arg worktree "/nonexistent/other/worktree" \
@@ -130,7 +121,6 @@ check "a token recorded for a different worktree is denied" wrong_worktree_denie
 check "a mismatched token is consumed on the attempt, not left behind" bash -c \
   "[ ! -e '$GIT_DIR_ABS/bindle-allow-main-write.json' ]"
 
-# ===========================================================================
 echo "fail-closed against a malformed token (never an unhandled crash):"
 
 TOKEN_PATH="$(git -C "$FIX" rev-parse --absolute-git-dir)/bindle-allow-main-write.json"
@@ -153,8 +143,6 @@ check_malformed_token "a fractional expires_at is denied cleanly" \
 check_malformed_token "a missing common_dir field is denied cleanly" \
   '{"worktree":"/y","expires_at":9999999999}'
 
-# An unreadable token (e.g. a permissions problem, not a content problem)
-# must fail closed the same way — deny cleanly, never crash the hook.
 printf '{"common_dir":"/x","worktree":"/y","expires_at":9999999999}' >"$TOKEN_PATH"
 chmod 000 "$TOKEN_PATH"
 check "an unreadable token file is denied cleanly, not an unhandled crash" \
@@ -162,7 +150,6 @@ check "an unreadable token file is denied cleanly, not an unhandled crash" \
 chmod 644 "$TOKEN_PATH" 2>/dev/null || true
 rm -f "$TOKEN_PATH"
 
-# ===========================================================================
 echo "concurrency: exactly one of two simultaneous invocations may consume a token:"
 
 git -C "$FIX" switch -q main
@@ -199,7 +186,6 @@ check "the other simultaneous invocation was denied, not silently dropped" exact
 check "no claim/token artifact is left behind after the race" bash -c \
   "[ ! -e '$TOKEN_PATH' ] && [ -z \"\$(find '$(dirname "$TOKEN_PATH")' -maxdepth 1 -name '*.claimed.*')\" ]"
 
-# ===========================================================================
 echo "allow-main-write.sh helper:"
 
 git -C "$FIX" switch -q feature-branch
@@ -212,6 +198,5 @@ git -C "$FIX" switch -q main
 helper_requires_git_repo() { ! (cd "$TMP" && "$HELPER") >/dev/null 2>&1; }
 check "the helper refuses outside a Git repository" helper_requires_git_repo
 
-# ===========================================================================
 printf '\n  claude-protected-main-guard: %d/%d checks passed\n' "$pass" "$((pass + fail))"
 exit "$fail"

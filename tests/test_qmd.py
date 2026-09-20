@@ -31,9 +31,7 @@ def _no_qmd():
     return mock.patch("bindle.qmd.qmd_executable", return_value=None)
 
 
-# Exact shape verified this session against the real, installed `qmd` CLI
-# (2.5.3 on PATH, 2.8.3 via a disposable local install) — `qmd init`
-# followed by `qmd collection add . --name repo --mask "..."`.
+# Real index.yml shape after `qmd init` + `collection add` (qmd 2.5.3, 2.8.3).
 _REAL_INDEX_YML_ONE_COLLECTION = """\
 collections:
   repo:
@@ -93,8 +91,7 @@ class TestParseCollectionPaths(unittest.TestCase):
         self.assertEqual(_parse_collection_paths(text), {"repo": "/has spaces/bindle"})
 
     def test_stops_at_next_top_level_key_never_reads_into_models(self):
-        # A pathological config where a *model* value happens to start with
-        # "path:" must never be misread as a collection path.
+        # A *model* value starting "path:" must not read as a collection path.
         text = "collections:\n  repo:\n    path: /ok\nmodels:\n  path: /not-a-collection\n"
         self.assertEqual(_parse_collection_paths(text), {"repo": "/ok"})
 
@@ -131,10 +128,7 @@ class TestCollectionAddArgs(unittest.TestCase):
         )
 
     def test_mask_scopes_to_root_docs_plans_and_specs_only(self):
-        # Regression guard for the deliberately narrow boundary (module
-        # docstring "Collection identity"): this must never silently widen
-        # to "every *.md in the tree" (which would sweep in
-        # .projectmem/'s own generated Markdown).
+        # Must not widen to every *.md (sweeps in .projectmem/'s Markdown).
         self.assertEqual(COLLECTION_MASK, "{*.md,docs/**/*.md,plans/**/*.md,specs/**/*.md}")
 
 
@@ -144,10 +138,7 @@ class TestQmdInitArgs(unittest.TestCase):
 
 
 class TestDetectQmdRealFixtures(unittest.TestCase):
-    # Mirrors test_projectmem.py's TestDetectProjectmemRealFixtures: real
-    # Git fixtures on disk, `qmd_executable()` mocked so these never depend
-    # on (or vary with) whether `qmd` is actually installed on the machine
-    # running the tests.
+    # Real Git fixtures; `qmd_executable()` mocked so qmd need not be installed.
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = os.path.join(self.tmp.name, "repo")
@@ -172,8 +163,7 @@ class TestDetectQmdRealFixtures(unittest.TestCase):
             self.assertEqual(detect_qmd(self.info), "not-initialized")
 
     def test_not_initialized_takes_priority_over_unavailable_check_order(self):
-        # unavailable must be checked first regardless of on-disk state —
-        # state genuinely cannot be determined without the executable.
+        # "unavailable" is checked first: no executable means unknown state.
         self._write_index_yml(_REAL_INDEX_YML_EMPTY)
         with _no_qmd():
             self.assertEqual(detect_qmd(self.info), "unavailable")
@@ -192,8 +182,7 @@ class TestDetectQmdRealFixtures(unittest.TestCase):
             self.assertEqual(detect_qmd(self.info), "ready")
 
     def test_ready_resolves_symlinked_worktree_paths(self):
-        # os.path.realpath comparison, not string equality — a worktree
-        # reached through a symlinked path must still match.
+        # realpath, not string equality: a symlinked worktree path must match.
         real_dir = os.path.join(self.tmp.name, "real-repo")
         os.rename(self.repo, real_dir)
         link = self.repo
@@ -239,9 +228,7 @@ class TestDetectQmdRealFixtures(unittest.TestCase):
             self.assertEqual(detect_qmd(self.info), "conflict")
 
     def test_conflict_when_our_collection_name_points_elsewhere(self):
-        # Same collection name, different path: an unrelated, non-Bindle
-        # collection that happens to be named "repo" — ownership is
-        # ambiguous, must never be reused or overwritten.
+        # An unrelated collection named "repo": never reuse or overwrite it.
         text = f"collections:\n  {COLLECTION_NAME}:\n    path: /somewhere/unrelated\n"
         self._write_index_yml(text)
         with _fake_qmd():
@@ -301,10 +288,7 @@ class TestIndexFilePath(unittest.TestCase):
 
 
 class TestEnsureGitignored(unittest.TestCase):
-    # `ensure_gitignored` is the "Bindle should locally ignore .qmd/"
-    # follow-up: a single, machine-local `info/exclude` line, added
-    # idempotently, never touching the repository's own tracked
-    # `.gitignore`. No `qmd` CLI dependency — this is pure Git mechanics.
+    # One idempotent info/exclude line; never the tracked .gitignore.
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = os.path.join(self.tmp.name, "repo")

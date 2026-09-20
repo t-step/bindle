@@ -4,12 +4,10 @@
 # install-guardrails.sh: settings.local.json structural merge, the
 # secret-file deny manifest's content, and install/uninstall round-trips
 # against pre-existing unrelated repository configuration. The Claude layer
-# is repo-local (installed into a target repository's own
-# .claude/settings.local.json, never a global Claude configuration), so
-# every scenario here uses a real, isolated fixture repository. Fully
-# isolated otherwise too (its own HOME, legacy-lookup homes) — never
-# touches the real ~/.claude or ~/.local/share/bindle. Only synthetic
-# fixtures are used; no real secrets are read or written.
+# is repo-local (a target repository's own .claude/settings.local.json, never
+# a global config), so every scenario uses a real, isolated fixture repository
+# and its own HOME. Never touches the real ~/.claude or ~/.local/share/bindle;
+# only synthetic fixtures, no real secrets read or written.
 #
 # Usage: bin/test-install-guardrails.sh
 #
@@ -33,17 +31,13 @@ check() { # check "description" command...
   fi
 }
 
-# inode_of FILE — the file's inode number, portable across GNU coreutils
-# stat (Linux, `-c`) and BSD stat (macOS, `-f`). Used to prove a path's
-# identity is unchanged (same inode) or was atomically replaced (different
-# inode) without depending on either platform's stat flavor.
+# inode_of FILE — portable across GNU stat (-c, Linux) and BSD stat (-f, macOS).
 inode_of() {
   stat -c %i "$1" 2>/dev/null || stat -f %i "$1" 2>/dev/null
 }
 
-# claude_settings_for REPO — the repo-local Claude settings path
-# install-guardrails.sh would use for REPO (main-checkout-anchored, per
-# Claude Code's own worktree resolution).
+# claude_settings_for REPO — the repo-local Claude settings path (anchored at
+# the main checkout, per Claude Code's own worktree resolution).
 claude_settings_for() {
   local repo="$1" common root
   common="$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)"
@@ -51,25 +45,20 @@ claude_settings_for() {
   printf '%s' "$root/.claude/settings.local.json"
 }
 
-# claude_dir_for REPO — the repo-local directory holding the Claude
-# guard/helper scripts for REPO.
+# claude_dir_for REPO — the repo-local dir holding the guard/helper scripts.
 claude_dir_for() {
   local repo="$1"
   printf '%s/bindle-claude' "$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)"
 }
 
-# owned_deny_file_for REPO — the repo-local deny-ownership record for
-# REPO. A sibling of claude_dir_for, not nested inside it (see
-# install-guardrails.sh: it must stay reachable even when guard/helper
-# installation fails).
+# owned_deny_file_for REPO — the deny-ownership record; a sibling of
+# claude_dir_for so it stays reachable if guard/helper installation fails.
 owned_deny_file_for() {
   local repo="$1"
   printf '%s/bindle-claude-deny-owned.json' "$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)"
 }
 
-# owned_exclude_file_for REPO — the repo-local info/exclude-ownership
-# marker for REPO (present iff Bindle itself added the machine-local
-# ignore rule for settings.local.json).
+# owned_exclude_file_for REPO — present iff Bindle itself added the ignore rule.
 owned_exclude_file_for() {
   local repo="$1"
   printf '%s/bindle-claude-exclude-owned' "$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)"
@@ -105,10 +94,6 @@ new_fixture "$FIX"
 SETTINGS="$(claude_settings_for "$FIX")"
 mkdir -p "$(dirname "$SETTINGS")"
 
-# Pre-existing repository config this installer must never touch — an
-# unrelated PreToolUse entry (different matcher), an unrelated top-level
-# key, and an unrelated permissions.deny entry that happens to sit in the
-# same array Bindle's manifest also writes into.
 cat >"$SETTINGS" <<'EOF'
 {
   "model": "sonnet",
@@ -126,7 +111,6 @@ EOF
 
 "$INSTALLER" --apply --claude-only --repo "$FIX" >/dev/null
 
-# ===========================================================================
 echo "structural merge preserves unrelated existing configuration:"
 
 check "the pre-existing unrelated PreToolUse (Agent) entry survives" bash -c \
@@ -141,7 +125,6 @@ FIX_CLAUDE_DIR="$(claude_dir_for "$FIX")"
 check "the guard/helper scripts were installed inside the repo's own .git, not anywhere global" \
   test -x "$FIX_CLAUDE_DIR/claude-protected-main-guard"
 
-# ===========================================================================
 echo "secret-file deny manifest content:"
 
 check "settings.local.json is well-formed JSON after merge" jq -e . "$SETTINGS" >/dev/null
@@ -182,7 +165,6 @@ check "obvious macOS Keychain dump is denied for Bash" bash -c \
 check "an ordinary, unrelated Bash command shape is not touched by the manifest" bash -c \
   "! jq -e '.permissions.deny | any(. == \"Bash(npm test)\")' '$SETTINGS' >/dev/null"
 
-# ===========================================================================
 echo "idempotency:"
 
 BEFORE_LEN="$(jq '.permissions.deny | length' "$SETTINGS")"
@@ -195,7 +177,6 @@ check "re-applying does not duplicate permissions.deny entries" bash -c \
 check "re-applying does not duplicate the PreToolUse guard entry" bash -c \
   "[ '$BEFORE_PTU_LEN' = '$AFTER_PTU_LEN' ]"
 
-# ===========================================================================
 echo "uninstall preserves unrelated configuration:"
 
 "$INSTALLER" --uninstall --claude-only --repo "$FIX" >/dev/null
@@ -213,14 +194,10 @@ check "the unrelated top-level key still survives uninstall" bash -c \
 check "the repo-local guard/helper directory was removed" bash -c \
   "[ ! -d \"\$(git -C '$FIX' rev-parse --path-format=absolute --git-common-dir)/bindle-claude\" ]"
 
-# ===========================================================================
 echo "a pre-existing entry byte-identical to a Bindle-generated rule survives install + uninstall:"
 
-# A fresh, isolated fixture whose settings.local.json already contains
-# "Read(.env)" — the EXACT string Bindle's own manifest also generates —
-# before Bindle ever runs. Ownership must be tracked by "did Bindle add
-# this," not "does this string appear in the generated manifest," or an
-# --uninstall would delete a rule it never put there (OWNED_DENY_FILE).
+# Ownership tracks "did Bindle add this", not "does the string match the
+# manifest", or --uninstall deletes a rule it never added (OWNED_DENY_FILE).
 OVERLAP_REPO="$TMP/overlap-repo"
 new_fixture "$OVERLAP_REPO"
 OVERLAP_SETTINGS="$(claude_settings_for "$OVERLAP_REPO")"
@@ -243,10 +220,8 @@ check "the pre-existing byte-identical Read(.env) entry survives uninstall" bash
 check "every OTHER Bindle-generated deny entry was removed, leaving only the pre-existing one" bash -c \
   "[ \"\$(jq '.permissions.deny | length' '$OVERLAP_SETTINGS')\" = 1 ]"
 
-# ===========================================================================
 echo "a malformed existing settings.local.json is refused safely, never mutated:"
 
-# --apply against malformed JSON.
 MALFORMED_APPLY_REPO="$TMP/malformed-apply-repo"
 new_fixture "$MALFORMED_APPLY_REPO"
 MALFORMED_APPLY_SETTINGS="$(claude_settings_for "$MALFORMED_APPLY_REPO")"
@@ -261,10 +236,6 @@ check "--apply against a malformed settings.local.json exits nonzero" apply_refu
 check "--apply leaves the malformed settings.local.json byte-for-byte untouched" bash -c \
   "[ \"\$(cat '$MALFORMED_APPLY_SETTINGS')\" = '{ this is not valid json' ]"
 
-# --uninstall against malformed JSON. Config must be detached before the
-# files it references are removed: if settings can't be safely updated,
-# the PreToolUse entry (if any) is still active, so the guard and helper
-# files it names must be PRESERVED, not deleted out from under it.
 MALFORMED_UNINSTALL_REPO="$TMP/malformed-uninstall-repo"
 new_fixture "$MALFORMED_UNINSTALL_REPO"
 "$INSTALLER" --apply --claude-only --repo "$MALFORMED_UNINSTALL_REPO" >/dev/null
@@ -284,7 +255,6 @@ check "--uninstall PRESERVES the installed guard script when settings is malform
 check "--uninstall PRESERVES the installed helper script when settings is malformed" bash -c \
   "[ -e '$MALFORMED_UNINSTALL_CLAUDE_DIR/allow-main-write.sh' ]"
 
-# ===========================================================================
 echo "a malformed claude-deny-owned.json is preserved, not deleted, during uninstall:"
 
 MALFORMED_OWNED_REPO="$TMP/malformed-owned-repo"
@@ -305,14 +275,9 @@ check "the malformed claude-deny-owned.json is preserved, not deleted" bash -c \
 check "permissions.deny in settings.local.json is left completely unchanged" bash -c \
   "[ \"\$(jq '.permissions.deny | length' '$MALFORMED_OWNED_SETTINGS')\" = '$DENY_LEN_BEFORE' ]"
 
-# ===========================================================================
 echo "a settings.local.json write failure is reported, never claimed as success:"
 
-# Simulates a temp-file-write/rename failure the smallest practical way:
-# make the repo's .claude/ directory itself unwritable (new files can't be
-# created directly in it, which is exactly where settings.local.json's own
-# atomic-write temp file must live) — isolating the failure to exactly the
-# settings read/write path this task is about.
+# Unwritable .claude/ blocks the atomic-write temp file, which must live there.
 WRITEFAIL_REPO="$TMP/writefail-repo"
 new_fixture "$WRITEFAIL_REPO"
 WRITEFAIL_SETTINGS="$(claude_settings_for "$WRITEFAIL_REPO")"
@@ -329,18 +294,11 @@ check "settings.local.json itself was never partially written" bash -c \
   "[ \"\$(cat '$WRITEFAIL_SETTINGS')\" = '{}' ]"
 chmod 755 "$(dirname "$WRITEFAIL_SETTINGS")"
 
-# ===========================================================================
 echo "an incomplete Git layer never activates core.hooksPath:"
 
-# The dispatcher + symlink set is built in a sibling staging directory
-# under the target repository's own Git common directory first
-# (install-guardrails.sh, "staged install"), so simulating a failure means
-# blocking new entries directly under that repo's .git (where the staging
-# dir would be created) — isolating the failure to only the git-hooks
-# staging step, not cascading into the unrelated Claude layer. The Claude
-# layer's own directory is pre-created (writable) so its independence from
-# .git's own permissions is what's actually under test here, not merely
-# "mkdir -p into a read-only .git fails for everyone."
+# Git hooks are staged in a sibling dir under .git, so a read-only .git fails
+# only that step. The Claude dir is pre-created so this tests its independence
+# from .git perms, not that "mkdir -p into a read-only .git fails".
 GITBLOCK_REPO="$TMP/gitblock-repo"
 new_fixture "$GITBLOCK_REPO"
 mkdir -p "$(claude_dir_for "$GITBLOCK_REPO")"
@@ -361,9 +319,7 @@ core_hookspath_not_activated() {
 }
 check "core.hooksPath is never activated (left unset, not pointed at a broken install)" core_hookspath_not_activated
 
-# Captured output is read back from a file, not embedded via shell quoting
-# — some problem messages legitimately contain an apostrophe ("Bindle's
-# guardrails"), which would break a quoted-string embedding.
+# Output goes via a file, not shell quoting: messages contain apostrophes.
 check "no false success is reported for the broken Git layer (no 'set repo-local core.hooksPath' line)" bash -c \
   "! grep -q 'set repo-local core.hooksPath' '$GITBLOCK_LOG'"
 check "the failure is actually reported" bash -c \
@@ -372,23 +328,18 @@ GITBLOCK_CLAUDE_DIR="$(claude_dir_for "$GITBLOCK_REPO")"
 check "the independent Claude layer still installs normally (proves this doesn't cascade)" \
   test -e "$GITBLOCK_CLAUDE_DIR/claude-protected-main-guard"
 
-# ===========================================================================
 echo "a re-apply preserves the SAME \$HOOKS_DIR continuously, replacing only the dispatcher:"
 
 REAPPLY_REPO="$TMP/reapply-repo"
 new_fixture "$REAPPLY_REPO"
 
-# Establish a genuinely valid, active installation first.
 "$INSTALLER" --apply --git-only --repo "$REAPPLY_REPO" >/dev/null
 REAPPLY_HOOKS_DIR="$(git -C "$REAPPLY_REPO" rev-parse --path-format=absolute --git-common-dir)/bindle-hooks"
 REAPPLY_DISPATCHER="$REAPPLY_HOOKS_DIR/.bindle-git-hook-dispatch"
 check "the initial install actually activated core.hooksPath (sanity check before forcing a failure)" bash -c \
   "[ \"\$(git -C '$REAPPLY_REPO' config --local --get core.hooksPath)\" = '$REAPPLY_HOOKS_DIR' ]"
-# The directory's own inode is the identity that matters for the concurrency
-# guarantee: core.hooksPath names a PATH, and if that path were ever renamed
-# away even briefly (the old two-rename swap), a concurrent Git operation
-# could observe it missing. Proving the inode never changes proves the
-# directory itself was never replaced — only ever mutated in place.
+# The dir's inode must never change: core.hooksPath names a PATH, and a brief
+# rename-away (the old two-rename swap) lets a concurrent Git op see it missing.
 BEFORE_DIR_INODE="$(inode_of "$REAPPLY_HOOKS_DIR")"
 BEFORE_DISPATCHER_INODE="$(inode_of "$REAPPLY_DISPATCHER")"
 BEFORE_DISPATCHER_SUM="$(cksum <"$REAPPLY_DISPATCHER")"
@@ -416,9 +367,7 @@ check "  no leftover '.new' temp file was left behind" bash -c \
 echo "  a re-apply whose dispatcher staging fails:"
 BEFORE_DISPATCHER_SUM="$(cksum <"$REAPPLY_DISPATCHER")"
 BEFORE_DIR_INODE="$(inode_of "$REAPPLY_HOOKS_DIR")"
-# Block writing a NEW file directly inside $HOOKS_DIR (where the temp
-# dispatcher must be staged before the atomic rename) — the directory
-# itself, and everything already in it, stays fully usable throughout.
+# Blocks new files in $HOOKS_DIR, where the temp dispatcher is staged.
 chmod 555 "$REAPPLY_HOOKS_DIR"
 
 # shellcheck disable=SC2317,SC2329
@@ -454,14 +403,9 @@ check "  the missing symlink is NOT silently recreated (no live repair)" bash -c
 check "  the dispatcher itself is untouched" bash -c \
   "[ \"\$(cksum <'$REAPPLY_DISPATCHER')\" = '$BEFORE_DISPATCHER_SUM' ]"
 
-# ===========================================================================
 echo "incomplete Claude guard/helper installation never registers the PreToolUse entry, and rolls the Git layer back:"
 
-# A plain FILE occupies the exact path the Claude-layer directory needs.
-# Both layers are requested (no --git-only/--claude-only), so this also
-# proves the cross-layer atomicity contract: the Git layer succeeds first,
-# but since the overall `bindle init` fails, it must not be left newly
-# installed without the Claude layer — install-guardrails.sh rolls it back.
+# A plain FILE blocks the Claude dir; the Git layer installs, then rolls back.
 CLAUDEBLOCK_REPO="$TMP/claudeblock-repo"
 new_fixture "$CLAUDEBLOCK_REPO"
 CLAUDEBLOCK_CLAUDE_DIR="$(claude_dir_for "$CLAUDEBLOCK_REPO")"
@@ -483,7 +427,6 @@ check "the Git layer was rolled back after the Claude layer failed (cross-layer 
 check "the independent permissions.deny hardening still applies (not gated on guard-file install)" bash -c \
   "jq -e '.permissions.deny | any(. == \"Read(.env)\")' '$CLAUDEBLOCK_SETTINGS' >/dev/null"
 
-# ===========================================================================
 echo "legacy global migration (--remove-legacy-global):"
 
 LEGACY_REPO="$TMP/legacy-repo"
@@ -492,10 +435,8 @@ new_fixture "$LEGACY_REPO"
 check "--remove-legacy-global is a clean no-op when no global core.hooksPath / legacy Claude settings exist" bash -c \
   "'$INSTALLER' --remove-legacy-global >/dev/null"
 
-# A genuine prior install (from before the repo-local rework) is
-# indistinguishable, structurally, from today's repo-local install — so
-# reuse the installer itself to produce templates, then relocate them into
-# global config/state the way the old implementation would have.
+# A pre-rework install is structurally identical to today's repo-local one:
+# produce it via the installer, then relocate it into global config/state.
 "$INSTALLER" --apply --repo "$LEGACY_REPO" >/dev/null
 LEGACY_GIT_DIR="$TMP/legacy-global-git-hooks"
 mv "$(git -C "$LEGACY_REPO" config --local --get core.hooksPath)" "$LEGACY_GIT_DIR"
@@ -508,9 +449,7 @@ mkdir -p "$BINDLE_CLAUDE_HOME/hooks" "$BINDLE_GUARD_HOME/bin"
 cp "$LEGACY_CLAUDE_DIR/claude-protected-main-guard" "$BINDLE_CLAUDE_HOME/hooks/bindle-protected-main-guard"
 cp "$LEGACY_CLAUDE_DIR/allow-main-write.sh" "$BINDLE_GUARD_HOME/bin/allow-main-write.sh"
 cp "$LEGACY_OWNED_DENY_FILE" "$BINDLE_GUARD_HOME/claude-deny-owned.json"
-# Non-default BINDLE_CLAUDE_HOME/BINDLE_GUARD_HOME (test isolation) means
-# the legacy installer would have written the resolved ABSOLUTE paths, not
-# the '~/...' default shorthand.
+# Non-default homes make the legacy installer write ABSOLUTE paths, not '~/...'.
 LEGACY_CMD="$BINDLE_CLAUDE_HOME/hooks/bindle-protected-main-guard $BINDLE_GUARD_HOME/bin/allow-main-write.sh"
 cat >"$BINDLE_CLAUDE_HOME/settings.json" <<EOF
 {
@@ -550,14 +489,8 @@ check "the foreign global core.hooksPath is left untouched" bash -c \
   "[ \"\$(git config --global --get core.hooksPath)\" = /some/other/hook/manager ]"
 git config --global --unset core.hooksPath
 
-# ===========================================================================
 echo "a normal --apply/--uninstall refuses to run when recognized legacy global state exists, and never migrates or mutates it:"
 
-# bindle init/remove are repository-scoped: a recognized pre-rework global
-# install must block them with an actionable error pointing at the explicit
-# migration surface, never be silently migrated (or silently ignored) as a
-# side effect of what looks like a repo-scoped command. A foreign global
-# value must never block, migrate, or otherwise affect the outcome.
 BLOCK_TEMPLATE_REPO="$TMP/legacyblock-template-repo"
 new_fixture "$BLOCK_TEMPLATE_REPO"
 "$INSTALLER" --apply --git-only --repo "$BLOCK_TEMPLATE_REPO" >/dev/null
@@ -585,17 +518,12 @@ check "Repo A: no repo-local core.hooksPath was installed (whole invocation abor
 check "the recognized legacy global core.hooksPath was NOT migrated away — it survives untouched" bash -c \
   "[ \"\$(git config --global --get core.hooksPath)\" = '$BLOCK_LEGACY_GIT_DIR' ] && [ -e '$BLOCK_LEGACY_GIT_DIR' ]"
 
-# Repo B proves this isn't a one-shot: the legacy global state still blocks
-# a SECOND, different repository's ordinary init exactly the same way — a
-# single machine-global condition, not something the first invocation
-# consumed or otherwise changed.
+# Repo B: the block is machine-global, not consumed by the first invocation.
 check "a normal --apply against a DIFFERENT repository (Repo B) is blocked identically by the same legacy global state" bash -c \
   "! '$INSTALLER' --apply --git-only --repo '$BLOCK_REPO_B' >/dev/null 2>&1"
 check "Repo B: no repo-local core.hooksPath was installed either" bash -c \
   "! git -C '$BLOCK_REPO_B' config --local --get core.hooksPath >/dev/null 2>&1"
 
-# The explicit migration mechanism (not a normal --apply) is what clears
-# the block, positively-owned state only.
 "$INSTALLER" --remove-legacy-global >/dev/null
 check "explicit migration clears the recognized legacy global core.hooksPath" bash -c \
   '! git config --global --get core.hooksPath >/dev/null 2>&1'
@@ -613,7 +541,6 @@ check "the foreign global core.hooksPath is left completely untouched" bash -c \
   "[ \"\$(git config --global --get core.hooksPath)\" = /some/other/hook/manager ]"
 git config --global --unset core.hooksPath
 
-# ===========================================================================
 echo "a plain --apply/--uninstall with no flags still does both layers, scoped to \$PWD:"
 
 PLAIN_REPO="$TMP/plain-repo"
@@ -634,13 +561,9 @@ check "it also installed the Claude layer for \$PWD" \
 check "it never touched the global core.hooksPath" bash -c \
   '! git config --global --get core.hooksPath >/dev/null 2>&1'
 
-# ===========================================================================
 echo ".claude/settings.local.json Git hygiene — not ignored yet:"
 
-# A repository whose .gitignore says nothing about .claude/settings.local.json
-# must not gain an accidentally-committable untracked file: --apply should
-# record a machine-local ignore rule in the repo's own info/exclude instead
-# of touching the repository's own tracked .gitignore.
+# An unignored settings.local.json must not become accidentally committable.
 UNIGNORED_REPO="$TMP/unignored-repo"
 new_fixture "$UNIGNORED_REPO"
 "$INSTALLER" --apply --claude-only --repo "$UNIGNORED_REPO" >/dev/null
@@ -681,11 +604,8 @@ check "after the repeated cycle, no stray info/exclude entry or ownership marker
   "{ [ ! -f '$(exclude_file_for "$UNIGNORED_REPO")' ] || ! grep -qxF '.claude/settings.local.json' '$(exclude_file_for "$UNIGNORED_REPO")'; } &&
    [ ! -e '$(owned_exclude_file_for "$UNIGNORED_REPO")' ]"
 
-# ===========================================================================
 echo ".claude/settings.local.json Git hygiene — already ignored:"
 
-# A repository that already ignores the file (its own .gitignore, Claude
-# Code's own common convention) needs no info/exclude entry added.
 IGNORED_REPO="$TMP/ignored-repo"
 new_fixture "$IGNORED_REPO"
 mkdir -p "$IGNORED_REPO/.claude"
@@ -709,12 +629,9 @@ check "--uninstall left the repository's own .gitignore byte-for-byte unchanged"
 check "the path is still ignored after --uninstall (via the untouched .gitignore, not Bindle)" bash -c \
   "git -C '$IGNORED_REPO' check-ignore -q -- .claude/settings.local.json"
 
-# ===========================================================================
 echo ".claude/settings.local.json Git hygiene — a pre-existing info/exclude rule survives remove:"
 
-# An info/exclude entry that predates 'bindle init' (added by the user, or
-# by some other tool) must never be claimed as Bindle-owned, and so must
-# survive '--uninstall' untouched — case 2 of the ownership contract.
+# Case 2 of the ownership contract: a pre-existing entry is never Bindle-owned.
 PREEXIST_REPO="$TMP/preexist-exclude-repo"
 new_fixture "$PREEXIST_REPO"
 mkdir -p "$(dirname "$(exclude_file_for "$PREEXIST_REPO")")"
@@ -732,14 +649,8 @@ check "--uninstall removed settings.local.json (empty once Bindle's content was 
 check "--uninstall left the pre-existing info/exclude entry in place (Bindle never owned it)" bash -c \
   "[ \"\$(grep -cxF '.claude/settings.local.json' '$(exclude_file_for "$PREEXIST_REPO")')\" = 1 ]"
 
-# ===========================================================================
 echo ".claude/settings.local.json Git hygiene — unrelated user content survives remove, ignore rule stays:"
 
-# If settings.local.json still holds content Bindle doesn't own after
-# --uninstall detaches its own entries, the file must not be deleted and
-# its Bindle-owned info/exclude entry must not be removed either — doing
-# either would make previously-hidden repository configuration
-# accidentally committable.
 UNRELATED_REPO="$TMP/unrelated-content-repo"
 new_fixture "$UNRELATED_REPO"
 "$INSTALLER" --apply --claude-only --repo "$UNRELATED_REPO" >/dev/null
@@ -764,11 +675,9 @@ check "the ownership marker was left in place (nothing was safe to clean up yet)
 check "the path is still reported as ignored" bash -c \
   "git -C '$UNRELATED_REPO' check-ignore -q -- .claude/settings.local.json"
 
-# ===========================================================================
 echo ".claude/settings.local.json Git hygiene — already tracked:"
 
-# A repository that tracks the file (however unusual) is team-shared
-# configuration Bindle must never rewrite silently.
+# A tracked file is team-shared config Bindle must never rewrite silently.
 TRACKED_REPO="$TMP/tracked-repo"
 new_fixture "$TRACKED_REPO"
 mkdir -p "$TRACKED_REPO/.claude"
@@ -784,6 +693,5 @@ check "the tracked settings.local.json content is completely unchanged" bash -c 
 check "--uninstall also refuses to run against a repo tracking settings.local.json" bash -c \
   "! '$INSTALLER' --uninstall --claude-only --repo '$TRACKED_REPO' >/dev/null 2>&1"
 
-# ===========================================================================
 printf '\n  install-guardrails: %d/%d checks passed\n' "$pass" "$((pass + fail))"
 exit "$fail"

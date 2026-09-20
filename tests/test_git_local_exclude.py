@@ -46,21 +46,14 @@ class TestIsPathTracked(GitRepoTestCase):
         self.assertTrue(git_local_exclude.is_path_tracked(self.repo, "README.md"))
 
     def test_git_failure_raises_git_command_error_not_false(self):
-        # A genuine `git ls-files` failure (not simply "no match") must
-        # never read as an ordinary "not tracked" answer — a caller that
-        # depends on trackedness for safety needs to be able to tell the
-        # two apart.
+        # A git failure must not read as "not tracked"; safety callers need to know.
         not_a_repo = os.path.join(self.tmp.name, "not-a-repo")
         os.makedirs(not_a_repo)
         with self.assertRaises(git_local_exclude.GitCommandError):
             git_local_exclude.is_path_tracked(not_a_repo, "foo.txt")
 
     def test_git_command_error_is_an_os_error(self):
-        # Subclassing OSError is load-bearing: it lets an existing
-        # best-effort caller (qmd.ensure_gitignored's `except OSError:
-        # pass`) keep swallowing this failure unchanged, while a
-        # safety-critical caller can still catch it explicitly and fail
-        # closed instead.
+        # Load-bearing: qmd's best-effort `except OSError` keeps swallowing it.
         self.assertTrue(issubclass(git_local_exclude.GitCommandError, OSError))
 
 

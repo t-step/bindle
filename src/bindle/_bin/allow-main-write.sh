@@ -1,28 +1,19 @@
 #!/usr/bin/env bash
 #
-# allow-main-write.sh — mints a single-use authorization token letting the
-# NEXT Edit/Write/MultiEdit/NotebookEdit tool call on 'main' in THIS
-# worktree succeed, for Claude Code's bindle-protected-main-guard hook.
+# allow-main-write.sh — mints a single-use token letting the NEXT
+# Edit/Write/MultiEdit/NotebookEdit on 'main' in THIS worktree succeed, for the
+# bindle-protected-main-guard hook.
 #
-# Run this ONLY after the user has explicitly authorized modifying 'main'
-# in the current conversation — never inferred from the task. This is a
-# distinct mechanism from the Git-layer ALLOW_MAIN_WRITE=1 override:
-# Edit/Write/MultiEdit/NotebookEdit are tool calls, not shell invocations,
-# so they cannot receive a command-scoped environment variable the way a
-# Bash-issued `git commit` can. See
-# plans/archive/2026-08-23-local-guardrail-layer.md, Decisions #2.
+# Run ONLY after the user explicitly authorizes modifying 'main' in the current
+# conversation, never inferred. Distinct from the Git-layer ALLOW_MAIN_WRITE=1:
+# tool calls cannot receive a command-scoped env var
+# (plans/archive/2026-08-23-local-guardrail-layer.md, Decisions #2).
 #
-# The token is bound to repository identity, exact worktree, and a TTL as a
-# stale-token backstop. The guard consumes it on the very next attempted
-# use, valid or not — it never becomes a standing "unlock main" switch.
-#
-# Not session-bound: CLAUDE_CODE_SESSION_ID is observed in the Bash tool's
-# subprocess environment on this machine, but no documented source
-# establishes it carries the same value as PreToolUse's session_id field —
-# see plans/archive/2026-08-23-local-guardrail-layer.md, Evidence. Binding to
-# an unverified identifier would be a best-effort property presented as a
-# guarantee, so the supported invariant is repo + worktree + TTL + single-use
-# only.
+# Bound to repo + worktree + TTL; the guard consumes it on the next attempted
+# use, valid or not, so it is never a standing "unlock main" switch. Not
+# session-bound: no documented source shows CLAUDE_CODE_SESSION_ID equals
+# PreToolUse's session_id, and an unverified binding would pose as a guarantee
+# (same plan, Evidence).
 #
 # Usage: bin/allow-main-write.sh [--ttl SECONDS]
 #
@@ -50,11 +41,7 @@ git_dir="$(git rev-parse --absolute-git-dir)"
 now="$(date +%s)"
 expires_at=$((now + TTL))
 
-# Written atomically: build the full token in a same-directory temp file
-# first, then rename it into place. A `mv` within one filesystem is a
-# single rename syscall, so the guard reading $token_path can never observe
-# a partially-written file — it either sees the complete prior token (if
-# any) or the complete new one, never a truncated in-progress write.
+# Temp file + same-fs mv: the guard never reads a partial token.
 token_path="$git_dir/bindle-allow-main-write.json"
 tmp_token="$token_path.tmp.$$"
 jq -n \

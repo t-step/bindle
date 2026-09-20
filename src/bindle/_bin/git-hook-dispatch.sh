@@ -1,45 +1,30 @@
 #!/usr/bin/env bash
 #
-# git-hook-dispatch.sh — Bindle's single Git hook implementation. Installed
-# once by bin/install-guardrails.sh and symlinked under every standard
-# client-side Git hook name inside a global core.hooksPath directory, so
-# this same file runs for every hook Git invokes, whichever name it was
-# invoked as ($0's basename tells it).
+# git-hook-dispatch.sh — Bindle's single Git hook implementation. Installed once
+# by bin/install-guardrails.sh and symlinked under every standard client-side
+# hook name in a global core.hooksPath directory; $0's basename says which hook
+# Git invoked.
 #
-# Rationale (plans/archive/2026-08-23-local-guardrail-layer.md, "Decisions"
-# #1): setting core.hooksPath globally redirects Git's hook lookup for
-# EVERY hook name, not only the ones Bindle has policy for. A dispatcher
-# that only existed for pre-commit/pre-merge-commit/pre-rebase would
-# silently disable commit-msg (Cocogitto), post-commit/post-merge
-# (projectmem), pre-push, and any repo-owned hook Bindle has no opinion
-# about. This script is symlinked under the FULL standard hook-name surface
-# so nothing is silently dropped: for hook names with Bindle policy it
-# checks that policy first; for every hook name it transparently delegates
-# to the repository's own hook of the same name afterward, if one exists.
+# A global core.hooksPath redirects lookup for EVERY hook name, so the full
+# standard name surface is symlinked: Bindle policy runs first for
+# policy-bearing names, then the repository's own same-named hook is delegated
+# to, so commit-msg (Cocogitto), post-commit/post-merge (projectmem), pre-push
+# and repo-owned hooks are not silently dropped
+# (plans/archive/2026-08-23-local-guardrail-layer.md, Decisions #1).
 #
-# Policy-bearing hook names were chosen empirically, not by assumption — see
-# the plan's evidence table. A plain `pre-commit` guard alone does NOT cover
-# rebase-replay, cherry-pick, or `git commit --no-verify` (verified in fixture
-# repos this session): rebase-replayed commits and cherry-picks skip
-# pre-commit/commit-msg entirely, and --no-verify skips pre-commit too.
-# prepare-commit-msg is the broadest single interception point observed
-# (fires for commit, merge, rebase-replay, and cherry-pick, and survives
-# --no-verify) but does not cover `git am`, which uses an entirely separate
-# hook family (applypatch-msg/pre-applypatch/post-applypatch) — hence
-# pre-applypatch is included too. pre-commit and pre-merge-commit are kept
-# as well for a faster rejection in the common (non-bypass) case; the
-# branch/override decision itself lives in one function below, not
-# duplicated per hook.
+# Policy-bearing names were chosen empirically (the plan's evidence table):
+# pre-commit alone misses rebase-replay, cherry-pick and --no-verify.
+# prepare-commit-msg is the broadest point (commit, merge, rebase-replay,
+# cherry-pick; survives --no-verify) but not `git am`, which has its own hook
+# family, hence pre-applypatch. pre-commit and pre-merge-commit stay for faster
+# rejection in the non-bypass case; the decision lives in one function.
 #
-# History guardrails (docs/DECISIONS.md D048) live here too, in the same
-# single implementation: a commit-msg Conventional Commit check that also
-# accepts Git's own fixup!/squash!/amend! control commits, and a pre-push
-# "history hygiene" report that BLOCKs unpublished states (pending
-# autosquash commits, non-conforming subjects) and only WARNs about
-# mechanically observable churn. `git-hook-dispatch.sh --history` (also
-# `bindle history`) prints the same report on demand. Everything is a regex,
-# a count, or Git plumbing: no semantic judgment, no scoring, and nothing
-# here ever rewrites history or touches the working tree.
+# History guardrails (D048) live here too: a commit-msg Conventional Commit
+# check (also accepts fixup!/squash!/amend!) and a pre-push history-hygiene
+# report that BLOCKs pending autosquash commits and non-conforming subjects and
+# only WARNs on observable churn. `--history` (also `bindle history`) prints it
+# on demand. Regex, counts and Git plumbing only; never rewrites history or the
+# working tree.
 #
 set -euo pipefail
 
@@ -47,7 +32,6 @@ PROTECTED_BRANCH="main"
 
 hook_name="$(basename "$0")"
 
-# Nothing to protect or delegate to outside a Git working tree.
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   if [ "${1:-}" = "--history" ]; then
     echo "bindle history: not inside a Git working tree" >&2
@@ -56,17 +40,12 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   exit 0
 fi
 
-# current_branch — the branch HEAD currently points at, or empty when
-# detached (detached HEAD is never treated as PROTECTED_BRANCH by name).
+# Empty when detached; a detached HEAD is never treated as PROTECTED_BRANCH.
 current_branch() {
   git symbolic-ref --quiet --short HEAD 2>/dev/null || true
 }
 
-# branch_under_mutation ARGS... — the branch this hook invocation is about
-# to mutate. Every policy-bearing hook mutates the current branch EXCEPT
-# pre-rebase, which receives the branch actually being rebased as $2 —
-# present only when rebasing a branch other than the current one (git
-# defaults $2 to the current branch and omits it).
+# pre-rebase gets the branch being rebased as $2, only if not the current one.
 branch_under_mutation() {
   if [ "$hook_name" = "pre-rebase" ] && [ -n "${2:-}" ]; then
     printf '%s\n' "$2"
@@ -75,22 +54,14 @@ branch_under_mutation() {
   fi
 }
 
-# check_protected_branch ARGS... — block if the branch under mutation is
-# PROTECTED_BRANCH and ALLOW_MAIN_WRITE is not set. This is the ONE place
-# the branch/override decision is made; every policy-bearing hook name below
-# calls it, nothing re-implements the check.
+# The ONE place the branch/override decision is made; every hook calls it.
 check_protected_branch() {
   local target
   target="$(branch_under_mutation "$@")"
   [ "$target" = "$PROTECTED_BRANCH" ] || return 0
   [ -z "${ALLOW_MAIN_WRITE:-}" ] || return 0
 
-  # An unborn branch (no commit yet — e.g. a brand-new `git init`) has no
-  # established history to protect. Blocking it would block repository
-  # bootstrap itself, which is not what "protect main from routine mutation"
-  # means — the invariant is about an EXISTING clean integration branch.
-  # Found empirically: a fixture repo's very first commit was being blocked,
-  # which is the wrong behavior, not a stricter one.
+  # Unborn branch has no history to protect; blocking it blocks repo bootstrap.
   git rev-parse --verify --quiet HEAD >/dev/null 2>&1 || return 0
 
   local dirty_note=""
@@ -111,7 +82,6 @@ MSG
   exit 1
 }
 
-# ---------------------------------------------------------------------------
 # History guardrails (D048). Bash 3.2-safe: no associative arrays, mapfile,
 # or ${var,,} (macOS's system bash is 3.2).
 #
@@ -127,13 +97,10 @@ MSG
 #                                   threshold (default 5, minimum 2)
 #   bindle.hygiene.testPattern      ERE matching test paths
 #   bindle.hygiene.generatedPattern ERE matching generated/lockfile paths
-# ---------------------------------------------------------------------------
 
-# The standard Conventional Commits / Cocogitto built-in types, unioned with
-# any keys under [commit_types] in cog.toml (see commit_types below).
+# Conventional Commits/Cocogitto types, unioned with cog.toml [commit_types].
 DEFAULT_COMMIT_TYPES="feat fix docs style refactor perf test build ci chore revert"
-# Derived from this repository's own tracked layout (tests/, tests/test_*.py,
-# bin/test-*.sh; the one lockfile is uv.lock) — not a guess at other stacks.
+# From this repo's own layout (tests/, test_*.py, test-*.sh, uv.lock).
 DEFAULT_TEST_PATTERN='(^|/)tests?/|(^|/)test_[^/]*\.py$|(^|/)test-[^/]*\.sh$'
 DEFAULT_GENERATED_PATTERN='(^|/)uv\.lock$'
 # "Rework-shaped": the FIRST WORD of a conventional subject's description.
@@ -147,7 +114,6 @@ PUSH_INPUT_FILE=""
 
 cfg() { git config --get "$1" 2>/dev/null || true; }
 
-# cfg_int KEY DEFAULT — the configured non-negative integer, else DEFAULT.
 cfg_int() {
   local v
   v="$(cfg "$1")"
@@ -157,7 +123,6 @@ cfg_int() {
   esac
 }
 
-# cfg_str KEY DEFAULT — the configured non-empty string, else DEFAULT.
 cfg_str() {
   local v
   v="$(cfg "$1")"
@@ -168,19 +133,15 @@ worktree_top() {
   git rev-parse --show-toplevel 2>/dev/null || true
 }
 
-# cog_toml_tracked — the worktree root has a cog.toml that Git tracks (in the
-# index). An untracked or ignored local file must not change what a
-# repository enforces.
+# Tracked only: an untracked or ignored cog.toml must not change enforcement.
 cog_toml_tracked() {
   local top
   top="$(worktree_top)"
   [ -n "$top" ] && git -C "$top" ls-files --error-unmatch -- cog.toml >/dev/null 2>&1
 }
 
-# conventional_commits_enabled — this worktree has declared Conventional
-# Commits: explicit bindle.conventionalCommits wins; otherwise a tracked
-# cog.toml (Cocogitto, this repository's own commit validator) opts in.
-# Repositories that declare nothing are never held to the convention.
+# Explicit bindle.conventionalCommits wins, else a tracked cog.toml opts in;
+# repos that declare nothing are never held to the convention.
 conventional_commits_enabled() {
   case "$(git config --type=bool --get bindle.conventionalCommits 2>/dev/null || true)" in
   true) return 0 ;;
@@ -189,9 +150,7 @@ conventional_commits_enabled() {
   cog_toml_tracked
 }
 
-# commit_types — one accepted type per line: the defaults plus the keys of
-# cog.toml's [commit_types] table, so cog.toml stays the single place a
-# repository extends the list.
+# Defaults plus cog.toml [commit_types] keys: cog.toml is the extension point.
 commit_types() {
   local toml
   toml="$(worktree_top)/cog.toml"
@@ -207,12 +166,10 @@ load_commit_types() {
   COMMIT_TYPES=" $(commit_types | tr '\n' ' ')"
 }
 
-# parse_subject SUBJECT — classify a subject by pure pattern match. Sets
-# SUBJ_KIND to autosquash | merge | revert | conventional | invalid, and
-# SUBJ_DESC to a conventional subject's description. Requires
-# load_commit_types to have run. A "merge" kind is only a prefix match: callers
-# decide whether a real merge is in progress (commit-msg: MERGE_HEAD exists;
-# pre-push: --no-merges already excluded every real merge).
+# Sets SUBJ_KIND (autosquash|merge|revert|conventional|invalid) and SUBJ_DESC by
+# pattern match; needs load_commit_types.
+# "merge" is a prefix match only: callers decide if a real merge is in progress
+# (commit-msg: MERGE_HEAD; pre-push: --no-merges already excluded them).
 parse_subject() {
   local s="$1" re='^((fixup|squash|amend)! )+[^[:space:]]'
   SUBJ_KIND=invalid
@@ -222,7 +179,7 @@ parse_subject() {
   elif [[ $s == "Merge "* ]]; then
     SUBJ_KIND=merge
   elif re='^(Revert|Reapply) ".+"$' && [[ $s =~ $re ]]; then
-    # Exactly the shape `git revert` generates (Reapply: reverting a revert).
+    # Exactly what `git revert` generates (Reapply = reverting a revert).
     SUBJ_KIND=revert
   else
     re='^([A-Za-z][A-Za-z0-9_-]*)(\([^()[:space:]]+\))?!?: ([^[:space:]].*)$'
@@ -233,29 +190,23 @@ parse_subject() {
   fi
 }
 
-# merge_subject_is_git_generated SUBJECT — a "Merge …" subject is only taken
-# on faith when Git is really creating/keeping a merge: a merge is in progress
-# (MERGE_HEAD exists — true for clean and conflict-resolved merges alike), or
-# this is an amend that leaves an existing merge commit's own subject as it is
-# (HEAD has two parents and the subject is unchanged). A different "Merge …"
-# subject on an ordinary commit is not Git-generated.
+# A "Merge …" subject is trusted only when Git really is creating/keeping a
+# merge: MERGE_HEAD exists (clean or conflict-resolved), or an amend leaves an
+# existing merge commit's subject unchanged (HEAD has two parents).
 merge_subject_is_git_generated() {
   git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 && return 0
   git rev-parse -q --verify 'HEAD^2' >/dev/null 2>&1 && [ "$(git log -1 --format=%s HEAD 2>/dev/null)" = "$1" ]
 }
 
-# check_commit_message FILE — the commit-msg policy. A no-op unless the
-# repository has declared Conventional Commits. Git-generated subjects
-# (fixup!/squash!/amend! from `git commit --fixup/--squash`, `Revert "…"`
-# from `git revert`) are valid by construction and skip the repository's
-# own commit-msg hook, since `cog verify` cannot parse them. Merge subjects
-# and conventional subjects fall through to that hook as before.
+# No-op unless the repo declared Conventional Commits. Git-generated
+# fixup!/squash!/amend! and Revert "…" subjects are valid by construction and
+# skip the repo's own commit-msg hook (`cog verify` cannot parse them); merge
+# and conventional subjects fall through to it.
 check_commit_message() {
   local file="${1:-}" subject
   conventional_commits_enabled || return 0
   load_commit_types
-  # First line that is neither blank nor a `#` comment (git strips those
-  # after this hook runs, not before).
+  # First non-blank, non-`#` line (git strips comments after this hook runs).
   subject="$(grep -v -m1 -E '^[[:space:]]*(#.*)?$' "$file" 2>/dev/null || true)"
   parse_subject "$subject"
   if [ "$SUBJ_KIND" = merge ] && ! merge_subject_is_git_generated "$subject"; then
@@ -280,9 +231,6 @@ MSG
   esac
 }
 
-# resolve_history_base [EXPLICIT] — the first resolvable ref out of: the
-# explicit argument, bindle.historyBase, origin/main, main. Prints nothing
-# if none resolves.
 resolve_history_base() {
   local candidate
   for candidate in "${1:-}" "$(cfg bindle.historyBase)" "origin/$PROTECTED_BRANCH" "$PROTECTED_BRANCH"; do
@@ -300,13 +248,10 @@ commits_word() {
   if [ "$1" -eq 1 ]; then printf 'commit'; else printf 'commits'; fi
 }
 
-# history_report TIP LABEL [BASE] [REBASE_BRANCH] — print the history-hygiene
-# report for the commits reachable from TIP but not from BASE. LABEL is
-# display-only; REBASE_BRANCH is the LOCAL branch whose name may be appended
-# to the fold hint (empty when what is pushed is HEAD or a raw sha, where the
-# right thing to rebase is simply the checked-out branch). Returns 1 iff it
-# printed a BLOCK line. Read-only: only `git log`/`rev-list`/`merge-base`/
-# `patch-id`.
+# Prints the hygiene report for commits reachable from TIP but not BASE; returns
+# 1 iff it printed a BLOCK line. Read-only.
+# REBASE_BRANCH is the local branch appended to the fold hint (empty for HEAD or
+# a raw sha, where the checked-out branch is right).
 history_report() {
   local tip="$1" label="$2" base range mb mb_short
   local total merges nonmerge tiny repeat testre genre cc_on=0 blocked=0
@@ -322,10 +267,7 @@ history_report() {
   fi
   range="$base..$tip"
 
-  # `set -e` does not apply inside a function that is called in an `||`/`if`
-  # context, so failures of the calls this report depends on are handled
-  # explicitly, and fail CLOSED: a report that could not read the history must
-  # not print PASS lines.
+  # `set -e` is off here (called in an ||/if context): fail CLOSED, never PASS.
   if ! total="$(git rev-list --count "$range" 2>/dev/null)" ||
     ! merges="$(git rev-list --merges --count "$range" 2>/dev/null)" ||
     ! subjects="$(git log --no-merges --format='%H%x09%s' "$range" 2>/dev/null)"; then
@@ -348,7 +290,6 @@ history_report() {
   if conventional_commits_enabled; then cc_on=1; fi
   load_commit_types
 
-  # --- subjects (BLOCK: autosquash, non-conforming; WARN: rework-shaped) ----
   while IFS=$'\t' read -r sha subj; do
     [ -n "$sha" ] || continue
     parse_subject "$subj"
@@ -375,14 +316,12 @@ history_report() {
     blocked=1
     report_line BLOCK "$n_auto pending fixup!/squash!/amend! $(commits_word "$n_auto")"
     printf '%s' "$auto_list"
-    # Name a branch only when the pushed local ref IS a local branch other than
-    # the checked-out one (`git push origin other-branch`).
+    # Name a branch only if the pushed ref is a local branch other than HEAD's.
     rebase_target=""
     if [ -n "${4:-}" ] && [ "$4" != "$(current_branch)" ] && git show-ref --verify --quiet "refs/heads/$4"; then
       rebase_target=" $4"
     fi
-    # Without --rebase-merges a rebase flattens the branch and replays every
-    # upstream commit that came in through a merge.
+    # Without --rebase-merges, rebase flattens and replays upstream merges.
     fold_flags="--autosquash"
     if [ "$merges" -gt 0 ]; then fold_flags="--autosquash --rebase-merges"; fi
     printf '       fold them: GIT_SEQUENCE_EDITOR=true git rebase -i %s %s%s\n' "$fold_flags" "$mb_short" "$rebase_target"
@@ -401,7 +340,6 @@ history_report() {
     fi
   fi
 
-  # --- per-commit size / test-only / file churn (one git log pass) ---------
   stats="$(git log --no-merges --no-renames --numstat --format='@%H' "$range" |
     H_TINY="$tiny" H_REPEAT="$repeat" H_TESTRE="$testre" H_GENRE="$genre" awk '
       BEGIN {
@@ -443,13 +381,10 @@ history_report() {
     { w = tolower($1); gsub(/[^a-z]/, "", w); if (w != "" && index(words, " " w " ")) n++ }
     END { print n + 0 }')"
   n_revert="$(git log --no-merges -E --format=%H --grep='^This reverts commit [0-9a-f]{7,}' --grep='^Revert "' "$range" | wc -l | tr -d ' ')"
-  # Exact re-application: two commits on the branch with the same
-  # `git patch-id --stable` carry the identical patch (revert-and-redo,
-  # duplicated cherry-pick). No similarity scoring.
+  # Same `git patch-id --stable` = identical patch (revert-redo, dup. pick).
   pids="$(git log --no-merges -p --format='commit %H' "$range" | git patch-id --stable | awk '{ print $1 }')" || pids=""
   dups="$(printf '%s\n' "$pids" | awk 'NF { n++; if (!seen[$1]++) u++ } END { print n - u + 0 }')"
 
-  # --- advisory signals: facts only, never a blocker ------------------------
   if [ "$n_tiny" -gt 0 ]; then
     report_line WARN "$n_tiny/$nonmerge commits change fewer than $tiny lines"
   fi
@@ -468,8 +403,7 @@ history_report() {
   if [ "$dups" -gt 0 ]; then
     report_line WARN "exact patch repeats (same git patch-id as an earlier commit): $dups"
   fi
-  # Loops read their pipe to the end (no `head`): an early-closed pipe would
-  # SIGPIPE `sort` and, under pipefail + errexit, abort the whole hook.
+  # No `head`: SIGPIPE on `sort` would abort the hook under pipefail+errexit.
   printf '%s' "$gen_out" | sort -t "$TAB" -k1,1nr -k2 | while IFS=$'\t' read -r cnt path; do
     if [ -n "$path" ]; then report_line WARN "generated/lockfile $path changed in $cnt commits"; fi
   done
@@ -484,20 +418,17 @@ history_report() {
   [ "$blocked" -eq 0 ]
 }
 
-# check_push_history — the pre-push policy: run the report for every branch
-# update being pushed (from the ref list git feeds on stdin, never from the
-# checked-out HEAD) and refuse the push if any report has a BLOCK line. Never
+# Pre-push policy: report every branch update from the ref list git feeds on
+# stdin (never the checked-out HEAD) and refuse the push on any BLOCK. Never
 # rewrites anything.
 #
-# Which updates count: any update whose LOCAL ref or REMOTE ref is a branch.
-# `git push origin HEAD`, `HEAD:refs/heads/x`, and `<sha>:refs/heads/x` all
-# arrive with a local ref that is not refs/heads/… (literally "HEAD", or the
-# raw expression), so the remote ref supplies the branch name. Deletions
-# (all-zero local sha) and tag/notes/other-ref updates are not inspected.
+# Counted: updates whose LOCAL or REMOTE ref is a branch. `git push origin
+# HEAD`, `HEAD:refs/heads/x` and `<sha>:refs/heads/x` arrive with a
+# non-refs/heads local ref, so the remote ref names the branch. Deletions and
+# tag/notes/other-ref updates are skipped.
 check_push_history() {
   local local_ref local_sha remote_ref label rebase_branch rc=0
-  # stdin is consumed here; keep a byte-exact copy so a repository-native
-  # pre-push hook still receives exactly what git sent (see delegation below).
+  # stdin is consumed here; keep exact bytes for a repo-native pre-push hook.
   PUSH_INPUT_FILE="$(mktemp)"
   trap 'rm -f "$PUSH_INPUT_FILE"' EXIT
   cat >"$PUSH_INPUT_FILE"
@@ -527,9 +458,8 @@ check_push_history() {
   fi
 }
 
-# history_main ARGS... — `--history [--base REF] [REF]`: print the report on
-# demand (stdout) for REF (default HEAD, which may be detached). Exits 1 on
-# a BLOCK line, 2 on bad usage.
+# `--history [--base REF] [REF]`: print the report on demand (stdout) for REF
+# (default HEAD, may be detached); exits 1 on BLOCK, 2 on bad usage.
 history_main() {
   local base="" tip="HEAD" label tip_sha rebase_branch
   shift
@@ -588,17 +518,14 @@ pre-push)
   ;;
 esac
 
-# Transparent delegation: run the repository's OWN hook of this name, if it
-# has one, with the original args/stdin, and let its exit status become
-# ours. Resolved as a direct filesystem path (not another core.hooksPath
-# lookup), so there is no recursion risk. --git-common-dir keeps this
-# correct from any linked worktree (docs/WORKTREES.md): hooks are shared
-# repository-level state, not per-worktree.
+# Delegate to the repo's OWN same-named hook with the original args/stdin; its
+# exit status becomes ours. A direct path (not another core.hooksPath lookup)
+# avoids recursion; --git-common-dir keeps it correct from any linked worktree
+# (docs/WORKTREES.md).
 native_hook="$(git rev-parse --path-format=absolute --git-common-dir)/hooks/$hook_name"
 if [ -x "$native_hook" ]; then
   if [ "$hook_name" = "pre-push" ]; then
-    # check_push_history already drained stdin; replay the saved bytes. Not
-    # `exec`, so the EXIT trap can still remove the temp file.
+    # Replay saved stdin; not `exec`, so the EXIT trap can remove the temp file.
     if "$native_hook" "$@" <"$PUSH_INPUT_FILE"; then exit 0; else exit "$?"; fi
   fi
   exec "$native_hook" "$@"

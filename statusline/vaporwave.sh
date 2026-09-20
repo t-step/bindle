@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# Claude Code statusline (vaporwave boxed panel).
-# Fixed 4-row footprint: top border, row 1 (work/orientation), row 2
-# (agent/session pressure), bottom border — always. Width changes
-# information density within each row independently (which segments
-# render, how compact), never height, and never wraps/stacks a row.
+# Claude Code statusline (vaporwave boxed panel). Fixed 4-row footprint (top
+# border, work/orientation row, agent/session-pressure row, bottom border):
+# width changes density within a row, never height, and never wraps a row.
 input=$(cat)
 
 j() { printf '%s' "$input" | jq -r "$1" 2>/dev/null; }
@@ -14,8 +12,7 @@ worktree_name=$(j '.workspace.git_worktree // empty')
 model=$(j '.model.display_name // empty')
 tpath=$(j '.transcript_path // empty')
 
-# round any percentage to a clean integer at the source — upstream JSON can
-# hand back float noise (e.g. 2.0000000000000004 from a fraction*100 calc).
+# Round at the source: upstream JSON may give float noise (2.0000000000000004).
 fmt_pct() {
   local n="$1"
   [ -z "$n" ] && { printf '0'; return; }
@@ -37,7 +34,6 @@ dur_ms=$(j '.cost.total_duration_ms // empty')
 [ -z "$project_dir" ] && project_dir="$cwd"
 project_name=$(basename "$project_dir")
 
-# --- helpers ---
 fmt_num() {
   local n="$1"
   [ -z "$n" ] && { printf '0'; return; }
@@ -50,8 +46,7 @@ fmt_num() {
   fi
 }
 
-# compact H:MM — second-level precision isn't decision-relevant for "how long
-# has this session run", so this is the one duration format used at every tier
+# H:MM at every tier; seconds are not decision-relevant for session length.
 fmt_dur() {
   local ms="$1"
   [ -z "$ms" ] && { printf '0:00'; return; }
@@ -87,8 +82,7 @@ make_bar() {
 
 repeat() { printf '%*s' "$2" '' | tr ' ' "$1"; }
 
-# character-safe truncation (character-aware, not byte-aware, so multi-byte
-# UTF-8 like block-bar glyphs never gets corrupted mid-codepoint)
+# Character-aware, not byte-aware: never cut multi-byte UTF-8 mid-codepoint.
 clip_tail() { # text maxlen -- keeps the suffix (branch leaf names matter more)
   local text="$1" max="$2" len=${#1}
   [ "$len" -le "$max" ] && { printf '%s' "$text"; return; }
@@ -100,7 +94,6 @@ clip_head() { # text maxlen -- keeps the prefix (titles read left-to-right)
   [ "$max" -ge 2 ] && printf '%s' "${text:0:$((max-1))}…" || printf '%s' "${text:0:$max}"
 }
 
-# --- vaporwave truecolor palette ---
 fg() { printf '\033[38;2;%s;%s;%sm' "$1" "$2" "$3"; }
 reset=$'\033[0m'
 C_BORDER="$(fg 189 55 255)"
@@ -121,8 +114,7 @@ level_color() {
   fi
 }
 
-# --- git segment: branch + dirty count + ahead/behind upstream (repository
-# state right now — independent of Delta, which is cumulative slice scope) ---
+# Git segment: repo state right now, independent of Delta (cumulative scope).
 branch=""
 branch_suffix=""
 git_color="$C_VALUE"
@@ -142,37 +134,26 @@ if b=$(git -C "$cwd" symbolic-ref --short HEAD 2>/dev/null || git -C "$cwd" rev-
   fi
 fi
 
-# --- Delta: cumulative divergence of the local branch from ITS OWN upstream
-# (@{u}, e.g. origin/development), INCLUDING uncommitted work, so `git
-# commit` never changes the value. This answers "how far has local drifted
-# from what's on origin for this branch" -- not "how big will the eventual
-# PR diff be", which would need the actual PR base (see below).
+# Delta: cumulative divergence of the local branch from ITS OWN upstream (@{u}),
+# INCLUDING uncommitted work, so `git commit` never changes it. Answers "how far
+# has local drifted from origin", not "how big will the PR diff be" (that needs
+# the PR base).
 #
-# base = @{u} when the current branch has an upstream configured; falls back
-#        to refs/remotes/origin/HEAD (the repo's default branch) only when
-#        there is no upstream yet (e.g. a brand-new local branch never
-#        pushed) -- offline, no gh, no hardcoded main/development.
-# mb   = merge-base(base, HEAD) -- isolates this branch's own divergence from
-#        unrelated commits landed on the base branch since we forked/last
-#        synced
-# tracked changes  = `git diff --numstat <mb>` against the worktree (ONE call;
-#                     already covers committed-since-mb + staged + unstaged,
-#                     so nothing is summed twice)
-# untracked changes = each untracked file diffed against /dev/null, which
-#                     mirrors exactly what git would report if it were added
-#                     (binary detection, no-trailing-newline handling, etc.)
-# tracked and untracked are disjoint sets by construction (git diff never
-# shows untracked paths; `ls-files --others` never lists tracked/staged ones)
-# so summing them cannot double-count.
+# base = @{u}; refs/remotes/origin/HEAD only when no upstream exists (offline,
+#   no gh, no hardcoded branch names).
+# mb   = merge-base(base, HEAD): isolates this branch's divergence from commits
+#   landed on base since the fork.
+# tracked = one `git diff --numstat <mb>` against the worktree (covers committed
+#   + staged + unstaged, so nothing is summed twice).
+# untracked = each file diffed against /dev/null, mirroring what git reports if
+#   added (binary, no-trailing-newline handling).
+# The two sets are disjoint by construction, so summing cannot double-count.
 #
-# Known limitation: when using the origin/HEAD fallback (no upstream set),
-# that's the repo's *default* branch, not necessarily this branch's actual
-# base -- a branch forked from `development` in a repo whose default is
-# `main` will overstate scope by whatever `development` is ahead of `main`.
-# Once an upstream exists this fallback never triggers. A true PR-base
-# lookup (via gh) would be more precise but requires a network call; the
-# statusline hook has no tight execution timeout, so that stays out of this
-# synchronous path for now.
+# Known limitation: the origin/HEAD fallback is the repo's default branch, not
+# necessarily this branch's base, so a branch forked from `development` when the
+# default is `main` overstates scope by however far `development` is ahead. A gh
+# PR-base lookup would be more precise but needs a network call, kept out of
+# this synchronous path.
 delta_base=$(git -C "$cwd" rev-parse --symbolic-full-name "@{u}" 2>/dev/null)
 [ -z "$delta_base" ] && delta_base=$(git -C "$cwd" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null)
 delta_mb=""
@@ -190,30 +171,18 @@ if [ -n "$delta_mb" ]; then
   read -r delta_files delta_add delta_del <<< "$delta_stats"
 fi
 
-# --- TURN/CMP: single jq pass over the transcript.
-# turn = count of distinct assistant message.id values (an assistant turn can
-#   span multiple JSONL rows -- one per content block -- sharing one id, so
-#   dedupe or it's overcounted). A direct count of a real thing Claude Code
-#   writes, not an inferred/estimated proxy.
-# cmp  = count of {type:"system", subtype:"compact_boundary"} entries -- the
-#   literal marker Claude Code's own compaction code emits (confirmed by
-#   reading the shipped binary's own check for that exact shape).
+# TURN/CMP: one jq pass over the transcript.
+# turn = distinct assistant message.id count (one turn spans several JSONL rows,
+#   one per content block, sharing an id; dedupe or it overcounts).
+# cmp  = count of {type:"system", subtype:"compact_boundary"} entries, the
+#   marker Claude Code's own compaction emits (confirmed in the shipped binary).
 #
-# TURN is a plain count over the whole transcript file, uncorrected for
-# /clear. This used to need a companion SessionEnd hook (session-end-
-# clear-marker) writing a boundary timestamp, on the assumption that /clear
-# appends to the same transcript file without rotating it. That assumption
-# didn't hold: checked empirically across every transcript this machine has
-# (37 files, one Claude Code project) and every single one carries exactly
-# one session_id -- /clear starts a fresh transcript file with a fresh
-# session_id rather than appending, so TURN is already scoped to "since the
-# last /clear" for free, and a boundary marker has nothing to do (see
-# docs/DECISIONS.md D027). If a future Claude Code version stops rotating
-# the transcript on /clear, TURN would start counting pre-clear turns again
-# and this comment is the first place to look.
+# TURN is uncorrected for /clear on purpose: /clear starts a fresh transcript
+# file with a fresh session_id (checked across 37 local transcripts), so no
+# boundary marker is needed (D027). If a Claude Code version stops rotating the
+# transcript on /clear, TURN would count pre-clear turns again: look here first.
 #
-# Measured cost on a real ~2.5MB/632-line transcript: ~17ms -- cheap enough
-# not to need caching at this refresh interval.
+# Measured ~17ms on a ~2.5MB/632-line transcript, so no caching.
 turn_count="" cmp_count=0
 if [ -n "$tpath" ] && [ -f "$tpath" ]; then
   read -r turn_count cmp_count <<< "$(jq -s -r '
@@ -224,11 +193,8 @@ if [ -n "$tpath" ] && [ -f "$tpath" ]; then
 fi
 [ -z "$cmp_count" ] && cmp_count=0
 
-# --- layout: $COLUMNS is set authoritatively by Claude Code itself from its
-# own process.stdout.columns before spawning this script (confirmed in the
-# 2.1.231 binary) -- no controlling tty in this child, so `tput cols` here
-# only ever guesses, which is what produced the old width-cache workaround.
-# Reading $COLUMNS directly is simpler and strictly more correct.
+# $COLUMNS comes from Claude Code's own process.stdout.columns (confirmed in
+# 2.1.231); this child has no controlling tty, so `tput cols` would only guess.
 cols=${COLUMNS:-80}
 [ "$cols" -gt 0 ] 2>/dev/null || cols=80
 BOX_MIN=30
@@ -255,14 +221,10 @@ box_border_top() { # title
 }
 box_border_bot() { printf '%s╚%s╝%s' "$C_BORDER" "$(repeat '═' $((BOX_W-2)))" "$reset"; }
 
-# --- title: project identity, plus worktree name only where it's both
-# meaningfully different and there's room to spare (wide only) ---
 title="$(printf '%s' "$project_name" | tr '[:lower:]' '[:upper:]')"
 if [ "$TIER" = "wide" ] && [ -n "$worktree_name" ] && [ "$worktree_name" != "$project_name" ]; then
   title="${title} ▸ $(printf '%s' "$worktree_name" | tr '[:lower:]' '[:upper:]')"
 fi
-
-# --- segments (plain builders; color applied at assembly) ---
 
 seg_git() {
   [ -z "$branch" ] && return
@@ -273,13 +235,10 @@ seg_git() {
   esac
 }
 
-# always present at every tier -- this and CTX are the two segments that
-# guarantee neither content row can ever render blank
+# Always present: with CTX, keeps either content row from rendering blank.
 seg_elapsed() { printf '⏱ %s' "$(fmt_dur "$dur_ms")"; }
 
-# bars are the first responsive detail to drop (wide only); the percentage
-# itself never disappears -- it's the actual information, the bar is a
-# wide-mode visualization of it
+# The bar drops first (wide only); the percentage never disappears.
 seg_ctx() {
   if [ "$TIER" = "wide" ]; then
     printf 'CTX %s%% %s' "$ctx_pct" "$(make_bar "$ctx_pct" 5)"
@@ -288,12 +247,8 @@ seg_ctx() {
   fi
 }
 
-# rate-limit segment: shown routinely at wide/normal; only promoted into
-# narrow/tiny once usage is actually actionable. Reset countdown: routine
-# at wide/normal (there's room to answer "when do I get capacity back"
-# alongside "how much is used"); at narrow/tiny it still only earns space
-# once the window is elevated enough that the timing becomes actionable.
-# Bar: wide only (first thing dropped at normal, ahead of the reset text).
+# Routine at wide/normal; at narrow/tiny only once usage is actionable, with the
+# reset countdown only at higher usage. Bar: wide only.
 seg_rl() { # label pct reset present
   local label="$1" pct="$2" resetat="$3" present="$4"
   [ -z "$present" ] && return
@@ -331,18 +286,14 @@ seg_model() {
   esac
 }
 
-# turns: wide/normal only, expendable -- same eligibility as model
 seg_turn() {
   case "$TIER" in
     wide|normal) [ -n "$turn_count" ] && printf 'TURN %s' "$(fmt_num "$turn_count")" ;;
   esac
 }
 
-# compaction: zero is invisible everywhere (no candidate at all); nonzero is
-# eligible at every tier and ranked ABOVE model/turn in priority (below the
-# rate limits though -- an exhausted rate limit blocks work outright, a past
-# compaction is informational), since a real compaction is evidence
-# something already happened to context quality
+# Zero is invisible; nonzero outranks model/turn but not the rate limits (an
+# exhausted limit blocks work, a past compaction is informational).
 seg_cmp() {
   [ "$cmp_count" -gt 0 ] 2>/dev/null && printf 'CMP %s' "$cmp_count"
 }
@@ -360,15 +311,10 @@ model_seg=$(seg_model)
 turn_seg=$(seg_turn)
 cmp_seg=$(seg_cmp)
 
-# row_render: reads globals RP_TEXT[]/RP_COLOR[] (candidates in PRIORITY
-# order -- most important first) and RD_ORDER[] (indices into those arrays,
-# in DISPLAY order). Runs one forward greedy-fit pass over priority order
-# (include a candidate only if it still fits given what's already kept,
-# otherwise skip it and keep checking lower-priority ones -- so a skipped
-# big segment can't cost a smaller lower-priority one its own chance to
-# fit), then renders the survivors in the separate fixed display order.
-# Single-purpose, hardcoded per-row arrays -- not a configurable layout
-# engine, just the same explicit mechanism used twice.
+# Reads globals RP_TEXT[]/RP_COLOR[] (candidates, most important first) and
+# RD_ORDER[] (indices into them, display order). One forward greedy-fit pass in
+# priority order: a skipped big segment must not cost a smaller lower-priority
+# one its chance.
 row_render() {
   local n=${#RP_TEXT[@]} i p add_len running=0 first=1
   SURVIVED=()
@@ -399,21 +345,15 @@ row_render() {
   printf '%s║%s %s%s %s║%s' "$C_BORDER" "$reset" "$line" "$(printf '%*s' "$pad" '')" "$C_BORDER" "$reset"
 }
 
-# row 1: work/orientation -- branch/git -> Delta -> elapsed on display.
-# Priority (what survives space pressure): git is highest, elapsed is also
-# sticky (it and CTX are the two segments guaranteeing a row is never
-# blank), Delta is the most expendable of the three -- it also already
-# hides itself at tiny via its own tier gate above.
+# row 1 (work/orientation): git highest priority, elapsed sticky (with CTX, so
+# no row is blank), Delta most expendable.
 RP_TEXT=("$git_seg" "$elapsed_seg" "$delta_seg")
 RP_COLOR=("$git_color" "$C_VALUE" "$C_VALUE")
 RD_ORDER=(0 2 1)
 row1=$(row_render)
 
-# row 2: agent/session pressure -- model -> TURN -> CMP -> CTX -> 5H -> 7D on
-# display. Priority: CTX is sticky, then 5H/7D (their own eligibility/
-# promotion rules already decide if they're candidates at all), then a real
-# CMP (>0) outranks model/turn but not an actionable rate limit, then model,
-# then turns (most expendable of all).
+# row 2 (agent/session pressure): priority CTX, then 5H/7D, a real CMP (>0),
+# model, turns; displayed model -> TURN -> CMP -> CTX -> 5H -> 7D.
 RP_TEXT=("$ctx_seg" "$rl5_seg" "$rl7_seg" "$cmp_seg" "$model_seg" "$turn_seg")
 RP_COLOR=("$ctx_color" "$rl5_color" "$rl7_color" "$C_MID" "$C_DIM" "$C_DIM")
 RD_ORDER=(4 5 3 0 1 2)

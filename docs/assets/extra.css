@@ -1,12 +1,8 @@
 /*
- * Bindle documentation site — presentation layer only.
- *
- * Retheme via Bootstrap 5 CSS custom properties (the stock "mkdocs" theme
- * is Bootstrap-based) rather than fighting its component classes. Colors
- * are the palette already established in docs/site/img/how-bindle-works-
- * diagram.svg and docs/assets/spec-kit-bindle-symphony.svg: indigo marks
- * what Bindle itself durably owns, slate marks everything it does not.
- * See docs/DECISIONS.md D047 for why this file exists.
+ * Presentation layer only (D047). Retheme via Bootstrap 5 CSS custom
+ * properties (the stock "mkdocs" theme is Bootstrap-based) instead of
+ * fighting its component classes. Palette matches the diagram SVGs:
+ * indigo marks what Bindle durably owns, slate everything it does not.
  */
 
 :root,
@@ -81,10 +77,7 @@
   --bs-border-color: var(--bindle-slate-200);
 }
 
-/* The stock theme paints a fixed, hardcoded gradient on .bg-primary that a
-   CSS-variable retheme alone can't reach — flatten it back to a solid,
-   restrained navbar instead of leaving the old blue gradient showing
-   through the new accent color. */
+/* Stock .bg-primary has a hardcoded gradient that variables can't override. */
 .navbar.bg-primary {
   background-image: none;
 }
@@ -105,10 +98,6 @@ html {
 body {
   -webkit-font-smoothing: antialiased;
 }
-
-/* ---------------------------------------------------------------------- */
-/* Typography and content rhythm                                          */
-/* ---------------------------------------------------------------------- */
 
 [role="main"] h1,
 [role="main"] h2,
@@ -164,10 +153,6 @@ body {
   opacity: 1;
 }
 
-/* ---------------------------------------------------------------------- */
-/* Code                                                                    */
-/* ---------------------------------------------------------------------- */
-
 [role="main"] :not(pre) > code {
   background: var(--bs-tertiary-bg);
   border: 1px solid var(--bs-border-color);
@@ -187,10 +172,7 @@ body {
   line-height: 1.55;
 }
 
-/* ---------------------------------------------------------------------- */
-/* Tables — the stock theme ships no table styling at all                 */
-/* ---------------------------------------------------------------------- */
-
+/* The stock theme ships no table styling at all. */
 [role="main"] table {
   display: block;
   overflow-x: auto;
@@ -212,10 +194,6 @@ body {
   font-weight: 600;
 }
 
-/* ---------------------------------------------------------------------- */
-/* Navbar and brand mark                                                  */
-/* ---------------------------------------------------------------------- */
-
 .navbar-brand {
   font-weight: 700;
   font-family: var(--bs-font-monospace);
@@ -225,10 +203,6 @@ body {
 .navbar .nav-link.active {
   font-weight: 600;
 }
-
-/* ---------------------------------------------------------------------- */
-/* Sidebar table-of-contents — current-section state                      */
-/* ---------------------------------------------------------------------- */
 
 .bs-sidebar .nav-link {
   border-left: 2px solid transparent;
@@ -248,10 +222,6 @@ body {
   background: transparent;
 }
 
-/* ---------------------------------------------------------------------- */
-/* Footer                                                                  */
-/* ---------------------------------------------------------------------- */
-
 footer.col-md-12 {
   margin-top: 3rem;
   padding-top: 1rem;
@@ -259,19 +229,12 @@ footer.col-md-12 {
   font-size: 0.9rem;
 }
 
-/* ---------------------------------------------------------------------- */
-/* Homepage only (body.homepage — set by the stock theme's base.html)     */
-/* ---------------------------------------------------------------------- */
-
+/* body.homepage is set by the stock theme's base.html. */
 body.homepage [role="main"] {
   max-width: none;
 }
 
-/* The homepage's single H1 gave the local table-of-contents sidebar
-   nothing useful to show (one entry, repeating the page title). The
-   primary top navbar already carries full site navigation on every page,
-   so the homepage reclaims that column for the hero instead of showing an
-   empty-feeling duplicate. */
+/* One-entry TOC is redundant with the navbar; the hero takes its column. */
 body.homepage .col-md-3 {
   display: none;
 }

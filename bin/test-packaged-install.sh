@@ -7,11 +7,8 @@
 # and exercises the guardrail lifecycle exactly as an end user would: an
 # arbitrary cwd, no source checkout in sight.
 #
-# Requires `uv` on PATH and network-free wheel building (this repo has no
-# runtime dependencies). Skips (exit 0, clearly reported) rather than
-# failing the whole gate if `uv` is unavailable — packaging verification
-# degrades gracefully in an environment that can't build/install at all,
-# rather than blocking every other check.
+# Requires `uv` on PATH (wheel building is network-free; no runtime deps). Skips
+# with exit 0 if `uv` is unavailable rather than blocking every other check.
 #
 # Usage: bin/test-packaged-install.sh
 #
@@ -42,7 +39,6 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# ===========================================================================
 echo "building the wheel via the repository's normal build path:"
 
 BUILD_LOG="$TMP/build.log"
@@ -64,7 +60,6 @@ check "the wheel bundles every guardrail runtime asset" bash -c \
    unzip -l '$WHEEL' | grep -q 'bindle/_bin/allow-main-write.sh' &&
    unzip -l '$WHEEL' | grep -q 'bindle/_bin/settings_json.py'"
 
-# ===========================================================================
 echo "installing the wheel into an isolated venv, outside this source checkout:"
 
 VENV="$TMP/venv"
@@ -83,7 +78,6 @@ pkg_location_outside_checkout() {
 check "the installed bindle package resolves outside this source checkout" \
   pkg_location_outside_checkout
 
-# ===========================================================================
 echo "exercising bindle init/remove from the installed artifact, from an arbitrary cwd:"
 
 export HOME="$TMP/fake-home"
@@ -149,13 +143,9 @@ check "bindle init outside a Git repository fails clearly (installed artifact)" 
 check "global core.hooksPath was never touched by any of this" bash -c \
   '! git config --global --get core.hooksPath >/dev/null 2>&1'
 
-# ===========================================================================
 echo "bindle migrate-legacy-global from the installed artifact:"
 
-# A recognized legacy global install (built by reusing the installed
-# artifact itself, then relocated the way the pre-rework installer would
-# have left it) must block a normal installed `bindle init`, and only
-# `bindle migrate-legacy-global` (not init/remove) may clear it.
+# Legacy fixture: init via the artifact, then relocate as the old installer did.
 LEGACY_TEMPLATE="$TMP/legacy-template"
 git init -q "$LEGACY_TEMPLATE"
 git -C "$LEGACY_TEMPLATE" commit -q --allow-empty -m init
@@ -206,15 +196,10 @@ check "bindle init against Repo C now succeeds once the legacy state is migrated
 check "Repo C: repo-local core.hooksPath is now set" bash -c \
   "git -C '$REPO_C' config --local --get core.hooksPath >/dev/null 2>&1"
 
-# ===========================================================================
 echo "bindle init/remove/migrate-legacy-global work with no jq on PATH:"
 
-# The Claude-layer JSON merge is a package-owned Python helper
-# (settings_json.py, run under BINDLE_PYTHON — see src/bindle/cli.py), not
-# jq. Prove it by constructing a PATH with every currently-reachable
-# executable EXCEPT jq (flattened into one directory, first-found-wins, so
-# PATH precedence for duplicate names is preserved) and exercising the
-# installed artifact against it.
+# The JSON merge is a package-owned Python helper (settings_json.py), not jq.
+# PATH is flattened into one dir minus jq, first-found-wins to keep precedence.
 NOJQ_PATH_DIR="$TMP/path-without-jq"
 mkdir -p "$NOJQ_PATH_DIR"
 _old_ifs="$IFS"
@@ -303,6 +288,5 @@ nojq_init_repo_e_now_succeeds() (
 check "bindle init against Repo E now succeeds once legacy state is migrated away (no jq)" \
   nojq_init_repo_e_now_succeeds
 
-# ===========================================================================
 printf '\n  packaged-install: %d/%d checks passed\n' "$pass" "$((pass + fail))"
 exit "$fail"
