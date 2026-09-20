@@ -2441,7 +2441,7 @@ class TestInitQmdFlag(unittest.TestCase):
                 "--name",
                 COLLECTION_NAME,
                 "--mask",
-                "{*.md,docs/**/*.md,plans/**/*.md}",
+                "{*.md,docs/**/*.md,plans/**/*.md,specs/**/*.md}",
             ],
         )
         self.assertEqual(add_cwd, os.path.realpath(self.repo))
@@ -2702,7 +2702,9 @@ class TestInitQmdRealCli(unittest.TestCase):
     def test_real_qmd_init_results_in_ready_state_and_indexes_docs(self):
         self._write_doc("docs/SCOPE.md", "# SCOPE\nunique-marker-alpha-9f2 lives here.\n")
         self._write_doc("plans/active/README.md", "# Active\nunique-marker-beta-3c1 lives here.\n")
+        self._write_doc("specs/001-x/plan.md", "# Plan\nunique-marker-delta-5d8 lives here.\n")
         self._write_doc("src/notreally.md", "should NOT be indexed\n")
+        self._write_doc(".specify/templates/tmpl.md", "unique-marker-tmpl-2b6 should NOT be indexed\n")
 
         with _chdir(self.repo):
             code = main(["init", "--qmd"])
@@ -2738,6 +2740,26 @@ class TestInitQmdRealCli(unittest.TestCase):
         )
         self.assertEqual(beta.returncode, 0, beta.stderr)
         self.assertIn("plans/active/README.md", beta.stdout)
+
+        delta = subprocess.run(
+            [qmd_bin, "search", "unique-marker-delta-5d8", "--format", "files"],
+            cwd=self.repo,
+            env=qmd_env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(delta.returncode, 0, delta.stderr)
+        self.assertIn("specs/001-x/plan.md", delta.stdout)
+
+        template = subprocess.run(
+            [qmd_bin, "search", "unique-marker-tmpl-2b6", "--format", "files"],
+            cwd=self.repo,
+            env=qmd_env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(template.returncode, 0, template.stderr)
+        self.assertNotIn("tmpl.md", template.stdout)
 
         decoy = subprocess.run(
             [qmd_bin, "search", "notreally", "--format", "files"],

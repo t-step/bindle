@@ -178,8 +178,8 @@ See docs/TOOLCHAIN.md and D022 for details.
 Local retrieval (QMD)
 
 QMD is an optional, repository-scoped local search index over this
-repository's own durable Markdown (root-level *.md, docs/, plans/), not a
-source of truth and not a work-coordination system. Markdown files remain
+repository's own durable Markdown (root-level *.md, docs/, plans/, specs/),
+not a source of truth and not a work-coordination system. Markdown files remain
 authoritative; the QMD index is derived and rebuildable.
 
 Opt in per repository, per worktree, with:
