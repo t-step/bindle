@@ -29,7 +29,7 @@ from bindle.repo import get_repo_info
 from bindle.skills import KitInfo, KitOpOutcome, KitStatus
 from bindle.work_ledger import WorkLedger
 
-TOP_LEVEL_COMMANDS = [*_LIFECYCLE_COMMANDS, "repo", "branch", "skills", "work"]
+TOP_LEVEL_COMMANDS = [*_LIFECYCLE_COMMANDS, "repo", "branch", "history", "skills", "work"]
 
 _HAS_REAL_PJM = shutil.which("pjm") is not None
 _HAS_REAL_QMD = shutil.which("qmd") is not None
@@ -145,6 +145,7 @@ class TestTopLevelHelpSurface(unittest.TestCase):
             self.assertIn(help_text, text)
         self.assertIn("Repository information.", text)
         self.assertIn("Create a new worktree and branch off up-to-date origin/main.", text)
+        self.assertIn("Report mechanical history hygiene for a branch (read-only).", text)
 
     def test_each_lifecycle_command_has_working_help(self):
         for name, (_help_text, description) in _LIFECYCLE_COMMANDS.items():
@@ -757,6 +758,129 @@ class TestStatusCommand(unittest.TestCase):
 
         after = sorted(os.listdir(qmd_dir))
         self.assertEqual(before, after)
+
+
+class TestHistoryCommand(unittest.TestCase):
+    # `bindle history` is a thin wrapper over the dispatcher's `--history`
+    # mode (the report itself is exercised exhaustively by
+    # bin/test-history-hygiene.sh); these tests pin the wrapper's contract:
+    # stream routing, exit status, argument pass-through, and that it stays
+    # read-only.
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = os.path.join(self.tmp.name, "repo")
+        _init_repo(self.repo)
+        _run(["git", "switch", "-c", "feat/x"], self.repo)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _commit(self, subject, name="f.txt"):
+        with open(os.path.join(self.repo, name), "a") as f:
+            f.write(f"{subject}\n" * 12)
+        _run(["git", "add", name], self.repo)
+        _run(["git", "commit", "-m", subject], self.repo)
+
+    def _history(self, argv=()):
+        out, err = io.StringIO(), io.StringIO()
+        with _chdir(self.repo), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = main(["history", *argv])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_clean_branch_reports_pass_and_exits_zero(self):
+        self._commit("feat: add thing")
+        code, out, _err = self._history()
+        self.assertEqual(code, 0, out)
+        self.assertIn("History hygiene: feat/x vs main (1 commit, 0 merge)", out)
+        self.assertIn("PASS   no pending fixup!/squash!/amend! commits", out)
+        self.assertNotIn("BLOCK", out)
+
+    def test_pending_autosquash_commit_blocks_with_exit_one(self):
+        self._commit("feat: add thing")
+        self._commit("fixup! feat: add thing")
+        code, out, _err = self._history()
+        self.assertEqual(code, 1)
+        self.assertIn("BLOCK  1 pending fixup!/squash!/amend! commit", out)
+        self.assertIn("git rebase -i --autosquash", out)
+
+    def test_warnings_alone_do_not_change_the_exit_status(self):
+        with open(os.path.join(self.repo, "t.txt"), "w") as f:
+            f.write("x\n")
+        _run(["git", "add", "t.txt"], self.repo)
+        _run(["git", "commit", "-m", "fix: fix typo"], self.repo)
+        code, out, _err = self._history()
+        self.assertEqual(code, 0, out)
+        self.assertIn("WARN   1/1 commits change fewer than 10 lines", out)
+        self.assertIn("WARN   1 commit with corrective/rework-shaped subjects", out)
+
+    def test_ref_and_base_arguments_are_passed_through(self):
+        self._commit("feat: add thing")
+        _run(["git", "switch", "main"], self.repo)
+        code, out, _err = self._history(["--base", "main", "feat/x"])
+        self.assertEqual(code, 0, out)
+        self.assertIn("feat/x vs main", out)
+
+    def test_unresolvable_ref_is_reported_on_stderr_with_exit_two(self):
+        code, out, err = self._history(["no-such-ref"])
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertIn("cannot resolve 'no-such-ref'", err)
+
+    def test_detached_head_is_reported_not_crashed(self):
+        self._commit("feat: add thing")
+        _run(["git", "switch", "--detach", "HEAD"], self.repo)
+        code, out, _err = self._history()
+        self.assertEqual(code, 0, out)
+        self.assertIn("detached HEAD (", out)
+
+    def test_non_utf8_repository_text_does_not_crash_the_wrapper(self):
+        self._commit("feat: add thing")
+        with open(os.path.join(self.repo, "f.txt"), "a") as f:
+            f.write("more\n")
+        _run(["git", "add", "f.txt"], self.repo)
+        msg = os.path.join(self.tmp.name, "msg.bin")
+        with open(msg, "wb") as f:
+            f.write(b"fixup! feat: caf\xe9\n")  # Latin-1 byte, invalid UTF-8
+        _run(["git", "commit", "-F", msg], self.repo)
+        code, out, _err = self._history()
+        self.assertEqual(code, 1)
+        self.assertIn("BLOCK  1 pending fixup!/squash!/amend! commit", out)
+
+    def test_outside_a_git_repository_is_a_clean_error(self):
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        err = io.StringIO()
+        with _chdir(outside.name), contextlib.redirect_stderr(err):
+            code = main(["history"])
+        self.assertEqual(code, 1)
+        self.assertIn("bindle history:", err.getvalue())
+
+    def test_missing_runtime_asset_is_a_clean_error(self):
+        missing = os.path.join(self.tmp.name, "nowhere", "install-guardrails.sh")
+        err = io.StringIO()
+        with (
+            _chdir(self.repo),
+            mock.patch("bindle.cli._installer_path", return_value=Path(missing)),
+            contextlib.redirect_stderr(err),
+        ):
+            code = main(["history"])
+        self.assertEqual(code, 1)
+        self.assertIn("missing a required runtime asset", err.getvalue())
+
+    def _snapshot(self):
+        def git(*args):
+            return subprocess.run(
+                ["git", *args], cwd=self.repo, capture_output=True, text=True, check=True
+            ).stdout
+
+        return (git("for-each-ref"), git("status", "--porcelain=v2", "--branch"), git("reflog"))
+
+    def test_never_modifies_the_repository(self):
+        self._commit("feat: add thing")
+        self._commit("fixup! feat: add thing")
+        before = self._snapshot()
+        self._history()
+        self.assertEqual(self._snapshot(), before)
 
 
 class TestBranchCommand(unittest.TestCase):

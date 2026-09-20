@@ -94,6 +94,8 @@ Commit messages are validated by Cocogitto. If the local commit-msg hook is abse
 
 cog install-hook commit-msg
 
+Revising an existing logical commit is an explicit act: use `git commit --fixup=<target>` (never guess the target; `--squash=` and `--fixup=amend:` work too). Genuinely new logical work is a normal Conventional Commit. `fixup!`/`squash!`/`amend!` commits are accepted while developing but must be folded before publishing — `git rebase -i --autosquash <base>` — and the pre-push hook blocks a push that still contains them. In a Bindle-managed repository (`bindle init`), the hook layer also enforces the Conventional Commit subject (this repository declares it via `cog.toml`) and prints a deterministic history-hygiene report at push time; `bindle history` prints the same report on demand. Only pending autosquash commits and non-conforming subjects block; every other signal is advisory counts, never a judgment about how commits "should" be combined (docs/DECISIONS.md D048).
+
 Planning
 
 Prefer local Markdown planning.

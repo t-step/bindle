@@ -100,6 +100,9 @@ bin/test-guardrail-ownership.sh || fail=1
 section "bin/test-guardrail-status.sh"
 bin/test-guardrail-status.sh || fail=1
 
+section "bin/test-history-hygiene.sh"
+bin/test-history-hygiene.sh || fail=1
+
 section "bin/test-packaged-install.sh"
 bin/test-packaged-install.sh || fail=1
 
