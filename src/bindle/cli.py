@@ -1,68 +1,50 @@
 """bindle CLI entrypoint.
 
-Establishes the command surface for Bindle's repository and global
-lifecycle commands (see AGENTS.md and docs/SCOPE.md). `--version`,
-`repo info`, `branch`, `init`, `remove`, `status`, and `migrate-legacy-global`
-have real behavior today. `init`/`remove` always cover the guardrail layer
-(Git hook dispatch + Claude Code PreToolUse guard) via
-install-guardrails.sh. `init` also unconditionally provisions Bindle's own
-coordination substrate (docs/DECISIONS.md D043): it bootstraps the durable
-SQLite work ledger (`WorkLedger.ensure_schema()`, work_ledger.py — the same
-schema-authority path every other ledger-touching command already uses,
-never a second copy) and (re)generates the current, versioned
-Symphony-readable projection (`symphony_projection.publish()`) so both
-files exist and are valid the moment a repository opts into Bindle, with
-no separate manual bootstrap step. This is pure provisioning, never
-semantic work state: a fresh ledger holds zero work items, and the
-projection it publishes has zero rows to match. This is Bindle-owned
-substrate, not a Symphony lifecycle surface — Bindle still does not
-install, build, configure, launch, stop, or report status for Symphony
-itself, and no `bindle symphony ...` command exists or is implied by this.
-`init --projectmem` additionally ensures Projectmem
-is initialized for the repository via the native `pjm` CLI (see
-projectmem.py) — the explicit, opt-in provider-lifecycle seam this slice
-adds, still no general Bindle-owned component/provider registry.
-Projectmem storage is initialized worktree-local (`pjm init --no-hooks
-...`); its Git hooks are then installed separately, against the
-repository's shared Git common directory (`pjm hooks install`, `cwd`
-resolved to the main checkout) rather than a linked worktree's own `.git`
-(a file, not a directory there) — see D033. Known Projectmem preconditions
-(partial/conflicting `.projectmem/`, a missing `pjm` executable) are
-checked before guardrails mutate anything, so a refusal on the Projectmem
-side never leaves guardrails newly installed/reconciled behind it.
-`remove` never touches Projectmem's own state, since Bindle has no
-ownership record proving it may destroy it.
-`init --qmd` additionally ensures a project-local QMD retrieval index
-exists for the repository's own durable Markdown, via the native `qmd`
-CLI (see qmd.py, and docs/DECISIONS.md D036) — a fourth provider-lifecycle
-seam, shaped like Projectmem's (native CLI only, filesystem-native
-detection) rather than the skill kits'. `--projectmem` and `--qmd` compose
-freely: every requested layer's read-only preflight runs first, guardrails
-mutate only once every requested preflight has passed, and each opt-in's
-own mutation runs after that in a fixed order (Projectmem, then QMD) —
-never a transaction, each step's failure is reported as-is without rolling
-back an earlier step that already succeeded. `remove` never touches
-`.qmd/` either, for the same "no ownership record proving it may destroy
-this" reason as Projectmem, even though the QMD index is itself derived,
-rebuildable state — see qmd.py.
-`status` additionally reports read-only Projectmem and QMD adoption state
-alongside the guardrail layer, without installing, repairing, or
-otherwise mutating either. `branch` creates an
-isolated worktree and feature branch off freshly-fetched origin/main
-(AGENTS.md, "Development isolation"). `skills list`/`status`/`add`/
-`remove` manage skill kits — named collections of agent-facing skills
-Bindle makes available to Claude Code and Codex through each harness's
-own native mechanism (see the `skills` package and docs/DECISIONS.md
-D035) — a third, differently-shaped provider-lifecycle seam alongside
-guardrails and Projectmem. `list` (the global repository inventory,
-distinct from `skills list`), `update`, `upgrade`, and `doctor` remain
-interface-only placeholders until their underlying components are
-implemented in a later slice. `work load-speckit`/`publish`/`claim`/
-`release`/`done` (specs/003-symphony-task-integration) load a settled
-Spec Kit feature's tasks.md into the durable work ledger, regenerate the
-published, versioned, read-only Symphony-facing SQLite projection, and
-claim/release/complete a task through the ledger's own atomic
-primitives — see speckit_loader.py and symphony_projection.py.
+Command surface for Bindle's repository and global lifecycle commands
+(AGENTS.md, docs/SCOPE.md). `--version`, `repo info`, `branch`, `init`,
+`remove`, `status`, and `migrate-legacy-global` have real behavior; `list` (the
+global repository inventory, distinct from `skills list`), `update`, `upgrade`,
+and `doctor` remain interface-only placeholders.
+
+`init`/`remove` always cover the guardrail layer (Git hook dispatch + Claude
+Code PreToolUse guard) via install-guardrails.sh. `init` also unconditionally
+provisions Bindle's coordination substrate (D043): it bootstraps the SQLite work
+ledger through `WorkLedger.ensure_schema()`, the same schema-authority path
+every other ledger-touching command uses, and (re)generates the versioned
+Symphony-readable projection (`symphony_projection.publish()`), so both files
+exist and are valid the moment a repository opts in. This is provisioning only
+(a fresh ledger holds zero work items, the projection zero rows), not a Symphony
+lifecycle surface: Bindle does not install, build, configure, launch, stop, or
+report status for Symphony, and no `bindle symphony ...` command exists.
+
+`init --projectmem` ensures Projectmem is initialized via the native `pjm` CLI
+(projectmem.py). Storage is worktree-local (`pjm init --no-hooks ...`); its Git
+hooks are installed separately against the shared Git common directory (`pjm
+hooks install`, cwd = main checkout) because a linked worktree's `.git` is a
+file (D033). `init --qmd` ensures a project-local QMD retrieval index for the
+repository's durable Markdown via the native `qmd` CLI (qmd.py, D036), shaped
+like Projectmem's seam (native CLI only, filesystem-native detection) rather
+than the skill kits'.
+
+The two flags compose: every requested layer's read-only preflight (e.g. a
+partial/conflicting `.projectmem/`, a missing `pjm`) runs first, guardrails
+mutate only once all pass, then each opt-in runs in fixed order (Projectmem,
+then QMD). It is never a transaction: a failing step is reported as-is without
+rolling back earlier ones. `remove` never touches Projectmem state or `.qmd/`
+(Bindle holds no ownership record proving it may destroy them, even though the
+QMD index is derived and rebuildable; see qmd.py). `status` additionally reports
+read-only Projectmem and QMD adoption state.
+
+`branch` creates an isolated worktree and feature branch off freshly-fetched
+origin/main (AGENTS.md, "Development isolation"). The `skills` subcommands
+(`list`/`status`/`add`/`remove`) manage skill kits (named collections of
+agent-facing skills made available to Claude Code and Codex through each
+harness's native mechanism; `skills` package, D035), a third, differently-shaped
+provider-lifecycle seam. The `work` subcommands `load-speckit`/`publish`/
+`claim`/`release`/`done` (specs/003-symphony-task-integration) load a settled
+Spec Kit feature's tasks.md into the ledger, regenerate the read-only
+Symphony-facing projection, and claim/release/complete a task through the
+ledger's atomic primitives (speckit_loader.py, symphony_projection.py).
 """
 
 from __future__ import annotations
@@ -100,21 +82,7 @@ from . import work_ledger
 from . import work_status
 from .work_ledger import WorkLedger
 
-# Lifecycle commands with an established name and short/long --help text.
-# `init`, `remove`, `status`, and `migrate-legacy-global` have real behavior
-# (see _cmd_init/_cmd_remove/_cmd_status/_cmd_migrate_legacy_global below);
-# the rest remain interface-only placeholders (_cmd_not_implemented).
-#
-# The repository is the primary unit of Bindle management: `init` is the
-# explicit per-repository opt-in boundary, and `remove`, `status`,
-# `upgrade`, and `doctor` all target the current repository by default.
-# `list` (global inventory of opted-in repositories), `update` (refresh
-# Bindle's own component/catalog knowledge), and `migrate-legacy-global`
-# (the explicit, repo-independent escape hatch for a recognized pre-rework
-# GLOBAL guardrail install — see install-guardrails.sh
-# --remove-legacy-global) are global/machine-level — none of the three
-# targets or mutates any specific repository. Keep insertion order matching
-# the intended `bindle --help` listing order.
+# Insertion order is the `bindle --help` listing order.
 _LIFECYCLE_COMMANDS: dict[str, tuple[str, str]] = {
     "init": (
         "Initialize or reconcile Bindle for this repository.",
@@ -195,13 +163,7 @@ def _cmd_not_implemented(name: str) -> int:
     return 1
 
 
-# Aliases (not re-declarations) of guardrails.py's installer_path/
-# installer_env — this module's own single point of contact with the
-# installer, so `_run_guardrail_installer`/`_cmd_migrate_legacy_global`
-# below and existing tests that patch `bindle.cli._installer_path` keep
-# working unchanged, while detect_git_guardrails/detect_claude_guardrails
-# (guardrails.py) share the exact same underlying functions rather than a
-# separately-drifting copy.
+# Aliases so tests can patch `bindle.cli._installer_path`; detection shares.
 _installer_path = installer_path
 _installer_env = installer_env
 
@@ -230,24 +192,11 @@ def _run_guardrail_installer(command: str, mode: str) -> int:
 
 
 def _projectmem_init_preflight(info) -> tuple[int | None, str, str | None]:
-    # Read-only precondition check for `bindle init --projectmem`, run
-    # BEFORE any mutation (guardrails or Projectmem) — a known Projectmem
-    # precondition failure must never leave guardrails newly
-    # installed/reconciled behind it. Detection is the exact same read-only
-    # detect_projectmem() `bindle status` already uses; detection does not
-    # imply ownership, so "installed" is a no-op success regardless of
-    # whether Bindle created it, and needs no `pjm` executable at all.
-    #
-    # Never lets native `pjm init` run against "partial"/"conflict" state:
-    # verified empirically this session that it does NOT refuse on either
-    # (a partial `.projectmem/` is silently completed; a conflicting file
-    # crashes with an unhandled traceback) — this check is what makes
-    # Bindle refuse cleanly instead.
-    #
-    # Returns (refusal_exit_code, state, pjm_path). refusal_exit_code is
-    # None when the precondition passed (proceed to guardrails); pjm_path
-    # is the resolved `pjm` binary to reuse for the later init call when
-    # state is "not-installed", else None (not needed for "installed").
+    # Runs BEFORE any mutation: a Projectmem precondition failure must never
+    # leave guardrails newly installed.
+    # Native `pjm init` does NOT refuse "partial"/"conflict" (partial is
+    # silently completed, a conflicting file crashes), so this refuses cleanly.
+    # Returns (refusal_code | None, state, pjm_path); path if not-installed.
     mem_dir = os.path.join(info.worktree_root, ".projectmem")
     state = detect_projectmem(info)
 
@@ -277,9 +226,7 @@ def _projectmem_init_preflight(info) -> tuple[int | None, str, str | None]:
     if state == "installed":
         return None, state, None
 
-    # not-installed: a `pjm` executable is required before anything else
-    # in this invocation mutates. Never falls back to constructing
-    # .projectmem/ state manually — see projectmem.py.
+    # not-installed: require `pjm` up front; never build .projectmem/ by hand.
     pjm = pjm_executable()
     if pjm is None:
         print(
@@ -297,26 +244,12 @@ def _projectmem_init_preflight(info) -> tuple[int | None, str, str | None]:
 
 def _apply_projectmem(info, state: str, pjm: str | None) -> int:
     if state == "installed":
-        # Accepting a healthy existing installation, not repairing one:
-        # this guarantees correct hook placement when Bindle itself
-        # initializes Projectmem, but it does not audit or repair the hook
-        # state of a pre-existing Projectmem installation (e.g. one set up
-        # by hand from a linked worktree before this fix existed). Doing
-        # that would turn `init --projectmem` into a general repair
-        # mechanism, which is out of scope for this slice.
+        # Accept a healthy install as-is; don't audit or repair its hooks.
         print("Projectmem: already installed — left unchanged.")
         return 0
 
-    # not-installed, guardrails now applied: initialize storage through
-    # Projectmem's own native CLI with the narrowed flag set (see
-    # PJM_INIT_ARGS) — --no-hooks included, since Projectmem's own hook
-    # installer resolves `<cwd>/.git/hooks` directly and would silently
-    # no-op against a linked worktree's `.git` (a file, not that
-    # directory). An unexpected runtime/filesystem failure here is
-    # reported as-is — guardrails already succeeded and remain installed;
-    # `.projectmem/` (whatever `pjm init` left behind) is never deleted to
-    # simulate an all-or-nothing rollback, since it is provider-owned
-    # state, not disposable staging.
+    # Failures are reported as-is: guardrails stay installed, and `.projectmem/`
+    # is never deleted (provider-owned state, not staging).
     init_result = subprocess.run([pjm, *PJM_INIT_ARGS], cwd=info.worktree_root)
     if init_result.returncode != 0:
         print(
@@ -326,15 +259,8 @@ def _apply_projectmem(info, state: str, pjm: str | None) -> int:
         )
         return init_result.returncode
 
-    # Storage is worktree-local; Projectmem's Git hooks are
-    # repository/common-Git state — install them separately, against the
-    # repository's main checkout (info.repo_root), which always has a
-    # real `.git/hooks` directory regardless of which linked worktree this
-    # command was run from. Still Projectmem's own native installer, never
-    # Bindle-authored hook content. A failure here is reported as-is and
-    # never rolls back the Projectmem storage or guardrails that already
-    # succeeded — this stays a sequence of independently owned operations,
-    # not a transaction.
+    # Hooks are common-Git state: pjm's own installer runs against
+    # info.repo_root (real `.git/hooks`); a failure never rolls back storage.
     hooks_result = subprocess.run([pjm, *PJM_HOOKS_INSTALL_ARGS], cwd=info.repo_root)
     if hooks_result.returncode != 0:
         print(
@@ -347,10 +273,7 @@ def _apply_projectmem(info, state: str, pjm: str | None) -> int:
 
 
 def _qmd_init_preflight(info) -> tuple[int | None, str]:
-    # Read-only precondition check for `bindle init --qmd`, mirroring
-    # _projectmem_init_preflight's shape: run BEFORE any mutation, so a
-    # QMD-side refusal never leaves guardrails (or Projectmem, if also
-    # requested) newly installed/reconciled behind it.
+    # Runs BEFORE any mutation, so a QMD refusal leaves nothing newly installed.
     state = qmd_mod.detect_qmd(info)
 
     if state == "unavailable":
@@ -382,26 +305,15 @@ def _qmd_init_preflight(info) -> tuple[int | None, str]:
 
 def _apply_qmd(info, state: str) -> int:
     if state == "ready":
-        # Retroactively covers a repository that already had `.qmd/` from
-        # before this ignore-rule addition existed — re-running `bindle
-        # init --qmd` converges it, not just fresh initialization below.
+        # Also converges a repo whose `.qmd/` predates the ignore rule.
         qmd_mod.ensure_gitignored(info)
         print("QMD: already initialized — left unchanged.")
         return 0
 
-    # not-initialized, guardrails now applied: `qmd init` MUST run before
-    # `qmd collection add` on every path, unconditionally — verified
-    # empirically (see qmd.py's module docstring) that `collection add`
-    # run without a prior project-local `qmd init` in the same directory
-    # silently falls back to the machine-global default index instead of
-    # refusing. Running `qmd init` first is what keeps this integration
-    # entirely inside this worktree's own `.qmd/`, never the user's global
-    # QMD state. `qmd init` is itself idempotent (verified empirically:
-    # re-running it against an existing `.qmd/` with collections already
-    # registered leaves them untouched), so this is safe to run even when
-    # `.qmd/` already exists with unrelated collections in it (the
-    # `not-initialized` state also covers "index exists, but our
-    # collection doesn't yet").
+    # `qmd init` MUST run before `collection add` on every path: without it,
+    # `collection add` silently falls back to the global index (see qmd.py).
+    # `qmd init` is idempotent, so this is safe on an existing `.qmd/` that
+    # lacks our collection (still "not-initialized").
     qmd_bin = qmd_mod.qmd_executable()
     qmd_env = qmd_mod.subprocess_env(info.worktree_root)
     init_result = subprocess.run(
@@ -415,12 +327,7 @@ def _apply_qmd(info, state: str) -> int:
         )
         return init_result.returncode
 
-    # Registers and immediately indexes this repository's own durable
-    # Markdown (see qmd.py's COLLECTION_NAME/COLLECTION_MASK) via QMD's
-    # own native command — Bindle never writes `.qmd/index.yml` itself.
-    # Any other collection already present in `.qmd/index.yml` (from the
-    # user, or another tool) is untouched by this call; `collection add`
-    # only ever creates the one collection it's given.
+    # `collection add` adds only our collection; Bindle never edits index.yml.
     add_result = subprocess.run(
         [qmd_bin, *qmd_mod.collection_add_args(info.worktree_root)],
         cwd=info.worktree_root,
@@ -440,35 +347,16 @@ def _apply_qmd(info, state: str) -> int:
 
 
 def _ledger_init_preflight(info) -> int | None:
-    # Read-only precondition check for the coordination-artifact substrate
-    # `bindle init` unconditionally provisions (docs/DECISIONS.md D043 and
-    # the local-ignore/collision-safety follow-up), mirroring
-    # _projectmem_init_preflight/_qmd_init_preflight's shape: run BEFORE
-    # ANY mutation (guardrails included), so a tracked-file collision on
-    # either canonical SQLite path never leaves guardrails — or another
-    # requested layer — newly installed/reconciled behind it.
-    #
-    # This checks Git-tracked status only, for exactly the two canonical
-    # database files (never their WAL/SHM/journal sidecars, which are
-    # never meaningfully tracked). The separate filesystem-collision/
-    # ownership check — an untracked but foreign file already occupying
-    # one of these exact paths — happens inside
-    # `WorkLedger.ensure_schema()`/`symphony_projection.publish()`
-    # themselves (`work_ledger.ForeignDatabaseError`/
-    # `symphony_projection.ForeignDatabaseError`), each file's own schema/
-    # publish authority — this preflight never duplicates that logic, and
-    # `_cmd_init` below catches both exceptions separately, at the point
-    # those calls actually run.
+    # Runs BEFORE any mutation: a tracked-file collision must never leave
+    # guardrails or another layer newly installed (D043).
+    # Tracked status of the two database files only; a foreign untracked file is
+    # caught by ensure_schema()/publish() (ForeignDatabaseError).
     ledger_relpath = os.path.relpath(work_ledger.ledger_path(info.repo_root), info.repo_root)
     projection_relpath = os.path.relpath(
         symphony_projection.projection_path(info.repo_root), info.repo_root
     )
 
-    # This preflight is safety-critical (it exists to prevent overwriting
-    # tracked, team-shared state), so a Git failure that leaves
-    # trackedness genuinely unknown must fail closed here — never read as
-    # "not tracked" and silently continue. `is_path_tracked` raises
-    # `GitCommandError` (never returns a value) for exactly that case.
+    # Fail closed: unknown trackedness must never read as "not tracked".
     try:
         tracked = [
             relpath
@@ -505,16 +393,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
         print(f"bindle init: {exc}", file=sys.stderr)
         return 1
 
-    # Every requested layer's read-only preflight runs before ANY mutation
-    # — a refusal on one opt-in must never leave guardrails, or an
-    # already-preflighted other opt-in, newly mutated behind it (mirrors
-    # D032's "all requested layers preflight together" precedent, now
-    # generalized past just the two guardrail halves). The ledger/Symphony
-    # substrate below has no preflight of its own to run here: unlike
-    # Projectmem/QMD it is not a third-party provider with its own
-    # detectable installed/partial/conflict states — it is Bindle's own
-    # schema, bootstrapped by the same idempotent path every other
-    # ledger-touching command already uses.
+    # All preflights precede ANY mutation (D032); a refusal mutates nothing.
     projectmem_state, projectmem_pjm = None, None
     if args.projectmem:
         refusal, projectmem_state, projectmem_pjm = _projectmem_init_preflight(info)
@@ -531,14 +410,9 @@ def _cmd_init(args: argparse.Namespace) -> int:
     if ledger_refusal is not None:
         return ledger_refusal
 
-    # Preflight passed for every requested layer — now mutate. Guardrails
-    # first (unchanged bare `bindle init` behavior), then each requested
-    # opt-in in a fixed order (Projectmem, then QMD). None of this is a
-    # transaction: a failure at any step is reported as-is and never rolls
-    # back a step that already succeeded — re-running `bindle init` with
-    # the same flags after fixing the problem picks up wherever it left
-    # off (both `_apply_projectmem` and `_apply_qmd` are themselves
-    # idempotent on their own "already done" state).
+    # Guardrails first, then requested opt-ins in fixed order (Projectmem, QMD).
+    # Not a transaction: a failure never rolls back earlier steps; re-running
+    # with the same flags resumes, since both `_apply_*` are idempotent.
     guardrail_code = _run_guardrail_installer("init", "--apply")
     if guardrail_code != 0:
         return guardrail_code
@@ -553,35 +427,10 @@ def _cmd_init(args: argparse.Namespace) -> int:
         if code != 0:
             return code
 
-    # Bindle's own coordination substrate (docs/DECISIONS.md D043) —
-    # unconditional, unlike --projectmem/--qmd: every `bindle init`
-    # invocation, bare or flagged, leaves the ledger and its published
-    # Symphony-readable projection ready to use. `ensure_schema()` is the
-    # exact same bootstrap-or-verify path `WorkLedger`'s other methods
-    # already get for free (work_ledger.py's `_ensure_schema`) — never a
-    # second copy of what a valid schema looks like — so an already-current
-    # ledger (including one already holding real work items from a prior
-    # `bindle work load-speckit`) is left untouched, and an older-but-valid
-    # schema is migrated forward in place, exactly as it already would be
-    # on the next ordinary ledger-touching command. `publish()` then
-    # (re)generates the projection from whatever the ledger currently
-    # holds — zero rows for a fresh ledger, unchanged real rows for an
-    # already-populated one — so this step never creates, claims, or
-    # transitions a work item itself; it only guarantees both files exist
-    # and are structurally valid the moment a repository opts into Bindle,
-    # with no separate manual `bindle work publish` required first. This is
-    # Bindle-owned substrate provisioning, not a Symphony lifecycle
-    # surface: Bindle still does not install, build, configure, launch,
-    # stop, or report status for Symphony itself.
-    #
-    # Both calls are the "runtime failure independently reported" half of
-    # AGENTS.md's preflight/runtime split: `_ledger_init_preflight` above
-    # already ruled out a *tracked*-file collision; a foreign, untracked
-    # file at either exact path is only detectable by opening it, which
-    # `ensure_schema()`/`publish()` do as the schema/publish authority for
-    # each file (never duplicated here) — a `ForeignDatabaseError` from
-    # either is reported cleanly and stops `bindle init` before that file
-    # is ever created, migrated, or regenerated.
+    # Unconditional, unlike --projectmem/--qmd (D043): an existing ledger is
+    # left untouched and an older valid schema migrates forward in place.
+    # A foreign untracked file is only detectable by opening it (the preflight
+    # covers tracked ones), so report ForeignDatabaseError before touching it.
     ledger = WorkLedger(info.repo_root)
     try:
         ledger.ensure_schema()
@@ -590,20 +439,10 @@ def _cmd_init(args: argparse.Namespace) -> int:
         print(f"bindle init: {exc}", file=sys.stderr)
         return 1
 
-    # Locally ignore exactly these two artifacts (and their WAL/SHM/journal
-    # sidecars) — never the tracked `.gitignore`, never a broader
-    # `.bindle-work/` rule (see work_ledger.py's/symphony_projection.py's
-    # own `ensure_gitignored`) — so a fresh `bindle init` never leaves them
-    # showing up as untracked clutter in `git status`. Run only after both
-    # files are confirmed to exist and be Bindle-owned. Local-ignore
-    # hygiene is this feature's own stated postcondition, not merely a
-    # QMD-style convenience — so, unlike QMD's own silent-on-failure
-    # `ensure_gitignored`, a write failure here is reported and turns
-    # `bindle init` itself nonzero, rather than silently claiming success
-    # while the ignore rules never actually landed. This is still not a
-    # transaction: the already-provisioned, valid ledger/projection files
-    # above are never rolled back for an ignore-write failure — only the
-    # reported outcome changes.
+    # Ignore exactly these two artifacts and their sidecars locally, never the
+    # tracked .gitignore or a broader .bindle-work/ rule.
+    # Unlike QMD's silent best-effort, a failed ignore write is reported and
+    # fails init (a postcondition); provisioned files are never rolled back.
     ledger_ignored = work_ledger.ensure_gitignored(info.git_common_dir)
     projection_ignored = symphony_projection.ensure_gitignored(info.git_common_dir)
     if not (ledger_ignored and projection_ignored):
@@ -625,17 +464,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
 def _cmd_remove(args: argparse.Namespace) -> int:
     code = _run_guardrail_installer("remove", "--uninstall")
     if code == 0:
-        # Projectmem is provider-owned working memory, not Bindle's to
-        # destroy: `bindle remove` never touches `.projectmem/`, regardless
-        # of whether Bindle created it. Report its survival when relevant
-        # (nothing to say when it was never installed in the first place).
-        #
-        # QMD's index is itself derived/rebuildable state, not durable
-        # knowledge — but Bindle still holds no ownership record proving
-        # this specific collection is safe to delete unattended (a user
-        # could have hand-edited `.qmd/index.yml`, or added other
-        # collections alongside it), so `bindle remove` leaves it alone
-        # too, for the same conservative reason as Projectmem. See qmd.py.
+        # Never removes `.projectmem/` or `.qmd/`: no ownership record (qmd.py).
         try:
             info = get_repo_info()
             if detect_projectmem(info) == "installed":
@@ -648,13 +477,9 @@ def _cmd_remove(args: argparse.Namespace) -> int:
 
 
 def _cmd_migrate_legacy_global(args: argparse.Namespace) -> int:
-    # Global/machine-level, unlike _run_guardrail_installer above: no
-    # current-repository resolution, and no --repo argument — this exposes
-    # install-guardrails.sh --remove-legacy-global exactly as-is, as the
-    # smallest CLI surface over the runtime asset `bindle init`/`bindle
-    # remove` already resolve via _installer_path(), for a normally
-    # installed package where invoking the packaged script directly isn't
-    # ergonomic.
+    # Global/machine-level, unlike _run_guardrail_installer: no repo resolution
+    # or --repo. Exposes --remove-legacy-global as-is, since invoking the
+    # packaged script directly isn't ergonomic.
     installer = _installer_path()
     if not installer.is_file():
         print(
@@ -698,9 +523,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
-# The branch this repository's routine work always branches from (see
-# AGENTS.md, "Development isolation": "Start new work from an up-to-date
-# main.").
+# Routine work always branches from here (AGENTS.md, "Development isolation").
 _BRANCH_BASE = "main"
 
 
@@ -725,11 +548,7 @@ def _cmd_branch(args: argparse.Namespace) -> int:
         print(f"bindle branch: branch '{name}' already exists", file=sys.stderr)
         return 1
 
-    # Fetch the base branch explicitly rather than trusting the local
-    # tracking branch — a stale local `main` is exactly how a prior branch
-    # in this repo (`feat/local-orchestration`) ended up forked before a
-    # policy change had landed. Refuse rather than silently branching off
-    # whatever happens to be on disk if the fetch itself fails.
+    # Fetch rather than trust local `main`, which has gone stale before.
     fetch = subprocess.run(
         ["git", "-C", info.repo_root, "fetch", "origin", _BRANCH_BASE],
         capture_output=True,
@@ -776,10 +595,9 @@ def _cmd_branch(args: argparse.Namespace) -> int:
 
 
 def _cmd_history(args: argparse.Namespace) -> int:
-    # A thin, read-only wrapper: the report itself lives in the package-owned
-    # Git hook dispatcher (docs/DECISIONS.md D048), so `bindle history` and
-    # the pre-push hook can never disagree. Output is captured and re-emitted
-    # so it stays on this process's own stdout/stderr.
+    # Thin read-only wrapper: the report lives in the hook dispatcher (D048), so
+    # `bindle history` and the pre-push hook cannot disagree.
+    # Output is captured and re-emitted so it stays on this process's streams.
     try:
         info = get_repo_info()
     except NotAGitRepositoryError as exc:
@@ -800,8 +618,7 @@ def _cmd_history(args: argparse.Namespace) -> int:
         command += ["--base", args.base]
     if args.ref:
         command.append(args.ref)
-    # The report echoes repository-controlled text (subjects, paths) that need
-    # not be valid in this locale's encoding; never crash on it.
+    # Repo-controlled text may not encode in this locale; never crash on it.
     result = subprocess.run(
         command, cwd=info.worktree_root, capture_output=True, text=True, errors="replace"
     )
@@ -911,10 +728,8 @@ def _cmd_work_load_speckit(args: argparse.Namespace) -> int:
     for item_id in result.resynced:
         print(f"  {item_id}")
 
-    # Skipped lines and unresolved dependencies are reported to the caller
-    # (spec.md FR-010/FR-011) rather than silently discarded — surfaced as
-    # a non-zero exit so they're not missed in a script, even though every
-    # other well-formed task line in the same file still loaded normally.
+    # Skipped lines/unresolved dependencies exit nonzero so scripts notice
+    # (FR-010/FR-011), though every other well-formed line still loaded.
     ok = not result.skipped and not result.unresolved_dependencies
     if result.skipped:
         print(f"bindle work load-speckit: {len(result.skipped)} line(s) skipped:", file=sys.stderr)
@@ -1073,9 +888,6 @@ def _cmd_skills_remove(args: argparse.Namespace) -> int:
 
 
 def _format_evidence_pointer(pointer) -> str:
-    # spec.md FR-003/User Story 2: every evidence pointer's kind, value,
-    # recorded time, and note must be visible in the review view — not
-    # merely retained in the Python object and dropped by the CLI.
     note_suffix = f" (note: {pointer.note})" if pointer.note else ""
     return f"{pointer.kind} {pointer.value} @ {pointer.recorded_at}{note_suffix}"
 
@@ -1217,18 +1029,12 @@ def _cmd_milestone_decide(verb: str, fn, args: argparse.Namespace) -> int:
 class _BindleArgumentParser(argparse.ArgumentParser):
     """`ArgumentParser` with colorized help forced off.
 
-    Python 3.14 added `color=True` as argparse's own default (a
-    Bindle-wide styling policy this project has never opted into — CLI
-    output is deterministic plain text everywhere else). `color` doesn't
-    exist as a constructor argument or attribute on the Python versions
-    this project also supports (>=3.11), so it can't be passed directly;
-    `hasattr` guards the override so this is a no-op on 3.11-3.13.
+    Python 3.14 made `color=True` argparse's default, but CLI output here is
+    deterministic plain text. `color` is not a constructor argument or
+    attribute on the supported 3.11-3.13, so `hasattr` guards the override.
 
-    `add_subparsers()` defaults its `parser_class` kwarg to `type(self)`
-    (confirmed against the installed argparse source, not assumed), so
-    every subparser and nested subparser created from a parser built with
-    this class also gets it — verified empirically in
-    tests/test_cli.py::TestHelpOutputIsPlainText.
+    `add_subparsers()` defaults `parser_class` to `type(self)`, so every nested
+    subparser inherits this (tests/test_cli.py::TestHelpOutputIsPlainText).
     """
 
     def __init__(self, *args, **kwargs):
@@ -1497,13 +1303,9 @@ def build_parser() -> argparse.ArgumentParser:
             default=None,
             help="Optional note alongside --evidence (requires --evidence).",
         )
-        # `--note` without `--evidence` is a usage error caught by argument
-        # parsing (contracts/milestone-review-surface.md), not a manual
-        # check inside the command handler — the parser reference is
-        # stashed on the Namespace itself (set_defaults) so main()'s
-        # dispatch can call this exact subparser's own .error() (argparse's
-        # own mechanism: prints usage, exits 2) rather than the top-level
-        # parser's.
+        # `--note` without `--evidence` is a usage error (contracts/milestone-
+        # review-surface.md) raised via this subparser's own .error() from
+        # main(), so the parser rides on the Namespace via set_defaults.
         decision_parser.set_defaults(_decision_parser=decision_parser)
 
     milestone_accept_parser = milestone_subparsers.add_parser(

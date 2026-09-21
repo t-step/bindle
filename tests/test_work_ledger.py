@@ -16,11 +16,7 @@ _NOW = "2026-08-26T00:00:00Z"
 
 
 class LedgerTestCase(unittest.TestCase):
-    """Base fixture: a temp directory standing in for a repository's Git
-    common-directory-resolved `repo_root` (`RepoInfo.repo_root`) — this
-    module never itself shells out to Git, so no real repository is
-    needed, only a stable path other tests can also resolve the same
-    ledger from (simulating a second worktree/session)."""
+    """Temp dir as a resolved `repo_root`; work_ledger never calls Git."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -130,19 +126,7 @@ class TestSchemaBootstrap(LedgerTestCase):
             conn.close()
 
     def test_failed_fresh_initialization_rolls_back_schema_and_then_succeeds(self):
-        """A failure partway through fresh schema initialization must not
-        leave a half-created schema behind (the bug this test guards
-        against: each CREATE TABLE previously committed individually under
-        autocommit, so a failure after some tables existed but before
-        `PRAGMA user_version` was set left the ledger permanently
-        unopenable — the next `connect()` would see `user_version == 0`
-        again and fail trying to recreate already-existing tables).
-
-        Fault injection: temporarily replace `_SCHEMA_STATEMENTS` with a
-        tuple containing the first two real CREATE TABLE statements
-        followed by deliberately invalid SQL, so `_ensure_schema` raises
-        partway through fresh initialization.
-        """
+        """A failed fresh init must not leave an unopenable half-schema."""
         real_statements = work_ledger._SCHEMA_STATEMENTS
         broken_statements = real_statements[:2] + ("CREATE TABLE this is not valid sql",)
         work_ledger._SCHEMA_STATEMENTS = broken_statements
@@ -152,9 +136,7 @@ class TestSchemaBootstrap(LedgerTestCase):
         finally:
             work_ledger._SCHEMA_STATEMENTS = real_statements
 
-        # Inspect on a fresh, raw connection — bypassing work_ledger.connect
-        # entirely — so this inspection step does not re-trigger fault
-        # injection or re-run _ensure_schema itself.
+        # Raw connection: connect() would re-run _ensure_schema.
         db_path = work_ledger.ledger_path(self.repo_root)
         raw_conn = sqlite3.connect(db_path)
         try:
@@ -171,10 +153,6 @@ class TestSchemaBootstrap(LedgerTestCase):
         finally:
             raw_conn.close()
 
-        # Subsequent open (with the real schema restored) initializes
-        # normally and produces a fully-initialized schema — the second
-        # half of the same guarantee, exercised end-to-end rather than
-        # merely implied.
         conn = work_ledger.connect(self.repo_root)
         try:
             tables = {
@@ -199,12 +177,7 @@ class TestSchemaBootstrap(LedgerTestCase):
         finally:
             conn.close()
 
-        # Indirect signal that connect()'s failure path actually closed the
-        # connection it opened (rather than leaking it): an ordinary
-        # connect() immediately after the fault-injected failure above
-        # succeeds without "database is locked" — a lingering, unclosed
-        # connection holding SQLite's write lock would manifest as exactly
-        # that error.
+        # Leak check: a leaked connection would fail with "database is locked".
         conn2 = work_ledger.connect(self.repo_root)
         conn2.close()
 
@@ -236,9 +209,7 @@ class TestWorkItemCreationAndDurability(LedgerTestCase):
             source_locator="plans/active/example.md#work",
         )
 
-        # A second, independent WorkLedger over the same repo_root —
-        # simulating a fresh session in a different worktree, with no
-        # state carried from the first.
+        # Independent handle simulates a fresh session in another worktree.
         second = work_ledger.WorkLedger(self.repo_root)
         item = second.get_work_item("WI-1")
         self.assertIsNotNone(item)
@@ -250,9 +221,6 @@ class TestWorkItemCreationAndDurability(LedgerTestCase):
         self.assertEqual([i.id for i in listed], ["WI-1"])
 
     def test_no_item_is_created_without_an_explicit_create_call(self):
-        # Nothing analogous to editing an upstream tasks.md happens here —
-        # merely opening/bootstrapping the ledger must not create any item
-        # on its own.
         self.assertEqual(self.ledger.list_work_items(), [])
         self.assertIsNone(self.ledger.get_work_item("WI-1"))
 
@@ -297,9 +265,7 @@ class TestWorkItemCreationAndDurability(LedgerTestCase):
 
 
 class TestBlockingAndAvailability(LedgerTestCase):
-    """User Story 2 (T019-T022): blocking, claim, and availability facts,
-    computed fresh from repository state per data-model.md's "Derived
-    facts" and "Available to start"."""
+    """US2: blocking, claim, availability facts (data-model.md)."""
 
     def _create(self, id, blocked_by=()):
         self.ledger.create_work_item(
@@ -311,7 +277,7 @@ class TestBlockingAndAvailability(LedgerTestCase):
         )
 
     def test_chain_of_blocking_relationships_excludes_blocked_items(self):
-        # T019 (Acceptance Scenario 2.1, SC-002): A blocked_by B, B blocked_by C.
+        # T019 (Acceptance Scenario 2.1, SC-002).
         self._create("C")
         self._create("B", blocked_by=["C"])
         self._create("A", blocked_by=["B"])
@@ -351,21 +317,13 @@ class TestBlockingAndAvailability(LedgerTestCase):
     def test_guarded_transitions_are_no_ops_when_not_open(self):
         self._create("WI-1")
         self.assertTrue(self.ledger.mark_done("WI-1"))
-        # Already done: a second transition attempt does not double-apply.
         self.assertFalse(self.ledger.mark_done("WI-1"))
         self.assertFalse(self.ledger.mark_superseded("WI-1", "WI-2"))
         # Nonexistent item: no row to update.
         self.assertFalse(self.ledger.mark_done("does-not-exist"))
 
     def test_full_set_availability_enumeration(self):
-        # T022 (User Story 2's own Independent Test): a mix of
-        # open/unclaimed, open/claimed, blocked, done, and superseded
-        # items. The open/claimed fixture is constructed by inserting
-        # directly into work_item_claims via a raw connection — never by
-        # calling a claim() method, which belongs to the concurrently
-        # implemented S4 claims slice and does not exist in this
-        # worktree. This keeps S3's availability-computation assertion
-        # independent of S4's claim-acquisition correctness.
+        # T022: claimed fixture inserted raw, so this doesn't depend on claim().
         self._create("open-unclaimed")
 
         self._create("open-claimed")
@@ -401,7 +359,6 @@ class TestBlockingAndAvailability(LedgerTestCase):
         self.assertNotIn("done-item", available)
         self.assertNotIn("superseded-item", available)
 
-        # Cross-check against the individual derived facts too.
         self.assertTrue(self.ledger.is_claimed("open-claimed"))
         self.assertFalse(self.ledger.is_claimed("open-unclaimed"))
         self.assertTrue(self.ledger.is_blocked("blocked"))
@@ -409,11 +366,7 @@ class TestBlockingAndAvailability(LedgerTestCase):
 
 
 class TestListBlocking(LedgerTestCase):
-    """specs/004-milestone-review-surface: list_blocking() generalizes
-    is_blocked()'s existing EXISTS check into a full row read of the
-    currently-still-blocking ids, so the review surface can identify
-    the specific blocking dependency (spec.md Acceptance Scenario
-    US1.4), not merely report a boolean."""
+    """list_blocking() returns blocking ids, not a boolean (specs/004 US1.4)."""
 
     def test_unblocked_item_returns_empty_list(self):
         self.ledger.create_work_item(
@@ -483,8 +436,7 @@ class TestListBlocking(LedgerTestCase):
 
 
 class TestClaimsEvidenceAndReconciliation(LedgerTestCase):
-    """T023-T033, T040-T042: claim arbitration, release, override release,
-    evidence, and the reconciliation report's five in-scope findings."""
+    """T023-T033, T040-T042: claims, release, evidence, reconciliation."""
 
     def _create(self, item_id, **overrides):
         kwargs = dict(
@@ -496,8 +448,7 @@ class TestClaimsEvidenceAndReconciliation(LedgerTestCase):
         kwargs.update(overrides)
         self.ledger.create_work_item(**kwargs)
 
-    # -- T028: independent claims across two items/worktrees -----------
-
+    # T028
     def test_two_independent_claims_do_not_affect_each_other(self):
         self._create("WI-1")
         self._create("WI-2")
@@ -524,8 +475,7 @@ class TestClaimsEvidenceAndReconciliation(LedgerTestCase):
             os.rmdir(wt1)
             os.rmdir(wt2)
 
-    # -- T029: exactly one of many attempts against the same item wins --
-
+    # T029
     def test_only_one_of_many_claim_attempts_on_the_same_item_succeeds(self):
         for trial in range(25):
             item_id = f"WI-trial-{trial}"
@@ -538,11 +488,7 @@ class TestClaimsEvidenceAndReconciliation(LedgerTestCase):
                 )
 
     def test_concurrent_claim_attempts_have_exactly_one_winner(self):
-        # FR-018/SC-004a's actual concurrency guarantee: real threads
-        # racing against the same never-before-claimed item via SQLite's
-        # own primary-key constraint and single-writer serialization —
-        # not merely sequential calls, which the test above already
-        # covers at the Python-level contract only.
+        # FR-018/SC-004a: real threads racing on SQLite's PK/single writer.
         item_id = "WI-race"
         self._create(item_id)
 
@@ -566,11 +512,7 @@ class TestClaimsEvidenceAndReconciliation(LedgerTestCase):
         self.assertEqual(results.count(False), thread_count - 1)
 
     def test_claim_against_nonexistent_item_raises_not_already_claimed(self):
-        # Asserts precise error classification (sqlite_errorcode), not
-        # message-text substring matching: a foreign-key violation (no
-        # such work_item_id) must be distinguishable from the
-        # primary-key violation claim() treats as an ordinary "already
-        # claimed" outcome.
+        # Use sqlite_errorcode, not text: FK error must differ from the PK case.
         with self.assertRaises(sqlite3.IntegrityError) as ctx:
             self.ledger.claim("does-not-exist", "agent-A")
         self.assertEqual(
@@ -582,9 +524,7 @@ class TestClaimsEvidenceAndReconciliation(LedgerTestCase):
         self.assertIn("FOREIGN KEY", str(ctx.exception))
 
     def test_claim_collision_is_classified_as_primary_key_violation(self):
-        # The specific constraint claim() matches on to return False —
-        # verified directly, so a future change that widens the except
-        # clause to catch unrelated IntegrityErrors is caught here.
+        # Pins the constraint claim() catches; a widened except would fail here.
         self._create("WI-1")
         self.assertTrue(self.ledger.claim("WI-1", "agent-A"))
         conn = work_ledger.connect(self.repo_root)
@@ -600,8 +540,6 @@ class TestClaimsEvidenceAndReconciliation(LedgerTestCase):
         self.assertEqual(
             ctx.exception.sqlite_errorcode, sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY
         )
-        # And claim() itself, going through its own except clause,
-        # returns False rather than raising for this exact case.
         self.assertFalse(self.ledger.claim("WI-1", "agent-C"))
 
     def test_release_claim_is_idempotent_and_owner_scoped(self):
@@ -629,8 +567,7 @@ class TestClaimsEvidenceAndReconciliation(LedgerTestCase):
             conn.close()
         self.assertIsNone(row)
 
-    # -- T030: stale_claim, non-mutating -------------------------------
-
+    # T030
     def test_reconcile_reports_stale_claim_for_deleted_worktree(self):
         self._create("WI-1")
         vanished = tempfile.mkdtemp()
@@ -653,8 +590,7 @@ class TestClaimsEvidenceAndReconciliation(LedgerTestCase):
             conn.close()
         self.assertEqual(row, ("agent-A", vanished))
 
-    # -- T031: corrupt_claim, distinct from stale_claim -----------------
-
+    # T031
     def test_reconcile_reports_corrupt_claim_for_empty_owner(self):
         self._create("WI-1")
         conn = work_ledger.connect(self.repo_root)
@@ -674,8 +610,7 @@ class TestClaimsEvidenceAndReconciliation(LedgerTestCase):
         self.assertEqual([f.item_id for f in corrupt], ["WI-1"])
         self.assertEqual(stale, [])
 
-    # -- T032: override release does not itself grant a claim -----------
-
+    # T032
     def test_override_release_does_not_grant_a_claim(self):
         self._create("WI-1")
         vanished = tempfile.mkdtemp()
@@ -684,7 +619,6 @@ class TestClaimsEvidenceAndReconciliation(LedgerTestCase):
 
         self.ledger.override_release_claim("WI-1", note="worktree deleted")
 
-        # The override itself created no claim row.
         conn = work_ledger.connect(self.repo_root)
         try:
             row = conn.execute(
@@ -694,8 +628,6 @@ class TestClaimsEvidenceAndReconciliation(LedgerTestCase):
             conn.close()
         self.assertIsNone(row)
 
-        # A subsequent claim() call goes through ordinary arbitration and
-        # succeeds because nothing else claimed it first.
         self.assertTrue(self.ledger.claim("WI-1", "agent-B"))
 
     def test_override_release_records_optional_evidence_note(self):
@@ -727,8 +659,7 @@ class TestClaimsEvidenceAndReconciliation(LedgerTestCase):
             conn.close()
         self.assertEqual(count, 0)
 
-    # -- T033: evidence is left unchanged; no mutation path exists -------
-
+    # T033
     def test_evidence_pointer_is_immutable_and_unaffected_by_reconcile(self):
         self._create("WI-1")
         self.ledger.add_evidence(
@@ -744,10 +675,7 @@ class TestClaimsEvidenceAndReconciliation(LedgerTestCase):
         finally:
             conn.close()
 
-        # Simulate the branch later being rebased/squashed/deleted: this
-        # module never re-validates evidence against Git, so nothing
-        # should change it. Running reconcile() (which never mutates)
-        # confirms there is no accidental side effect either.
+        # Evidence is never re-validated against Git; reconcile() ignores it.
         self.ledger.reconcile()
 
         conn = work_ledger.connect(self.repo_root)
@@ -763,9 +691,7 @@ class TestClaimsEvidenceAndReconciliation(LedgerTestCase):
         self.assertEqual(after, before)
         self.assertFalse(hasattr(self.ledger, "update_evidence"))
 
-    # -- T040: dangling_blocker, distinguishable from a genuinely done --
-    # -- dependency ------------------------------------------------------
-
+    # T040
     def test_reconcile_reports_dangling_blocker_distinct_from_done_dependency(self):
         self._create("WI-1")  # will become a genuinely completed dependency
         self._create("WI-2")  # will declare a dangling reference
@@ -798,11 +724,9 @@ class TestClaimsEvidenceAndReconciliation(LedgerTestCase):
         self.assertEqual(len(dangling), 1)
         self.assertEqual(dangling[0].item_id, "WI-2")
         self.assertIn("never-existed", dangling[0].detail)
-        # The edge to the genuinely completed WI-1 must not be reported.
         self.assertNotIn("WI-1", dangling[0].detail)
 
-    # -- T041: duplicate_source ------------------------------------------
-
+    # T041
     def test_reconcile_reports_duplicate_source(self):
         self.ledger.create_work_item(
             id="WI-1",
@@ -824,8 +748,7 @@ class TestClaimsEvidenceAndReconciliation(LedgerTestCase):
         self.assertIn("WI-1", duplicates[0].detail)
         self.assertIn("WI-2", duplicates[0].detail)
 
-    # -- T042: cycle_detected (indirect cycle) ----------------------------
-
+    # T042
     def test_reconcile_reports_indirect_cycle(self):
         self._create("WI-A")
         self._create("WI-B")
@@ -856,14 +779,10 @@ def _run_git(args, cwd):
 
 
 class TestReconcileBranchExistence(unittest.TestCase):
-    """Regression for the bug where reconcile()'s stale_claim query only
-    ever selected rows with `worktree_path IS NOT NULL`, so a claim
-    recorded with only a `branch` (no `worktree_path`) could never be
-    reported stale, no matter how long that branch had been gone
-    (FR-009, data-model.md's "Staleness", tasks.md's T027). Uses a real
-    temporary Git repository (rather than mocking the branch check) so
-    the assertions exercise the actual `git show-ref` semantics
-    `_local_branch_exists` relies on."""
+    """Branch-only claims go stale when the branch is gone (FR-009, T027).
+
+    Uses a real Git repo, not a mock, to exercise `git show-ref`.
+    """
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -925,9 +844,7 @@ class TestReconcileBranchExistence(unittest.TestCase):
         self.assertEqual(stale, [])
 
     def test_checked_out_branch_of_the_ledger_repo_itself_is_not_stale(self):
-        # Confirms the check discriminates using the real current branch
-        # (main or master, whichever `git init` used), not by always
-        # returning True/False.
+        # Real current branch (main/master per git init); a constant can't pass.
         current_branch = _run_git(
             ["symbolic-ref", "--short", "HEAD"], self.repo_root
         ).strip()
@@ -940,18 +857,9 @@ class TestReconcileBranchExistence(unittest.TestCase):
 
 
 class TestReconcileWorktreeRegistration(unittest.TestCase):
-    """Regression for the bug where reconcile()'s stale_claim check used
-    `os.path.isdir(worktree_path)`, which only proves *some* directory
-    exists at the recorded path — not that it is still a worktree Git
-    itself knows about (FR-009, data-model.md's "Staleness": "no longer
-    exists as a worktree on this machine", not "no longer exists as a
-    directory"). A worktree properly removed with `git worktree remove`
-    frees its path for an unrelated, ordinary directory to occupy later;
-    `os.path.isdir` would then incorrectly report the claim as not
-    stale. Uses a real temporary Git repository (mirroring
-    `TestReconcileBranchExistence`'s own style) so the assertions
-    exercise the actual `git worktree list --porcelain` semantics
-    `_registered_worktree_paths` relies on."""
+    """A directory at the recorded path is not enough: Git must still
+    register the worktree (FR-009). Uses a real Git repo.
+    """
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -979,7 +887,6 @@ class TestReconcileWorktreeRegistration(unittest.TestCase):
     def test_directory_at_recorded_path_that_is_not_a_registered_worktree_is_stale(
         self,
     ):
-        # A plain directory that was never a Git worktree at all.
         not_a_worktree = tempfile.mkdtemp()
         self.addCleanup(lambda: os.path.isdir(not_a_worktree) and os.rmdir(not_a_worktree))
 
@@ -1006,10 +913,6 @@ class TestReconcileWorktreeRegistration(unittest.TestCase):
     def test_ordinary_directory_recreated_at_a_properly_removed_worktrees_path_is_stale(
         self,
     ):
-        # The exact scenario the bug allowed through: a worktree is
-        # properly removed (both its directory and Git's own
-        # administrative registration go away), and something unrelated
-        # later creates a plain directory at that same path.
         worktree_path = os.path.join(self.repo_root + "-wt", "reused-path")
         os.makedirs(os.path.dirname(worktree_path), exist_ok=True)
         self.addCleanup(
@@ -1057,9 +960,9 @@ class TestReconcileWorktreeRegistration(unittest.TestCase):
 
 
 class TestCoordinatorProjection(LedgerTestCase):
-    """User Story 4 (T034-T037): a generated, disposable coordinator-facing
-    projection (contracts/coordinator-projection.md), never a second
-    durable store the ledger falls out of sync with (FR-013/FR-014)."""
+    """US4 (T034-T037): the projection is generated and disposable, never a
+    second durable store (FR-013/FR-014).
+    """
 
     def _create(self, id, blocked_by=()):
         self.ledger.create_work_item(
@@ -1071,14 +974,7 @@ class TestCoordinatorProjection(LedgerTestCase):
         )
 
     def test_blocked_item_is_not_eligible_in_projection(self):
-        # T035 (Acceptance Scenario 4.1): a still-blocked item must be
-        # withheld from eligibility by the projection step itself, even
-        # though nothing about the flat projection shape would otherwise
-        # stop an unsophisticated adapter (Symphony's shipped `local`
-        # tracker, per the contract) from treating it as dispatchable.
-        # This asserts against the *projection's* `eligible` field
-        # specifically, not merely `list_available_work_items()` again —
-        # that would only re-test S3, not this projection step.
+        # T035 (AS 4.1): Symphony's `local` tracker would dispatch blocked items unless marked here.
         self._create("blocker-open")
         self._create("blocked", blocked_by=["blocker-open"])
 
@@ -1090,10 +986,7 @@ class TestCoordinatorProjection(LedgerTestCase):
         self.assertTrue(by_id["blocker-open"].eligible)
 
     def test_projection_is_deterministic_and_performs_no_write(self):
-        # T036 (Acceptance Scenario 4.2, SC-005): regenerating a
-        # projection twice from the same, unchanged ledger state produces
-        # an equal result both times, and generating it performs no write
-        # to the ledger's own durable state.
+        # T036 (Acceptance Scenario 4.2, SC-005).
         self._create("blocker-open")
         self._create("blocked", blocked_by=["blocker-open"])
         self._create("done-item")
@@ -1124,14 +1017,7 @@ class TestCoordinatorProjection(LedgerTestCase):
         self.assertEqual(self.ledger.list_work_items(), self.ledger.list_work_items())
 
     def test_projection_opens_exactly_one_connection_and_query(self):
-        # Regression for the bug where generate_projection() called
-        # list_available_work_items() (its own connection) and then
-        # opened a *second* connection to read id/title/status — a claim
-        # landing in the gap between the two reads could produce a
-        # stale eligible=True for an item already claimed by the time
-        # the call returned. The fix derives both facts from one SELECT
-        # on one connection, which this test asserts directly (by
-        # instrumentation) rather than only by absence-of-flakiness.
+        # Guards a race: two connections could yield stale eligible=True.
         self._create("WI-1")
 
         connect_count = 0
@@ -1142,10 +1028,7 @@ class TestCoordinatorProjection(LedgerTestCase):
             nonlocal connect_count
             connect_count += 1
             conn = real_connect()
-            # sqlite3.Connection.execute is a read-only C-level attribute
-            # (cannot be monkeypatched directly) — set_trace_callback is
-            # the supported way to observe every SQL statement actually
-            # executed on this connection.
+            # Connection.execute is read-only (C-level); use set_trace_callback.
             conn.set_trace_callback(executed_queries.append)
             return conn
 
@@ -1159,10 +1042,7 @@ class TestCoordinatorProjection(LedgerTestCase):
         self.assertEqual(len(executed_queries), 1)
 
     def test_coordination_facts_available_without_ever_generating_projection(self):
-        # T037 (Acceptance Scenario 4.3): every user-facing coordination
-        # fact remains fully usable and correct even when
-        # generate_projection() is never called at all — no other method
-        # has a hidden dependency on projection state, since none exists.
+        # T037 (Acceptance Scenario 4.3).
         self._create("blocker-open")
         self._create("blocked", blocked_by=["blocker-open"])
         self.assertTrue(self.ledger.claim("blocker-open", owner="agent-1"))
@@ -1186,9 +1066,9 @@ class TestCoordinatorProjection(LedgerTestCase):
 
 
 class TestArchival(LedgerTestCase):
-    """T038-T039: archiving a terminal work item thins its row in place
-    (data-model.md's "Archival") without ever breaking another item's
-    dependency resolution against it (FR-020, FR-021, SC-008)."""
+    """T038-T039: archival thins a terminal row in place without breaking
+    dependents' resolution (FR-020/FR-021, SC-008).
+    """
 
     def _create(self, item_id, **overrides):
         kwargs = dict(
@@ -1200,9 +1080,7 @@ class TestArchival(LedgerTestCase):
         kwargs.update(overrides)
         self.ledger.create_work_item(**kwargs)
 
-    # -- T039 (SC-008): archiving a satisfied prerequisite never turns a
-    # -- satisfied dependency into an unresolved/unknown one -------------
-
+    # T039 (SC-008)
     def test_archiving_satisfied_prerequisite_keeps_dependent_unblocked(self):
         self._create("A")
         self._create("B", blocked_by=["A"])
@@ -1212,11 +1090,8 @@ class TestArchival(LedgerTestCase):
 
         self.assertTrue(self.ledger.archive_work_item("A"))
 
-        # Archival must not change the answer: still satisfied.
         self.assertFalse(self.ledger.is_blocked("B"))
         self.assertIn("B", self.ledger.list_available_work_items())
-
-    # -- Thinned-row shape: cleared columns vs. permanently retained ones -
 
     def test_archived_done_item_is_thinned_but_keeps_identity_and_status(self):
         self._create("A", source_promoted_by="agent-A")
@@ -1251,15 +1126,11 @@ class TestArchival(LedgerTestCase):
         self.assertIsNone(item.source_locator)
         self.assertIsNone(item.created_at)
 
-    # -- Evidence and any lingering claim are deleted at archival ---------
-
     def test_archival_deletes_evidence_and_lingering_claim(self):
         self._create("A")
         self.ledger.add_evidence("A", "branch", "feature/example")
         self.assertTrue(self.ledger.claim("A", "agent-A"))
-        # The model does not require a claim to be released before an
-        # item transitions to done — archival's own claim delete is
-        # explicitly defensive (data-model.md's "Archival").
+        # Done needn't follow release; archival's claim delete is defensive.
         self.assertTrue(self.ledger.mark_done("A"))
 
         self.assertTrue(self.ledger.archive_work_item("A"))
@@ -1276,8 +1147,6 @@ class TestArchival(LedgerTestCase):
             conn.close()
         self.assertEqual(evidence_count, 0)
         self.assertIsNone(claim_row)
-
-    # -- Only the archived item's own declared edges are deleted ----------
 
     def test_archival_deletes_only_its_own_declared_edges(self):
         self._create("C")  # A's own prerequisite, already done
@@ -1299,14 +1168,10 @@ class TestArchival(LedgerTestCase):
             conn.close()
         # B's edge onto A — declared by another item against A — survives.
         self.assertIn(("B", "A"), rows)
-        # A's own edge onto C — A's own declared dependency, moot once A
-        # is terminal and archived — is gone.
+        # A's own edge onto C is moot once A is archived, so it is gone.
         self.assertNotIn(("A", "C"), rows)
 
-        # And B's own blocking evaluation against archived A is unaffected.
         self.assertFalse(self.ledger.is_blocked("B"))
-
-    # -- Archiving a non-terminal item is a guarded no-op ------------------
 
     def test_archiving_open_item_is_a_no_op(self):
         self._create("A")
@@ -1320,14 +1185,8 @@ class TestArchival(LedgerTestCase):
     def test_archiving_nonexistent_item_returns_false(self):
         self.assertFalse(self.ledger.archive_work_item("does-not-exist"))
 
-    # -- Archiving a non-terminal item must not delete its related rows --
-
     def test_archiving_open_item_leaves_evidence_claim_and_edges_untouched(self):
-        # Regression for the bug where the guarded UPDATE not matching
-        # (item still `open`) did not stop the three cleanup DELETEs from
-        # running unconditionally, silently destroying an open item's
-        # evidence, claim, and self-declared blocked_by edge even though
-        # archive_work_item() correctly reported `False`.
+        # Guards cleanup DELETEs running when the guarded UPDATE misses.
         self._create("blocker")  # A's own blocked_by target
         self._create("A", blocked_by=["blocker"])
         self.ledger.add_evidence("A", "branch", "feature/example")
@@ -1358,24 +1217,16 @@ class TestArchival(LedgerTestCase):
         self.assertEqual(claim_row, ("agent-A",))
         self.assertIsNotNone(edge_row)
 
-    # -- Re-archiving an already-archived item is safe, not corrupting ----
-
     def test_archiving_already_archived_item_is_idempotent(self):
         self._create("A")
-        # Attach evidence and a claim before the *first* archival so that
-        # call's cleanup DELETEs have something real to remove — proving
-        # the first call's `if archived:` cleanup actually ran, not just
-        # that there was nothing to clean up in the first place.
+        # Evidence and a claim exist so the first archival has rows to clean up.
         self.ledger.add_evidence("A", "branch", "feature/example")
         self.assertTrue(self.ledger.claim("A", "agent-A"))
         self.assertTrue(self.ledger.mark_done("A"))
         self.assertTrue(self.ledger.archive_work_item("A"))
         first = self.ledger.get_work_item("A")
 
-        # A second archival attempt on an already-archived item must now
-        # be a determinate, correct `False` — the guard's
-        # `AND archived_at IS NULL` means the UPDATE no longer matches
-        # this row at all, so nothing about it is touched a second time.
+        # AND archived_at IS NULL keeps a second archival from matching at all.
         second_result = self.ledger.archive_work_item("A")
         self.assertFalse(second_result)
 
@@ -1389,15 +1240,10 @@ class TestArchival(LedgerTestCase):
         self.assertIsNone(second.source_promoted_by)
         self.assertIsNone(second.created_at)
         self.assertIsNotNone(second.archived_at)
-        # The core of the fix: archived_at/updated_at are permanent —
-        # the second call must not bump either forward to a later
-        # timestamp.
+        # archived_at/updated_at are permanent; a second call must not bump.
         self.assertEqual(second.archived_at, first.archived_at)
         self.assertEqual(second.updated_at, first.updated_at)
 
-        # No cleanup mutation of any kind on the second call: nothing
-        # errors, and there is nothing left to double-delete (the first
-        # call's cleanup already removed the evidence/claim rows).
         conn = work_ledger.connect(self.repo_root)
         try:
             evidence_count = conn.execute(
@@ -1413,25 +1259,14 @@ class TestArchival(LedgerTestCase):
 
 
 class TestQuickstartEndToEnd(LedgerTestCase):
-    """T043: quickstart.md Scenarios 1-5, end to end, as one coherent pass
-    over creation, availability/blocking/archival, claim/reconcile/
-    override, concurrent claim arbitration, and projection generation.
+    """T043: quickstart.md Scenarios 1-5 end to end.
 
-    quickstart.md's own Scenario 3 step 1 ("Claim WI-1 from worktree A")
-    presumes WI-1 is still an active, claimable item — but Scenario 2's
-    own step 5 already archives WI-1 (`done`, thinned). The two top-level
-    scenarios are independent narrative illustrations sharing conceptual
-    item names, not one strictly cumulative object timeline (quickstart.md
-    itself marks several steps "New" as hypothetical continuations, not a
-    single unbroken state machine). This test therefore carries Scenario
-    1 and 2's own item ids (`WI-1`..`WI-3`) forward only within those two
-    scenarios, and introduces fresh ids for Scenarios 3-5 — preserving
-    every behavior quickstart.md actually specifies without forcing a
-    contradiction quickstart.md itself doesn't resolve.
+    Scenarios 3-5 use fresh ids: Scenario 2 archives WI-1, so the scenarios
+    are not one cumulative timeline.
     """
 
     def test_quickstart_scenarios_1_through_5(self):
-        # -- Scenario 1: decompose and recover (User Story 1) -----------
+        # Scenario 1: decompose and recover (User Story 1)
         self.ledger.create_work_item(
             id="WI-1",
             title="write research.md",
@@ -1451,8 +1286,7 @@ class TestQuickstartEndToEnd(LedgerTestCase):
             source_locator="specs/001-durable-work-ledger/plan.md",
         )
 
-        # A fresh WorkLedger handle over the same repo_root stands in for
-        # "a fresh reader with no memory of the creating session."
+        # A fresh handle stands in for a reader with no memory of the session.
         fresh = work_ledger.WorkLedger(self.repo_root)
         listed = {item.id: item for item in fresh.list_work_items()}
         self.assertEqual(set(listed), {"WI-1", "WI-2", "WI-3"})
@@ -1463,8 +1297,7 @@ class TestQuickstartEndToEnd(LedgerTestCase):
                 "specs/001-durable-work-ledger/plan.md",
             )
 
-        # -- Scenario 2: availability, including across archival --------
-        # (User Story 2)
+        # Scenario 2: availability, including across archival (User Story 2)
         self.ledger.add_blocked_by("WI-2", "WI-1")
 
         self.assertFalse(self.ledger.is_blocked("WI-1"))
@@ -1478,19 +1311,13 @@ class TestQuickstartEndToEnd(LedgerTestCase):
         self.assertFalse(self.ledger.is_blocked("WI-2"))
         self.assertIn("WI-2", self.ledger.list_available_work_items())
 
-        # Archiving the now-satisfied prerequisite must not change the
-        # answer (SC-008) — resolved via the same single-table lookup,
-        # whether WI-1's row is active or thinned.
+        # Archiving a satisfied prerequisite keeps the answer (SC-008).
         self.assertTrue(self.ledger.archive_work_item("WI-1"))
         self.assertFalse(self.ledger.is_blocked("WI-2"))
         self.assertIn("WI-2", self.ledger.list_available_work_items())
 
-        # A dangling blocker (a typo'd id that never validly identified a
-        # work item) is only reachable, in the normal write path, via a
-        # connection that ran without foreign keys enabled — the
-        # misconfiguration research.md itself names as the practical
-        # trigger. Confirm it is reported distinctly from WI-1's
-        # thinned-but-resolvable, satisfied case above (SC-009).
+        # Dangling blockers only arise on a connection without foreign keys
+        # (research.md); must be reported apart from satisfied WI-1 (SC-009).
         conn = work_ledger.connect(self.repo_root)
         try:
             conn.execute("PRAGMA foreign_keys = OFF")
@@ -1506,12 +1333,10 @@ class TestQuickstartEndToEnd(LedgerTestCase):
         dangling = [f for f in findings if f.finding == "dangling_blocker"]
         self.assertEqual([f.item_id for f in dangling], ["WI-2"])
         self.assertIn("WI-0-never-existed", dangling[0].detail)
-        # WI-1's satisfied, archived dependency must not itself be
-        # reported dangling.
+        # WI-1's satisfied, archived dependency must not be reported dangling.
         self.assertNotIn("WI-1", [f.item_id for f in findings if f.finding == "dangling_blocker"])
 
-        # -- Scenario 3: claim across worktrees; detect and recover a ---
-        # -- stale claim (User Story 3) ----------------------------------
+        # Scenario 3: cross-worktree claims; stale claim recovery (User Story 3)
         self.ledger.create_work_item(
             id="WI-4", title="Task A", source_kind="adhoc", source_locator="adhoc-a"
         )
@@ -1542,19 +1367,16 @@ class TestQuickstartEndToEnd(LedgerTestCase):
             conn.close()
         self.assertEqual(rows, {"WI-4": "agent-A", "WI-5": "agent-B"})
 
-        # Worktree A disappears without releasing its claim; worktree B
-        # remains, so WI-5's claim must NOT be reported stale.
+        # A vanishes without releasing; B remains, so WI-5 is NOT stale.
         os.rmdir(worktree_a)
 
         findings = self.ledger.reconcile()
         stale = [f for f in findings if f.finding == "stale_claim"]
         self.assertEqual([f.item_id for f in stale], ["WI-4"])
-        # Reconciliation must not mutate the claim or the item's
-        # computed availability.
+        # Reconciliation must not mutate the claim or the item's availability.
         self.assertNotIn("WI-4", self.ledger.list_available_work_items())
 
-        # Explicit recovery: override-release on the stale-claim
-        # evidence, then a fresh, ordinary claim attempt.
+        # Explicit recovery: override-release, then an ordinary claim.
         self.ledger.override_release_claim("WI-4", note="worktree deleted")
         conn = work_ledger.connect(self.repo_root)
         try:
@@ -1566,8 +1388,7 @@ class TestQuickstartEndToEnd(LedgerTestCase):
         self.assertIsNone(leftover)  # override does not itself grant a claim
         self.assertTrue(self.ledger.claim("WI-4", "agent-C"))
 
-        # An Evidence Pointer remains a historical observation, unaffected
-        # by anything that happens to the branch it names afterward.
+        # Evidence stays a historical record despite later branch changes.
         self.ledger.add_evidence("WI-5", "branch", "agent-b-wi5")
         conn = work_ledger.connect(self.repo_root)
         try:
@@ -1578,8 +1399,7 @@ class TestQuickstartEndToEnd(LedgerTestCase):
             conn.close()
         self.assertEqual(evidence, ("branch", "agent-b-wi5"))
 
-        # -- Scenario 4: concurrent claim race on the same item ----------
-        # (User Story 3, FR-018)
+        # Scenario 4: concurrent claim race, same item (User Story 3, FR-018)
         self.ledger.create_work_item(
             id="WI-6", title="Task C", source_kind="adhoc", source_locator="adhoc-c"
         )
@@ -1587,8 +1407,7 @@ class TestQuickstartEndToEnd(LedgerTestCase):
         self.assertFalse(self.ledger.claim("WI-6", "agent-E"))
         self.assertFalse(self.ledger.claim("WI-6", "agent-F"))
 
-        # -- Scenario 5: generate a coordinator projection ---------------
-        # (User Story 4)
+        # Scenario 5: generate a coordinator projection (User Story 4)
         self.ledger.create_work_item(
             id="WI-7", title="Blocker", source_kind="adhoc", source_locator="adhoc-g"
         )
@@ -1613,16 +1432,12 @@ class TestQuickstartEndToEnd(LedgerTestCase):
         self.assertFalse(by_id["WI-8"].terminal)
         # WI-4's claim (Scenario 3) also withholds eligibility.
         self.assertFalse(by_id["WI-4"].eligible)
-        # WI-1, archived in Scenario 2, is not part of the projection at
-        # all (archived items are a permanent tombstone, not a
-        # coordinator-facing item).
+        # WI-1 (archived earlier) is absent: archived items are tombstones.
         self.assertNotIn("WI-1", by_id)
 
         second_projection = self.ledger.generate_projection()
         self.assertEqual(first_projection, second_projection)
 
-        # Generating a projection (twice) performed no write to the
-        # ledger's own durable state.
         conn = work_ledger.connect(self.repo_root)
         try:
             after = conn.execute("SELECT * FROM work_items ORDER BY id").fetchall()
@@ -1630,23 +1445,14 @@ class TestQuickstartEndToEnd(LedgerTestCase):
             conn.close()
         self.assertEqual(before, after)
 
-        # Every coordination fact used throughout this test (creation,
-        # blocking, archival, claim, reconciliation, evidence) was
-        # determined entirely without this projection step ever having
-        # run until this final scenario — confirming User Story 4's own
-        # Acceptance Scenario 3.
+        # Nothing above needed a projection (User Story 4, Scenario 3).
         self.assertEqual(self.ledger.get_work_item("WI-6").status, "open")
         self.assertTrue(self.ledger.is_claimed("WI-6"))
 
 
-# ============================================================================
 # specs/002-milestone-task-work-items: milestone/task work-item model.
-# ============================================================================
 
-# The exact version-1 schema (specs/001-durable-work-ledger/data-model.md),
-# frozen here verbatim so TestSchemaMigrationV1ToV2 can construct a real
-# pre-migration database independent of whatever work_ledger._SCHEMA_STATEMENTS
-# currently contains.
+# Frozen v1 schema (specs/001 data-model.md), independent of _SCHEMA_STATEMENTS.
 _V1_WORK_ITEMS_SQL = """
 CREATE TABLE work_items (
   id                TEXT PRIMARY KEY,
@@ -1698,9 +1504,7 @@ _V1_OTHER_TABLES_SQL = (
 
 
 class TestSchemaMigrationV1ToV2(LedgerTestCase):
-    """T005: an existing version-1 database migrates forward to v2
-    automatically and safely (research.md's "Decision: schema migration
-    from version 1 to version 2")."""
+    """T005: v1 databases migrate to v2 safely on open (research.md)."""
 
     def _create_v1_database(self, rows=()):
         db_path = work_ledger.ledger_path(self.repo_root)
@@ -1779,8 +1583,7 @@ class TestSchemaMigrationV1ToV2(LedgerTestCase):
         finally:
             work_ledger._work_items_create_sql = real_create_sql
 
-        # Inspect on a raw connection, bypassing work_ledger.connect
-        # entirely, so this inspection does not re-trigger the fault.
+        # Raw connection: connect() would re-run the migration.
         raw_conn = sqlite3.connect(work_ledger.ledger_path(self.repo_root))
         try:
             self.assertEqual(raw_conn.execute("PRAGMA user_version").fetchone()[0], 1)
@@ -1809,16 +1612,9 @@ class TestSchemaMigrationV1ToV2(LedgerTestCase):
         self.assertEqual(item.type, "task")
 
 
-# ============================================================================
 # specs/003-symphony-task-integration: created_at NOT NULL for live rows.
-# ============================================================================
 
-# The exact version-2 schema (as it existed on this branch before the v3
-# `CHECK (archived_at IS NOT NULL OR created_at IS NOT NULL)` fix), frozen
-# here verbatim — mirroring `_V1_WORK_ITEMS_SQL` above — so
-# TestSchemaMigrationV2ToV3 can construct a real pre-migration database
-# independent of whatever `work_ledger._work_items_create_sql` currently
-# produces.
+# Frozen v2 schema (like _V1 above), independent of _work_items_create_sql.
 _V2_WORK_ITEMS_SQL = """
 CREATE TABLE work_items (
   id                TEXT PRIMARY KEY,
@@ -1850,14 +1646,9 @@ CREATE TABLE work_items (
 
 
 class TestSchemaMigrationV2ToV3(LedgerTestCase):
-    """specs/003-symphony-task-integration/research.md's "Decision:
-    created_at NOT NULL for live rows": an existing version-2 database —
-    including one holding a live (non-archived) row whose `created_at` is
-    already `NULL`, a state no exposed v2 method could produce but that
-    the v2 schema itself never structurally forbade — migrates forward to
-    version 3 automatically and safely, backfilling that row's
-    `created_at` from its own `updated_at` rather than failing or losing
-    data, and the new invariant is enforced from then on."""
+    """Existing v2 databases migrate to v3, backfilling a live row's NULL
+    created_at from updated_at (specs/003 research.md).
+    """
 
     def _create_v2_database(self, rows=(), legacy_null_created_at_rows=(), archived_rows=()):
         db_path = work_ledger.ledger_path(self.repo_root)
@@ -1875,10 +1666,7 @@ class TestSchemaMigrationV2ToV3(LedgerTestCase):
                     "VALUES (?, 'task', 'open', 'adhoc', ?, ?, ?)",
                     (row_id, f"loc-{row_id}", _NOW, _NOW),
                 )
-            # A real legacy/migrated case: a live task whose created_at is
-            # already NULL — unreachable via create_work_item()/
-            # archive_work_item(), but not something the v2 schema itself
-            # ever rejected, exactly the gap this migration closes.
+            # Legacy row: NULL created_at is API-unreachable but v2 allowed it.
             for row_id, updated_at in legacy_null_created_at_rows:
                 conn.execute(
                     "INSERT INTO work_items "
@@ -1886,8 +1674,7 @@ class TestSchemaMigrationV2ToV3(LedgerTestCase):
                     "VALUES (?, 'task', 'open', 'adhoc', ?, NULL, ?)",
                     (row_id, f"loc-{row_id}", updated_at),
                 )
-            # An archived row with created_at already NULL (archive_work_item's
-            # own deliberate data-minimization) — must be left untouched.
+            # Archived rows' NULL created_at is by design; leave untouched.
             for row_id in archived_rows:
                 conn.execute(
                     "INSERT INTO work_items "
@@ -1930,9 +1717,7 @@ class TestSchemaMigrationV2ToV3(LedgerTestCase):
         self.assertEqual(item.updated_at, legacy_updated_at)
 
     def test_legacy_null_created_at_row_is_published_with_a_non_null_created_at(self):
-        # The exact failure this migration prevents: without the backfill,
-        # publish()'s own `task_projection.created_at TEXT NOT NULL`
-        # INSERT would raise sqlite3.IntegrityError against this row.
+        # Without the backfill, publish()'s NOT NULL insert would fail.
         legacy_updated_at = "2020-01-01T00:00:00Z"
         self._create_v2_database(
             legacy_null_created_at_rows=[("WI-legacy", legacy_updated_at)]
@@ -1975,9 +1760,9 @@ class TestSchemaMigrationV2ToV3(LedgerTestCase):
 
 
 class TestWorkItemTypeAndParent(LedgerTestCase):
-    """T006: type immutability (no mutator exists), parent_id creation
-    validation (FR-002/FR-003), and type-aware blocking resolution across
-    every type combination."""
+    """T006: type immutability, parent_id validation (FR-002/FR-003), and
+    type-aware blocking resolution.
+    """
 
     def test_type_has_no_mutator_in_the_public_api(self):
         public_methods = [
@@ -2067,9 +1852,7 @@ class TestWorkItemTypeAndParent(LedgerTestCase):
         )
         self.assertTrue(self.ledger.is_blocked("T-1"))
 
-        # Force M-1 to its terminal state directly, isolating resolution
-        # semantics from review-readiness/transition mechanics (mirroring
-        # 001's own T022 direct-fixture-construction precedent).
+        # Set M-1's terminal state directly to isolate resolution semantics.
         conn = work_ledger.connect(self.repo_root)
         try:
             conn.execute("UPDATE work_items SET status = 'accepted' WHERE id = 'M-1'")
@@ -2113,9 +1896,9 @@ class TestWorkItemTypeAndParent(LedgerTestCase):
 
 
 class TestMilestoneTaskAttribution(LedgerTestCase):
-    """T007 (User Story 1): a milestone and its attributed tasks survive
-    a fresh ledger handle, and every 001-defined behavior (claim,
-    evidence) works identically against a milestone row."""
+    """T007 (User Story 1): attribution survives a fresh handle; 001
+    behaviors (claim, evidence) work identically on a milestone.
+    """
 
     def test_attribution_survives_a_fresh_ledger_handle(self):
         self.ledger.create_work_item(
@@ -2174,8 +1957,8 @@ class TestMilestoneTaskAttribution(LedgerTestCase):
 
 class TestQualifyingMechanicalEvidence(LedgerTestCase):
     """T009 (User Story 2): has_qualifying_evidence is a pure, read-only
-    derived predicate; mark_done's own behavior/signature is unchanged
-    from 001."""
+    predicate; mark_done is unchanged from 001.
+    """
 
     def test_done_task_without_evidence_does_not_qualify(self):
         self.ledger.create_work_item(
@@ -2210,10 +1993,9 @@ class TestQualifyingMechanicalEvidence(LedgerTestCase):
 
 
 class TestMilestoneReviewReadiness(LedgerTestCase):
-    """T012 (User Story 3): is_review_ready is correct across
-    child-state combinations (SC-002); mark_in_review is a guarded,
-    single-winner transition (SC-003); claim() works against a milestone
-    with no code changes needed."""
+    """T012 (User Story 3): is_review_ready across child states (SC-002);
+    mark_in_review is a guarded single-winner transition (SC-003).
+    """
 
     def _milestone_with_children(self, n):
         self.ledger.create_work_item(
@@ -2322,9 +2104,9 @@ class TestMilestoneReviewReadiness(LedgerTestCase):
 
 
 class TestMilestoneDeclineAndAccept(LedgerTestCase):
-    """T014 (User Story 4): decline_review/accept_milestone are guarded
-    transitions; declining never mutates a child task's record; a new
-    corrective task is accepted normally and readiness recomputes."""
+    """T014 (User Story 4): decline_review/accept_milestone are guarded;
+    declining never mutates child tasks.
+    """
 
     def _ready_milestone(self):
         self.ledger.create_work_item(
@@ -2390,15 +2172,11 @@ class TestMilestoneDeclineAndAccept(LedgerTestCase):
 
 
 class TestMilestoneMembershipFreeze(LedgerTestCase):
-    """FR-003a: a task may be attached to a milestone (via `parent_id` at
-    creation) only while that milestone is `status='open'`. Membership is
-    frozen the instant a milestone leaves `open` — `review`, `accepted`,
-    and `superseded` all reject a new attach attempt outright, with no
-    partial row written — while the corrective-work flow (`review` ->
-    `decline_review` -> `open` -> attach -> `review` again) keeps working
-    exactly as FR-011 already establishes. The parent's existence/type/
-    status check and the child `INSERT` are atomic with respect to a
-    concurrent milestone lifecycle transition."""
+    """FR-003a: a task may attach to a milestone only while it is `open`.
+
+    The parent check and child INSERT are atomic against milestone
+    transitions.
+    """
 
     def _milestone_ready_for_review(self):
         self.ledger.create_work_item(
@@ -2471,13 +2249,9 @@ class TestMilestoneMembershipFreeze(LedgerTestCase):
     def test_concurrent_mark_in_review_vs_task_attach_never_produces_invalid_membership(
         self,
     ):
-        """A milestone that is review-ready right now (one resolved,
-        evidenced child) races two operations against each other: moving
-        it into `review`, and attaching a fresh, unresolved task to it.
-        Whichever operation's write commits first must determine the
-        other's outcome correctly — never both succeeding (a milestone in
-        `review` with a brand-new unresolved child underneath it) and
-        never both failing (a live application bug, not a race)."""
+        """mark_in_review vs task attach: never both winning (unresolved child
+        under a `review` milestone) and never both losing.
+        """
         self._milestone_ready_for_review()
 
         barrier = threading.Barrier(2)
@@ -2533,9 +2307,8 @@ class TestMilestoneMembershipFreeze(LedgerTestCase):
 
 class TestProjectionExcludesMilestones(LedgerTestCase):
     """T017 (User Story 5, SC-005): no milestone row ever appears in a
-    generated projection, under any status/claim combination; a task
-    blocked by a milestone is projected as ineligible while the
-    milestone itself never appears."""
+    projection; a task blocked by one projects as ineligible.
+    """
 
     def test_no_milestone_appears_in_projection_open_or_superseded(self):
         self.ledger.create_work_item(
@@ -2606,12 +2379,9 @@ class TestProjectionExcludesMilestones(LedgerTestCase):
 
 
 class TestGenerateExternalProjection(LedgerTestCase):
-    """specs/003-symphony-task-integration T015 (User Story 2, Acceptance
-    Scenarios 2.1-2.4): `generate_external_projection()` produces exactly
-    the task rows, with `dispatchable` matching the ledger's own
-    "available to start" computation and `status` exposed as a direct,
-    readable string — never a milestone row, under any status, claim, or
-    blocking state."""
+    """specs/003 T015 (User Story 2): the external projection has exactly
+    the task rows; `dispatchable` equals "available to start".
+    """
 
     def _create_task(self, id, blocked_by=(), parent_id=None):
         self.ledger.create_work_item(
@@ -2671,8 +2441,7 @@ class TestGenerateExternalProjection(LedgerTestCase):
         self.assertFalse(by_id["T-superseded"].dispatchable)
 
     def test_milestones_never_appear_regardless_of_status(self):
-        # Every milestone status this schema allows: open, review,
-        # accepted, superseded.
+        # One milestone per allowed status: open, review, accepted, superseded.
         self._create_milestone("M-open")
 
         self._create_milestone("M-review")
@@ -2696,8 +2465,7 @@ class TestGenerateExternalProjection(LedgerTestCase):
         by_id = {row.id: row for row in self.ledger.generate_external_projection()}
         for milestone_id in ("M-open", "M-review", "M-accepted", "M-other"):
             self.assertNotIn(milestone_id, by_id)
-        # The attributed tasks themselves are still task rows and remain
-        # present, alongside their now-absent milestone parents.
+        # Attributed tasks stay present though their parents are absent.
         self.assertIn("T-for-review", by_id)
         self.assertIn("T-for-accepted", by_id)
 
@@ -2734,10 +2502,9 @@ class TestGenerateExternalProjection(LedgerTestCase):
 
 
 class TestAvailableWorkItemsExcludesMilestones(LedgerTestCase):
-    """FR-017a: `list_available_work_items()` reports only `type='task'`
-    rows — a milestone is a human acceptance unit, never a startable unit
-    of work, so an open/unclaimed/unblocked milestone must never appear,
-    mirroring `generate_projection()`'s own `type='task'` filter."""
+    """FR-017a: list_available_work_items() reports only type='task' rows;
+    milestones are acceptance units, never startable work.
+    """
 
     def test_open_unclaimed_unblocked_milestone_is_never_available(self):
         self.ledger.create_work_item(
@@ -2758,13 +2525,9 @@ class TestAvailableWorkItemsExcludesMilestones(LedgerTestCase):
 
 
 class TestIsDispatchable(unittest.TestCase):
-    """specs/005-work-state-visibility data-model.md: `is_dispatchable()`
-    is the single, pure, I/O-free expression of the exact three-conjunct
-    rule `list_available_work_items()`'s own query encodes — evaluated
-    identically against live ledger state (via that method's refactored
-    implementation) and against a read-only forecast counterfactual
-    (`work_status.build_forecast()`, a later slice). No ledger fixture is
-    needed here: this is a pure function truth table."""
+    """specs/005 data-model.md: is_dispatchable() is the pure three-conjunct
+    rule shared by list_available_work_items() and the read-only forecast.
+    """
 
     def test_truth_table(self):
         for status in ("open", "done", "superseded"):
@@ -2794,10 +2557,9 @@ class TestIsDispatchable(unittest.TestCase):
 
 
 class TestMilestoneArchival(LedgerTestCase):
-    """T017 (SC-006/SC-007): archiving a milestone with an unresolved
-    child is refused and leaves the row untouched; archiving succeeds
-    once every child is resolved; a child's parent_id still resolves the
-    archived milestone's surviving type/status afterward."""
+    """T017 (SC-006/SC-007): archiving a milestone with an unresolved child
+    is refused; it succeeds once every child is resolved.
+    """
 
     def _accepted_milestone_with_one_child(self):
         self.ledger.create_work_item(
@@ -2814,19 +2576,7 @@ class TestMilestoneArchival(LedgerTestCase):
     def test_archiving_milestone_with_unresolved_child_is_refused(self):
         self._accepted_milestone_with_one_child()
 
-        # FR-003a forbids attaching a task to an already-accepted milestone
-        # through the public API (see TestMilestoneMembershipFreeze) — by
-        # the time a milestone reaches `accepted`, every child present at
-        # that moment is already resolved by construction (mark_in_review's
-        # own review-readiness precondition), and no operation can un-
-        # resolve a task or attach a new one afterward. FR-015's archival
-        # precondition is therefore defense-in-depth against a state the
-        # normal API can no longer produce; constructing it here requires
-        # a direct raw-SQL insert bypassing `create_work_item()`'s own
-        # validation entirely, isolating archival's own precondition
-        # enforcement from creation-time enforcement (mirroring this
-        # module's existing "direct-fixture construction" precedent, e.g.
-        # `TestWorkItemTypeAndParent.test_type_aware_blocking_resolution_task_on_milestone`).
+        # FR-003a blocks this via the API (FR-015 is defense in depth).
         conn = work_ledger.connect(self.repo_root)
         try:
             conn.execute(
@@ -2876,27 +2626,10 @@ class TestMilestoneArchival(LedgerTestCase):
         self.assertFalse(self.ledger.is_blocked("T-2"))
 
     def test_archival_precondition_is_atomic_against_a_concurrent_child_insertion(self):
-        """Regression for the archival check-then-act race: pre-fix,
-        `archive_work_item()` evaluated "any unresolved child?" as a plain
-        `SELECT` *before* opening its own transaction, then archived in a
-        separate later transaction. That left a window in which a
-        concurrent writer could insert a new open child between the check
-        and the mutation, producing an archived milestone with live,
-        unresolved child work underneath it.
-
-        Constructed with a second, raw connection under direct manual
-        transaction control so the interleaving this regression targets is
-        forced deterministically rather than left to scheduler luck: a
-        `BEGIN IMMEDIATE` transaction that inserts a fresh open child under
-        M-1 is opened and left uncommitted *before* `archive_work_item()`
-        is ever invoked, on the same milestone this test's own fixture
-        just confirmed has zero unresolved children. `archive_work_item()`
-        is then run concurrently on a separate thread — its own
-        `BEGIN IMMEDIATE` can only proceed once the held write lock is
-        released (SQLite serializes writers), so its resolved-children
-        precondition is necessarily evaluated against the *post-insert*
-        state, never a stale pre-insert snapshot, proving the fix closes
-        the race rather than merely making it less likely."""
+        """archive_work_item() must check unresolved children inside its own
+        transaction, so a concurrent insert cannot leave live children under
+        an archived milestone.
+        """
         self._accepted_milestone_with_one_child()  # M-1 accepted; T-1 resolved.
 
         now = "2026-08-27T00:00:00Z"
@@ -2908,9 +2641,7 @@ class TestMilestoneArchival(LedgerTestCase):
             "VALUES ('T-race', 'task', 'M-1', 'Racer', 'open', ?, ?)",
             (now, now),
         )
-        # conn_holder now holds the ledger's single write lock with an
-        # uncommitted, unresolved child inserted under M-1 — this is the
-        # exact mid-race state a pre-fix check would already have missed.
+        # Held write lock and uncommitted child force the race.
 
         archive_result = []
 
@@ -2919,11 +2650,7 @@ class TestMilestoneArchival(LedgerTestCase):
 
         t = threading.Thread(target=do_archive)
         t.start()
-        # A brief window for archive_work_item()'s own BEGIN IMMEDIATE to
-        # be issued and block behind the held lock (not required for
-        # correctness — busy_timeout=2000ms covers any scheduling delay —
-        # but makes the intended lock-contention interleaving concrete
-        # rather than merely possible).
+        # Pause so the archive thread blocks on the lock; not needed for correctness (busy_timeout).
         time.sleep(0.05)
         conn_holder.execute("COMMIT")
         conn_holder.close()
@@ -2942,17 +2669,10 @@ class TestMilestoneArchival(LedgerTestCase):
 
 
 class TestTaskArchivalParentLifecycle(LedgerTestCase):
-    """FR-015a regression: archiving a task deletes that task's own
-    evidence rows (data-model.md's "Archival"), so archiving an
-    attributed, done+evidenced task while its parent milestone is still
-    `open` or `review` can silently invalidate the parent's
-    review-readiness — or the very evidence that justified an
-    already-in-flight review — out from underneath it. An attributed
-    task's archival is refused while its parent is `open`/`review`, and
-    permitted once the parent reaches its own terminal state
-    (`accepted`/`superseded`, at which point its child set can never
-    change again). An unattributed task (no `parent_id`) keeps 001's
-    original, parent-independent archival behavior unchanged."""
+    """FR-015a: an attributed task can't be archived while its parent
+    milestone is open/review (archival deletes the evidence backing
+    readiness); unattributed tasks are unaffected.
+    """
 
     def _milestone_with_done_evidenced_child(self, milestone_id="M-1", task_id="T-1"):
         self.ledger.create_work_item(
@@ -2981,9 +2701,7 @@ class TestTaskArchivalParentLifecycle(LedgerTestCase):
 
         after = self.ledger.get_work_item("T-1")
         self.assertEqual(before, after)
-        # The invariant this regression exists for: archival must not be
-        # allowed to quietly knock a review-ready milestone off of
-        # review-ready by deleting the evidence that made it so.
+        # Archival must not un-ready a milestone by deleting its evidence.
         self.assertTrue(self.ledger.is_review_ready("M-1"))
 
     def test_attributed_task_cannot_be_archived_while_parent_in_review(self):
@@ -3026,8 +2744,6 @@ class TestTaskArchivalParentLifecycle(LedgerTestCase):
         self.assertIsNotNone(item.archived_at)
 
     def test_unattributed_terminal_task_retains_001_archival_behavior(self):
-        # No parent_id at all — 001's original archival path, entirely
-        # unaffected by FR-015a's parent-lifecycle precondition.
         self.ledger.create_work_item(
             id="T-solo",
             title="Solo",
@@ -3061,25 +2777,15 @@ class TestTaskArchivalParentLifecycle(LedgerTestCase):
         self.assertEqual(evidence_count, 1)
 
     def test_concurrent_archive_refused_while_review_commit_is_still_in_flight(self):
-        """One of the two valid race orderings between `accept_milestone`
-        and `archive_work_item(child)`: `archive_work_item`'s own
-        `BEGIN IMMEDIATE` acquires the write lock first (forced here by
-        holding an unrelated write lock open on a second connection while
-        M-1 is still `review`, then releasing it only once the archival
-        thread is already blocked waiting on it) and evaluates the
-        parent-lifecycle precondition against the still-`review` parent —
-        refused. `accept_milestone` proceeds only afterward and succeeds
-        normally. This proves archival never observes a stale pre-review
-        snapshot that could let it slip through before an in-flight review
-        commits."""
+        """Race 1: archival takes the write lock while M-1 is `review` and is
+        refused; accept_milestone then succeeds.
+        """
         self._milestone_with_done_evidenced_child()
         self.assertTrue(self.ledger.mark_in_review("M-1"))
 
         conn_holder = work_ledger.connect(self.repo_root)
         conn_holder.execute("BEGIN IMMEDIATE")
-        # Holds the ledger's single write lock with M-1 still 'review' —
-        # the exact state archive_work_item's own transaction must observe
-        # once it acquires the lock in turn.
+        # Holds the write lock with M-1 still 'review' for archival to observe.
 
         archive_result = []
 
@@ -3103,20 +2809,13 @@ class TestTaskArchivalParentLifecycle(LedgerTestCase):
         item = self.ledger.get_work_item("T-1")
         self.assertIsNone(item.archived_at)
 
-        # The parent's own lifecycle is unaffected by the refused archival
-        # attempt — acceptance still proceeds normally afterward.
+        # Refused archival leaves the parent's lifecycle unaffected.
         self.assertTrue(self.ledger.accept_milestone("M-1"))
 
     def test_concurrent_archive_serializes_after_an_in_flight_accept_commits(self):
-        """The other valid race ordering: `accept_milestone`'s own
-        transition to `accepted` is held open, uncommitted, on a second
-        connection while `archive_work_item(child)` runs concurrently on a
-        thread. `archive_work_item`'s `BEGIN IMMEDIATE` can only proceed
-        once the held write lock is released (SQLite serializes writers),
-        so its parent-lifecycle precondition is necessarily evaluated
-        against the *post-accept* state, never a stale pre-accept `review`
-        snapshot — proving the fix closes the race in this direction too,
-        not merely in the archive-goes-first direction."""
+        """Race 2: archival waits behind an in-flight M-1 -> accepted commit and
+        must see the post-accept state.
+        """
         self._milestone_with_done_evidenced_child()
         self.assertTrue(self.ledger.mark_in_review("M-1"))
 
@@ -3128,9 +2827,7 @@ class TestTaskArchivalParentLifecycle(LedgerTestCase):
             "WHERE id = 'M-1' AND type = 'milestone' AND status = 'review'",
             (now,),
         )
-        # conn_holder now holds the write lock with an uncommitted
-        # M-1 -> accepted transition — the exact mid-race state a
-        # pre-fix (or non-atomic) precondition check could still miss.
+        # Holds the write lock with an uncommitted M-1 -> accepted transition.
 
         archive_result = []
 
@@ -3156,12 +2853,10 @@ class TestTaskArchivalParentLifecycle(LedgerTestCase):
 
 
 class TestQuickstartEndToEndV2(LedgerTestCase):
-    """T018: specs/002-milestone-task-work-items/quickstart.md's five
-    scenarios end to end, mirroring TestQuickstartEndToEnd's own
-    convention."""
+    """T018: specs/002-milestone-task-work-items quickstart.md, end to end."""
 
     def test_quickstart_v2_scenarios_1_through_5(self):
-        # -- Scenario 1 ---------------------------------------------------
+        # Scenario 1
         self.ledger.create_work_item(
             id="M-1",
             title="Ship the milestone/task model",
@@ -3196,13 +2891,13 @@ class TestQuickstartEndToEndV2(LedgerTestCase):
             )
         self.assertIsNone(self.ledger.get_work_item("T-3"))
 
-        # -- Scenario 2 ---------------------------------------------------
+        # Scenario 2
         self.assertTrue(self.ledger.mark_done("T-1"))
         self.assertFalse(self.ledger.has_qualifying_evidence("T-1"))
         self.ledger.add_evidence("T-1", "commit", "abc123")
         self.assertTrue(self.ledger.has_qualifying_evidence("T-1"))
 
-        # -- Scenario 3 ---------------------------------------------------
+        # Scenario 3
         self.assertFalse(self.ledger.is_review_ready("M-1"))
         self.assertTrue(self.ledger.mark_done("T-2"))
         self.ledger.add_evidence("T-2", "pull_request", "https://example/pr/1")
@@ -3211,7 +2906,7 @@ class TestQuickstartEndToEndV2(LedgerTestCase):
         self.assertTrue(self.ledger.claim("M-1", "reviewer-1"))
         self.assertFalse(self.ledger.claim("M-1", "reviewer-2"))
 
-        # -- Scenario 4 ---------------------------------------------------
+        # Scenario 4
         snapshot_t1 = self.ledger.get_work_item("T-1")
         snapshot_t2 = self.ledger.get_work_item("T-2")
         self.ledger.release_claim("M-1", "reviewer-1")
@@ -3227,7 +2922,7 @@ class TestQuickstartEndToEndV2(LedgerTestCase):
         self.assertEqual(self.ledger.get_work_item("T-2"), snapshot_t2)
         self.assertFalse(self.ledger.is_review_ready("M-1"))
 
-        # -- Scenario 5 ---------------------------------------------------
+        # Scenario 5
         self.assertTrue(self.ledger.mark_done("T-4"))
         self.ledger.add_evidence("T-4", "commit", "def456")
         projection = self.ledger.generate_projection()
@@ -3239,12 +2934,9 @@ class TestQuickstartEndToEndV2(LedgerTestCase):
 
 
 class TestResyncDeclarativeFields(LedgerTestCase):
-    """specs/003-symphony-task-integration T005 (User Story 1):
-    resync_declarative_fields() is a single guarded UPDATE touching only
-    title/description/updated_at — status, work_item_claims,
-    work_item_evidence, source_kind, and source_locator are left
-    completely untouched, and it is a true no-op (returns False) against
-    an archived or nonexistent id."""
+    """specs/003 T005 (User Story 1): resync_declarative_fields() updates
+    only title/description/updated_at; no-op for archived/nonexistent ids.
+    """
 
     def test_updates_only_title_description_and_updated_at(self):
         self.ledger.create_work_item(
@@ -3315,10 +3007,9 @@ class TestResyncDeclarativeFields(LedgerTestCase):
 
 
 class TestEvidenceReadAccessor(LedgerTestCase):
-    """T003 (specs/004-milestone-review-surface): list_evidence() reads
-    back every recorded Evidence Pointer individually, ordered
-    oldest-first by insertion order (evidence_id), never raising for a
-    nonexistent work_item_id."""
+    """T003 (specs/004): list_evidence() returns Evidence Pointers
+    oldest-first and never raises for a nonexistent id.
+    """
 
     def test_zero_pointers_returns_empty_list(self):
         self.ledger.create_work_item(
@@ -3372,9 +3063,9 @@ class TestEvidenceReadAccessor(LedgerTestCase):
 
 
 class TestClaimReadAccessor(LedgerTestCase):
-    """T004 (specs/004-milestone-review-surface): get_claim() reads back
-    the single claim row for a work item individually, returning None
-    when unclaimed or when work_item_id does not exist."""
+    """T004 (specs/004): get_claim() returns the claim row, or None when
+    unclaimed or the id does not exist.
+    """
 
     def test_unclaimed_returns_none(self):
         self.ledger.create_work_item(
@@ -3413,11 +3104,7 @@ class TestClaimReadAccessor(LedgerTestCase):
 
 
 class TestApplicationIdOwnership(LedgerTestCase):
-    # Same-path filesystem-collision safety rule (docs/DECISIONS.md): an
-    # absent ledger file is always safe to create; an existing one already
-    # carrying `_APPLICATION_ID`, or one whose `user_version`/table set
-    # positively matches a known pre-marker Bindle ledger shape, is safe
-    # to reconcile or adopt exactly once; anything else must fail closed.
+    # docs/DECISIONS.md: create if absent; adopt a known ledger; else refuse.
     def _db_path(self):
         return work_ledger.ledger_path(self.repo_root)
 
@@ -3588,10 +3275,7 @@ class TestApplicationIdOwnership(LedgerTestCase):
             work_ledger.WorkLedger(self.repo_root).ensure_schema()
 
     def test_matching_table_names_and_version_but_wrong_column_shape_refuses(self):
-        # Adversarial case: a foreign database that happens to reuse
-        # Bindle's exact table names and a recognized user_version, but
-        # whose columns don't actually match — table-name matching alone
-        # must not be enough to positively identify it as adoptable.
+        # Adversarial: same table names and user_version, wrong columns.
         os.makedirs(os.path.dirname(self._db_path()), exist_ok=True)
         conn = sqlite3.connect(self._db_path())
         conn.execute(
@@ -3618,8 +3302,7 @@ class TestApplicationIdOwnership(LedgerTestCase):
         with self.assertRaises(work_ledger.ForeignDatabaseError):
             work_ledger.WorkLedger(self.repo_root).ensure_schema()
 
-        # Untouched: the foreign row and foreign column are still there,
-        # and application_id was never stamped.
+        # Untouched: foreign row/column remain and application_id is unstamped.
         conn = sqlite3.connect(self._db_path())
         try:
             self.assertEqual(
@@ -3633,9 +3316,7 @@ class TestApplicationIdOwnership(LedgerTestCase):
             conn.close()
 
     def test_v1_shaped_table_with_wrong_column_refuses(self):
-        # Same adversarial shape check, exercised against the v1 branch
-        # of _expected_table_columns (the derived, not directly-referenced,
-        # shape).
+        # Same shape check against _expected_table_columns's derived v1 branch.
         os.makedirs(os.path.dirname(self._db_path()), exist_ok=True)
         conn = sqlite3.connect(self._db_path())
         conn.execute(
@@ -3683,8 +3364,6 @@ class TestApplicationIdOwnership(LedgerTestCase):
             work_ledger.WorkLedger(self.repo_root).ensure_schema()
 
     def test_absent_path_is_treated_as_fresh(self):
-        # The path never existed before connect() itself creates it — the
-        # ordinary, unconditionally-safe fresh-create path.
         self.assertFalse(os.path.exists(self._db_path()))
 
         work_ledger.WorkLedger(self.repo_root).ensure_schema()
@@ -3703,11 +3382,7 @@ class TestApplicationIdOwnership(LedgerTestCase):
             conn.close()
 
     def test_preexisting_zero_byte_file_refuses(self):
-        # A 0-byte file already occupying the canonical path BEFORE
-        # connect() ever runs is a placeholder Bindle never created —
-        # unlike the identical-looking state connect() itself produces
-        # for an absent path, this must refuse rather than be silently
-        # adopted as fresh.
+        # A pre-existing 0-byte file is foreign, unlike connect()'s own: refuse.
         os.makedirs(os.path.dirname(self._db_path()), exist_ok=True)
         open(self._db_path(), "w").close()
         self.assertTrue(os.path.exists(self._db_path()))
@@ -3716,12 +3391,10 @@ class TestApplicationIdOwnership(LedgerTestCase):
         with self.assertRaises(work_ledger.ForeignDatabaseError):
             work_ledger.WorkLedger(self.repo_root).ensure_schema()
 
-        # Untouched: still a 0-byte file, nothing written.
         self.assertEqual(os.path.getsize(self._db_path()), 0)
 
     def test_preexisting_zero_byte_projection_sidecar_path_does_not_affect_ledger(self):
-        # Sanity check that this refusal is scoped to the ledger's own
-        # exact path, not a broader "any pre-existing file nearby" rule.
+        # Refusal is scoped to the ledger's exact path, not nearby files.
         os.makedirs(os.path.dirname(self._db_path()), exist_ok=True)
         with open(self._db_path() + "-journal", "w") as f:
             f.write("unrelated leftover\n")
@@ -3738,12 +3411,7 @@ class TestApplicationIdOwnership(LedgerTestCase):
             conn.close()
 
     def test_preexisting_nonzero_empty_sqlite_file_refuses_regardless_of_size(self):
-        # File size is not a trustworthy ownership signal: an unrelated,
-        # genuinely empty SQLite database (application_id=0, user_version=0,
-        # no tables) that some other process already opened — and is
-        # therefore nonzero-size, e.g. via its own journal-mode change —
-        # must refuse exactly like a literal 0-byte placeholder, never be
-        # silently claimed as fresh or resumable Bindle state.
+        # Size is no ownership signal: an empty foreign DB must refuse too.
         db_path = self._db_path()
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         conn = sqlite3.connect(db_path, isolation_level=None)
@@ -3768,11 +3436,7 @@ class TestApplicationIdOwnership(LedgerTestCase):
             conn.close()
 
     def test_fresh_creation_is_stamped_before_bootstrap_can_fail_and_retry_succeeds(self):
-        # The retry-safety mechanism that replaces the (removed) filesize
-        # heuristic: a path absent before this invocation is stamped
-        # `_APPLICATION_ID` immediately, before schema bootstrap runs — so
-        # a crash mid-bootstrap still leaves a file the next attempt
-        # positively recognizes as its own, purely from the marker.
+        # Retry safety: the marker is stamped before bootstrap can fail.
         db_path = self._db_path()
         self.assertFalse(os.path.exists(db_path))
 
@@ -3785,9 +3449,7 @@ class TestApplicationIdOwnership(LedgerTestCase):
         finally:
             work_ledger._SCHEMA_STATEMENTS = real_statements
 
-        # Stamped already, even though bootstrap itself failed and rolled
-        # back — inspected via a raw connection, bypassing this module's
-        # own connect()/_ensure_schema() entirely.
+        # Stamped despite rollback; raw connection avoids _ensure_schema().
         raw_conn = sqlite3.connect(db_path)
         try:
             self.assertEqual(
@@ -3805,8 +3467,6 @@ class TestApplicationIdOwnership(LedgerTestCase):
         finally:
             raw_conn.close()
 
-        # A retry succeeds — recognized via the marker alone, not a
-        # filesize/content heuristic.
         conn = work_ledger.connect(self.repo_root)
         try:
             self.assertEqual(
@@ -3818,9 +3478,7 @@ class TestApplicationIdOwnership(LedgerTestCase):
 
 
 class TestLedgerEnsureGitignored(unittest.TestCase):
-    # docs/DECISIONS.md: `bindle init` locally ignores exactly the
-    # canonical ledger artifact and its SQLite sidecars — never the
-    # tracked `.gitignore`, never a broader `.bindle-work/` rule.
+    # docs/DECISIONS.md: exclude only the ledger and sidecars, never .gitignore.
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = os.path.join(self.tmp.name, "repo")

@@ -1,29 +1,19 @@
 """Repository-scoped desired state for skill kits: `bindle.toml`.
 
-`bindle.toml` is the one piece of tracked, repository-owned configuration
-this slice introduces (docs/DECISIONS.md D035). It records only what a
-repository *wants*:
+`bindle.toml` is tracked, repository-owned configuration (D035) recording only
+what a repository *wants*:
 
     [skills]
     kits = ["software-engineering", "spec-kit"]
 
-This is desired state, not history, not ownership bookkeeping, and not a
-lockfile — it says nothing about whether a kit is actually usable on any
-given machine right now (see the individual kit modules'
-`status()`/`add()`/`remove()` for that). It is an ordinary tracked file,
-just like AGENTS.md: read and written at `repo_info.worktree_root`, so it
-follows the branch checked out in whichever worktree Bindle is invoked
-from (docs/WORKTREES.md's "Branch-specific tracked files" row) — no
-special worktree handling is needed here.
+It is not history or a lockfile and says nothing about whether a kit is usable
+on this machine (see each kit module's `status()`). It is read and written at
+`repo_info.worktree_root`, so it follows the branch checked out in each worktree
+(docs/WORKTREES.md).
 
-Reading uses `tomllib` (stdlib, Python 3.11+) so existing file content is
-always validated, never guessed at. Writing never uses a general TOML
-serializer: the schema is intentionally one table with one key, so writes
-are a targeted line-level patch of exactly the `[skills]` table's `kits`
-line, leaving every other byte of the file untouched. This satisfies "no
-formatting rewrite explosion" and "unrelated future/unknown config content
-is preserved" without adding a TOML-writing dependency to a project that
-currently has none.
+Reads use `tomllib` so existing content is validated. Writes never use a TOML
+serializer: they patch only the `[skills]` table's `kits` line and leave every
+other byte untouched, avoiding a TOML-writing dependency.
 """
 
 from __future__ import annotations
@@ -66,13 +56,11 @@ def _parse(raw: str) -> dict:
 
 
 def read_desired_kits(worktree_root: str) -> list[str]:
-    """Read-only: the repository's currently desired kit IDs, in file order.
+    """Read-only: the desired kit IDs in file order.
 
-    Missing file, missing [skills] table, or missing kits key all mean "no
-    kits desired yet" — an empty list, not an error. A malformed file, or
-    a [skills]/kits shape that doesn't match the one supported schema
-    (kits must be an array of strings), raises SkillsConfigError rather
-    than guessing.
+    A missing file, `[skills]` table, or `kits` key means none desired (an empty
+    list). A malformed file or a `kits` value that is not an array of strings
+    raises SkillsConfigError.
     """
     doc = _parse(_read_raw(worktree_root))
     skills = doc.get("skills", {})
@@ -133,8 +121,7 @@ def _write_kits(worktree_root: str, kits: list[str]) -> None:
         break
 
     if skills_header_idx is None:
-        # No [skills] table yet — append one as a new trailing section,
-        # preserving every existing byte.
+        # No [skills] table yet: append one, preserving every existing byte.
         sep = "" if raw.endswith("\n") else "\n"
         blank = "\n" if raw.strip() else ""
         _atomic_write(path, f"{raw}{sep}{blank}[skills]\n{new_line}\n")
@@ -166,10 +153,8 @@ def add_desired_kit(worktree_root: str, kit_id: str) -> bool:
 def remove_desired_kit(worktree_root: str, kit_id: str) -> bool:
     """Idempotent: remove kit_id from desired state. Returns True iff it changed.
 
-    Once a [skills] table exists, removing the last kit leaves an explicit
-    `kits = []` rather than deleting the table — a deliberate, visible
-    "nothing desired" rather than a file that silently reverts to looking
-    unconfigured.
+    Removing the last kit leaves an explicit `kits = []` rather than deleting
+    the table, so the file doesn't silently look unconfigured.
     """
     kits = read_desired_kits(worktree_root)
     if kit_id not in kits:

@@ -4,20 +4,11 @@ site_description: >-
   evidence pointers, and connective tissue between tools that already own
   their own domains.
 
-# docs_dir intentionally left at MkDocs's own default ("docs", next to this
-# file) so the same tree covers both docs/site/*.md (this feature's new
-# orientation pages) and every existing canonical docs/*.md reference
-# document, with no override (specs/006-public-documentation-site/research.md
-# Decision 2/3).
+# docs_dir stays at MkDocs's default so one tree covers docs/site/*.md and the
+# canonical docs/*.md (specs/006 research.md Decision 2/3).
 #
-# docs/index.md (Home) is the one narrow, deliberate exception to
-# docs/site/ holding every site-only orientation page: MkDocs maps a
-# source page's output path to its path relative to docs_dir, so only a
-# page actually named docs/index.md builds to the site root's own
-# index.html. This is the ordinary MkDocs root-index convention, not a
-# reopening of docs/site/'s information architecture — every other
-# site-only page still lives under docs/site/
-# (specs/006-public-documentation-site/research.md Decision 2).
+# docs/index.md is the one exception to docs/site/ holding site-only pages:
+# MkDocs builds only a page named docs/index.md to the root index.html.
 
 nav:
   - Home: index.md
@@ -34,14 +25,10 @@ nav:
       - Toolchain: TOOLCHAIN.md
       - Decisions: DECISIONS.md
 
-# Built-in MkDocs theme, no third-party theme dependency (docs/DECISIONS.md
-# D047 affirms this, superseding the narrower original "no custom CSS/JS"
-# reading of the 2026-08-29 human decision recorded in
-# specs/006-public-documentation-site/research.md Decision 1). D047
-# authorizes a restrained presentation-layer pass — theme config plus one
-# small stylesheet and homepage assets — once the site and information
-# architecture were already established; it does not authorize a
-# third-party theme, a frontend framework, or a broad branding system.
+# Built-in theme, no third-party theme dependency; D047 supersedes the original
+# "no custom CSS/JS" (specs/006 research.md Decision 1) but authorizes only
+# theme config, one small stylesheet, and homepage assets, not a third-party
+# theme, frontend framework, or branding system.
 theme:
   name: mkdocs
   color_mode: auto

@@ -361,8 +361,7 @@ class TestCodexAddRemove(unittest.TestCase):
         with mock.patch.object(se, "_clone_skills_source", side_effect=_fake_clone(["a", "b"])):
             se._codex_add(self.info)
 
-        # A same-parent-directory skill from another kit (e.g. spec-kit's
-        # own speckit-* skills) must survive removal untouched.
+        # Another kit's skill in the same dir (e.g. speckit-*) must survive.
         unrelated = os.path.join(self.repo, ".agents", "skills", "speckit-plan")
         os.makedirs(unrelated)
         with open(os.path.join(unrelated, "SKILL.md"), "w") as f:
@@ -397,22 +396,12 @@ class TestCodexAddRemove(unittest.TestCase):
             content = f.read()
         self.assertNotIn(".agents/skills/a/", content)
         self.assertIn("some-unrelated-pattern/", content)
-        # Nothing left requires the managed block — it's fully removed,
-        # not left behind empty.
+        # Nothing requires the managed block, so it is removed, not left empty.
         self.assertNotIn(se._EXCLUDE_BLOCK_BEGIN, content)
 
     def test_remove_clears_a_bindle_only_info_exclude_it_created_rather_than_leaving_it_stale(self):
-        # Regression: info/exclude did not exist before Bindle. Once
-        # Bindle creates it containing only its own managed block, and
-        # the last worktree removes the kit, `before`/`after` (everything
-        # outside the block) are both empty — reconciliation must still
-        # rewrite the file rather than return early and leave the stale
-        # Bindle-owned block behind.
-        #
-        # `git init` itself populates info/exclude with boilerplate
-        # comments (verified against the installed git this session), so
-        # the "did not exist before Bindle" precondition is reproduced
-        # explicitly here rather than assumed from a fresh checkout.
+        # Regression: a Bindle-only info/exclude must be rewritten, not stale.
+        # `git init` seeds boilerplate, so the absent file is set up explicitly.
         if os.path.exists(self._info_exclude_path()):
             os.unlink(self._info_exclude_path())
         self.assertFalse(os.path.exists(self._info_exclude_path()))
@@ -428,8 +417,7 @@ class TestCodexAddRemove(unittest.TestCase):
 
         se._codex_remove(self.info)
 
-        # The file is never unlinked (it's Git infrastructure, not
-        # Bindle's to remove) — but no Bindle-owned content may remain.
+        # Never unlinked (Git infrastructure), but Bindle content must be gone.
         self.assertTrue(os.path.exists(self._info_exclude_path()))
         with open(self._info_exclude_path()) as f:
             content = f.read()
@@ -448,8 +436,7 @@ class TestCodexAddRemove(unittest.TestCase):
         with open(self._info_exclude_path()) as f:
             content = f.read()
         self.assertEqual(content.count(".agents/skills/a/"), 1)
-        # The pre-existing, foreign line is never absorbed into Bindle's
-        # own managed block.
+        # The pre-existing foreign line is never absorbed into Bindle's block.
         self.assertNotIn(se._EXCLUDE_BLOCK_BEGIN, content)
 
     def test_remove_is_idempotent(self):
@@ -481,15 +468,12 @@ class TestCodexModifiedContentSafety(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("conflict", line)
 
-        # Modified content survives byte-for-byte.
         with open(modified_path) as f:
             self.assertIn("user edit", f.read())
 
-        # The unmodified owned directory ("b") was still removed.
         self.assertFalse(os.path.exists(os.path.join(self.repo, ".agents", "skills", "b")))
 
-        # Ownership evidence for "a" is retained so a future remove can
-        # still act on it safely; "b" is gone from the marker.
+        # "a" keeps its ownership evidence for a later remove; "b" is gone.
         marker = se._read_marker(self.info)
         self.assertIn("a", marker["skills"])
         self.assertNotIn("b", marker["skills"])
@@ -611,9 +595,7 @@ class TestCodexMultiWorktree(unittest.TestCase):
 @unittest.skipUnless(_HAS_REAL_CLAUDE, "claude CLI not installed")
 @unittest.skipUnless(_HAS_REAL_GIT, "git not installed")
 class TestRealClaudeAndCodexIntegration(unittest.TestCase):
-    """Exercises the real `claude` CLI and a real clone of t-step/skills,
-    fully isolated from the user's live Claude configuration via
-    CLAUDE_CONFIG_DIR (AGENTS.md's Runtime Isolation rule)."""
+    """Real `claude` CLI and skills clone, isolated via CLAUDE_CONFIG_DIR."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

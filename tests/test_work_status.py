@@ -24,14 +24,12 @@ class LedgerTestCase(unittest.TestCase):
 
 
 class TestIsDispatchableCoherence(LedgerTestCase):
-    """specs/005-work-state-visibility research.md: "dispatchable-next
-    shares one authoritative predicate" — `is_dispatchable()` must agree
-    with `list_available_work_items()`'s own live return value for every
-    constructed task, across every (status, claimed, blocked) combination
-    a real ledger can produce. This is the regression guard on
-    `list_available_work_items()`'s internal refactor (data-model.md),
-    not the mechanism that establishes the invariant — the refactored
-    method's own shared function call is."""
+    """specs/005 research.md: `is_dispatchable()` matches the live query.
+
+    Checked across every (status, claimed, blocked) combination for
+    `list_available_work_items()`. A regression guard on the refactor, not the
+    mechanism that establishes the invariant (the shared function call is).
+    """
 
     def test_coherence_across_mixed_status_claim_block_combinations(self):
         # open/unclaimed/unblocked
@@ -99,10 +97,7 @@ class TestIsDispatchableCoherence(LedgerTestCase):
 
 
 class TestBuildSnapshot(LedgerTestCase):
-    """specs/005-work-state-visibility User Story 1 (spec.md SC-001/SC-002):
-    every fact `build_snapshot()` reports must equal a direct call to the
-    underlying `WorkLedger`/`milestone_review` method on the same ledger —
-    never a second, independently-derived computation."""
+    """specs/005 US1 (SC-001/SC-002): snapshot facts equal ledger calls."""
 
     def test_empty_ledger_produces_empty_but_valid_snapshot(self):
         snapshot = work_status.build_snapshot(self.ledger)
@@ -233,8 +228,7 @@ class TestBuildSnapshot(LedgerTestCase):
 
 
 class TestSnapshotToJson(LedgerTestCase):
-    """specs/005-work-state-visibility User Story 2 (spec.md SC-003/SC-004,
-    contracts/work-status-json-v1.md)."""
+    """specs/005 US2 (SC-003/SC-004, contracts/work-status-json-v1.md)."""
 
     def _mixed_snapshot(self):
         self.ledger.create_work_item(
@@ -333,23 +327,17 @@ class TestSnapshotToJson(LedgerTestCase):
     def test_no_timestamp_field_anywhere_in_the_serialized_structure(self):
         snapshot = self._mixed_snapshot()
         payload = work_status.snapshot_to_json(snapshot)
-        # The only ISO-8601 timestamp anywhere in the payload is the
-        # claim's own recorded `claimed_at` — nothing else (task/milestone
-        # level) carries a wall-clock "generated at" value.
+        # The only timestamp is the claim's own `claimed_at`, no "generated at".
         flat = json.dumps(payload)
         occurrences = flat.count(self.ledger.get_claim("D").claimed_at)
         self.assertEqual(occurrences, 1)
 
 
 class TestBuildForecast(LedgerTestCase):
-    """specs/005-work-state-visibility User Story 4 (spec.md SC-007/SC-008):
-    `build_forecast()` is a pure relate over an already-built
-    `WorkStatusSnapshot` — no ledger access, no re-derivation of
-    blocking/dispatchable rules."""
+    """specs/005 US4 (SC-007/SC-008): build_forecast() only reads a snapshot."""
 
     def _worked_example(self):
-        # spec.md's own worked example: C blocked on {A, B}; D blocked on
-        # {A} and claimed (Acceptance Scenario US4.5).
+        # spec.md example (US4.5): C blocked on {A, B}; D on {A}, claimed.
         self.ledger.create_work_item(
             id="A", title="A", source_kind="adhoc", source_locator="x"
         )
@@ -391,8 +379,7 @@ class TestBuildForecast(LedgerTestCase):
         self.assertEqual(by_blocker["B"].unblocked_next, [])
 
     def test_dispatchable_next_task_only_and_uses_authoritative_predicate(self):
-        # Rebuild without D's claim so it would actually become
-        # dispatchable-next once A resolves.
+        # Rebuild without D's claim so D is dispatchable-next once A resolves.
         self.ledger.create_work_item(
             id="A", title="A", source_kind="adhoc", source_locator="x"
         )
@@ -439,10 +426,7 @@ class TestBuildForecast(LedgerTestCase):
         self.assertNotIn("F", by_blocker["A"].dispatchable_next)
 
     def test_dangling_blocking_id_is_grouped_exactly_as_declared(self):
-        # A genuinely dangling blocker (an id that never validly identified
-        # a work item) is only reachable, in the normal write path, via a
-        # connection that ran without foreign keys enabled — mirrors
-        # tests/test_work_ledger.py's own "dangling blocker" fixture.
+        # A dangling blocker needs a connection without foreign keys.
         self.ledger.create_work_item(
             id="G", title="G", source_kind="adhoc", source_locator="x",
         )
@@ -491,8 +475,7 @@ class TestBuildForecast(LedgerTestCase):
 
 
 class TestRenderForecastText(LedgerTestCase):
-    """spec.md SC-008: `bindle work forecast`'s plain-text output must
-    never name a time, date, duration, or ETA."""
+    """SC-008: `bindle work forecast` text never names a time, date, or ETA."""
 
     def test_no_time_date_or_eta_language_anywhere_in_output(self):
         self.ledger.create_work_item(
@@ -544,10 +527,7 @@ class TestRenderForecastText(LedgerTestCase):
 
 
 class TestWatchIntervalResolution(unittest.TestCase):
-    """T015 (specs/005-work-state-visibility, Phase 5 - US3): FR-011's
-    clamping rule is a small, pure function — no override, an
-    at-or-above-minimum override, and a below-minimum override are the
-    only three cases."""
+    """T015 (specs/005, US3, FR-011): the clamping function's three cases."""
 
     def test_no_override_uses_default(self):
         self.assertEqual(
@@ -580,11 +560,7 @@ class TestWatchIntervalResolution(unittest.TestCase):
 
 
 class TestWatchSnapshots(LedgerTestCase):
-    """T016/T017 (specs/005-work-state-visibility, Phase 5 - US3):
-    `watch_snapshots()` is the smallest testable seam over an otherwise
-    infinite loop — an injected `sleep` callable lets these tests drive
-    a bounded number of iterations with no real wall-clock wait, no
-    thread, and no subprocess."""
+    """T016/T017 (specs/005, US3): injected `sleep` bounds watch_snapshots()."""
 
     def _sleep_recorder(self):
         calls: list[float] = []
@@ -658,8 +634,7 @@ class TestWatchSnapshots(LedgerTestCase):
         with self.assertRaises(KeyboardInterrupt):
             for snapshot in gen:
                 collected.append(snapshot)
-        # two full refreshes were already yielded before the interrupt —
-        # no partial/half-built snapshot is ever produced (SC-006)
+        # Two full refreshes preceded the interrupt; no partial one (SC-006).
         self.assertEqual(len(collected), 2)
 
 

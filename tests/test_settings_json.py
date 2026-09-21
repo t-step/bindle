@@ -1,11 +1,9 @@
 """Unit tests for src/bindle/_bin/settings_json.py.
 
-This is the jq-free JSON helper install-guardrails.sh uses for the
-Claude-layer settings.local.json merge (docs/DECISIONS.md D032's "jq
-elimination" amendment). Loaded directly from its file path (not via
-`import bindle...`) because it's a package-owned runtime asset, not part
-of the bindle package's own import surface — see cli.py's
-_installer_path()/_installer_env().
+The jq-free JSON helper install-guardrails.sh uses for the settings.local.json
+merge (D032). Loaded from its file path, not `import bindle...`, because it is a
+runtime asset outside the package import surface (see cli.py
+`_installer_path()`/`_installer_env()`).
 """
 
 import contextlib

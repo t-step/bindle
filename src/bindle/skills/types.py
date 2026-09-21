@@ -1,16 +1,13 @@
 """Small shared shapes used by every kit module (software_engineering.py, spec_kit.py).
 
-Deliberately minimal: a per-harness status string and a result type for
-add()/remove(). Not a generic provider/component framework — see
-docs/DECISIONS.md D035.
+Deliberately minimal, not a provider/component framework (D035).
 """
 
 from __future__ import annotations
 
 import dataclasses
 
-# Per-harness status vocabulary. Not every kit/harness pair uses every
-# state — only the ones with an objective predicate behind them:
+# Per-harness statuses; a pair uses only those with an objective predicate:
 #   installed      the projection is present and usable
 #   not-installed  nothing is present
 #   partial        some but not all of the kit's expected content is present
@@ -31,11 +28,9 @@ class KitStatus:
 class KitOpOutcome:
     """Result of add()/remove() for one kit.
 
-    `ok` is False only when something that should have worked failed
-    unexpectedly — never merely because a harness's provider was
-    unavailable (that is reported in `lines`, not treated as failure).
-    `lines` are ready-to-print, human-readable result lines, one (or a
-    few) per harness.
+    `ok` is False only on an unexpected failure, never merely because a
+    harness's provider was unavailable (that is reported in `lines`). `lines`
+    are ready-to-print result lines.
     """
 
     ok: bool

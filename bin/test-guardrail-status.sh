@@ -5,14 +5,12 @@
 # detect_git_guardrails/detect_claude_guardrails, src/bindle/guardrails.py).
 #
 # Proves the five-state contract — installed / not-installed / partial /
-# conflict / invalid — against REAL repository/configuration state, using
-# the exact fixtures a developer's repo could actually be in, rather than
-# mocking the filesystem away. Complements bin/test-guardrail-ownership.sh
-# (the opt-in/opt-out end-to-end contract) and bin/test-install-guardrails.sh
-# (Claude-layer settings mechanics): this file is specifically about
-# read-only detection never drifting from what --apply/--uninstall already
-# enforce, and never mutating anything itself. Fully isolated (its own
-# HOME) — never touches the real ~/.claude or ~/.local/share/bindle.
+# conflict / invalid — against REAL repository/configuration state, not a
+# mocked filesystem. Complements bin/test-guardrail-ownership.sh (opt-in/out)
+# and bin/test-install-guardrails.sh (Claude-layer settings): this file is
+# about read-only detection never drifting from what --apply/--uninstall
+# enforce, and never mutating anything. Fully isolated (its own HOME) — never
+# touches the real ~/.claude or ~/.local/share/bindle.
 #
 # Usage: bin/test-guardrail-status.sh
 #
@@ -91,11 +89,8 @@ exclude_file_for() { # exclude_file_for REPO
   printf '%s/info/exclude' "$(git -C "$1" rev-parse --path-format=absolute --git-common-dir)"
 }
 
-# repo_local_config_snapshot REPO — a deterministic snapshot of every piece
-# of state --status is allowed to READ but never WRITE: local git config,
-# the guardrail-owned files/directories under .git, and
-# .claude/settings.local.json. Used to prove repeated --status calls (and
-# `bindle status` itself) are genuinely no-ops.
+# repo_local_config_snapshot REPO — all state --status may READ but never WRITE:
+# local git config, bindle-* files under the common dir, settings.local.json.
 # shellcheck disable=SC2317,SC2329
 repo_local_config_snapshot() { # repo_local_config_snapshot REPO
   local repo="$1"
@@ -128,7 +123,6 @@ mkdir -p "$HOME"
 git config --global user.email test@example.com
 git config --global user.name Test
 
-# ===========================================================================
 echo "not-installed: a never-initialized repository reports not-installed for both layers:"
 
 UNINIT="$TMP/uninit-repo"
@@ -136,7 +130,6 @@ new_fixture "$UNINIT"
 check "Git: not-installed" assert_git_status "$UNINIT" not-installed
 check "Claude: not-installed" assert_claude_status "$UNINIT" not-installed
 
-# ===========================================================================
 echo "installed: a clean 'bindle init' reports installed for both layers:"
 
 INSTALLED="$TMP/installed-repo"
@@ -145,7 +138,6 @@ new_fixture "$INSTALLED"
 check "Git: installed" assert_git_status "$INSTALLED" installed
 check "Claude: installed" assert_claude_status "$INSTALLED" installed
 
-# ===========================================================================
 echo "partial: recognizable Bindle ownership, incomplete installation (Git):"
 
 GIT_PARTIAL_UNWIRED="$TMP/git-partial-unwired"
@@ -226,7 +218,6 @@ check "(precondition) Bindle did NOT create its own exclude-ownership marker (th
 check "Claude: installed even though no exclude-ownership marker exists, because Bindle never needed to claim one" \
   assert_claude_status "$CLAUDE_PREEXISTING_IGNORE" installed
 
-# ===========================================================================
 echo "conflict: the integration point is occupied by something that isn't Bindle's own:"
 
 GIT_CONFLICT="$TMP/git-conflict"
@@ -245,7 +236,6 @@ git -C "$CLAUDE_CONFLICT" commit -q -m "chore: track settings"
 check "Claude: conflict when settings.local.json is tracked (team-owned) in Git" \
   assert_claude_status "$CLAUDE_CONFLICT" conflict
 
-# ===========================================================================
 echo "invalid: Bindle-owned-looking state that is malformed enough that ownership can't safely be established:"
 
 CLAUDE_INVALID="$TMP/claude-invalid"
@@ -269,7 +259,6 @@ printf 'not valid json' >"$CLAUDE_UNRELATED_BROKEN/.claude/settings.local.json"
 check "Claude: a broken settings.local.json with NO Bindle artifacts alongside it reports not-installed, not invalid (it isn't Bindle's to diagnose)" \
   assert_claude_status "$CLAUDE_UNRELATED_BROKEN" not-installed
 
-# ===========================================================================
 echo "mixed Git/Claude states in one repository are detected independently:"
 
 MIXED="$TMP/mixed-repo"
@@ -282,7 +271,6 @@ rm -f "$(claude_dir_for "$MIXED")/allow-main-write.sh"
 check "mixed repo: Git reports conflict" assert_git_status "$MIXED" conflict
 check "mixed repo: Claude independently reports partial" assert_claude_status "$MIXED" partial
 
-# ===========================================================================
 echo "repeated --status calls cause no mutation, for every state above:"
 
 for repo in "$UNINIT" "$INSTALLED" "$GIT_PARTIAL_UNWIRED" "$CLAUDE_PARTIAL" \
@@ -292,7 +280,6 @@ for repo in "$UNINIT" "$INSTALLED" "$GIT_PARTIAL_UNWIRED" "$CLAUDE_PARTIAL" \
     assert_no_mutation_from_repeated_status "$repo"
 done
 
-# ===========================================================================
 echo "--status never gates on or migrates recognized legacy global state:"
 
 LEGACY_TEMPLATE="$TMP/legacy-template"
@@ -315,6 +302,5 @@ check "the legacy global core.hooksPath was NOT migrated away by a status call" 
 git config --global --unset core.hooksPath
 rm -rf "$LEGACY_GIT_DIR"
 
-# ===========================================================================
 printf '\n  guardrail-status: %d/%d checks passed\n' "$pass" "$((pass + fail))"
 exit "$fail"

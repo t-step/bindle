@@ -56,9 +56,7 @@ def get_repo_info(cwd: str | None = None) -> RepoInfo:
     )
     head_sha = _git(["rev-parse", "HEAD"], cwd)
 
-    # git-common-dir normally points at "<repo root>/.git", shared by every
-    # linked worktree — that shared parent is the repository identity,
-    # distinct from the worktree root of the checkout we were invoked from.
+    # git-common-dir is usually "<repo root>/.git", shared by linked worktrees.
     if os.path.basename(git_common_dir) == ".git":
         repo_root = os.path.dirname(git_common_dir)
     else:

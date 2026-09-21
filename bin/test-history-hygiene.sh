@@ -6,18 +6,16 @@
 # pre-push "history hygiene" report, and the `--history` on-demand mode.
 #
 # Every check runs against throwaway fixture repos under a private HOME
-# (AGENTS.md "Runtime isolation"). Nothing is ever pushed: end-to-end push
-# checks use `git push --dry-run` against a throwaway local bare repository,
-# which runs the real pre-push hook and protocol but sends nothing — the
-# suite asserts that remote is still empty afterwards.
+# (AGENTS.md "Runtime isolation"). Nothing is ever pushed: push checks use
+# `git push --dry-run` against a local bare repo, which runs the real pre-push
+# hook but sends nothing; the suite asserts that remote stays empty.
 #
 # Usage: bin/test-history-hygiene.sh
 #
 # shellcheck disable=SC2317,SC2329  # helpers below are invoked indirectly via check() (older shellcheck reports SC2317, newer SC2329)
 set -uo pipefail
 
-# Same gotcha as bin/test-git-hook-dispatch.sh: under a git hook, git exports
-# GIT_DIR and friends; a fixture git call would otherwise hit the real repo.
+# Under a git hook, exported GIT_DIR would aim fixture git at the real repo.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -135,7 +133,6 @@ info_count() { grep -c '^INFO' <<<"$OUT" || true; }
 no_shell_errors() { ! grep -qiE 'unbound|syntax error|command not found|: line [0-9]+:' <<<"$OUT"; }
 hook_path() { printf '%s/bindle-hooks/%s' "$(git -C "$R" rev-parse --path-format=absolute --git-common-dir)" "$1"; }
 
-# ===========================================================================
 echo "commit-msg: Conventional Commit subjects"
 new_repo "$TMP/cc"
 git -C "$R" switch -q -c feat/msgs
@@ -161,7 +158,6 @@ check "the rejection message lists the cog.toml-extended types" has "wibble"
 check "the rejection message names the fixup convention" has "git commit --fixup=<target>"
 discard_pending
 
-# ===========================================================================
 echo "commit-msg: fixup!/squash!/amend! control commits"
 target="$(git -C "$R" rev-parse HEAD)"
 before_count="$(git -C "$R" rev-list --count main..HEAD)"
@@ -179,7 +175,6 @@ check "a stacked prefix (fixup! fixup! …) is allowed" commit_ok "fixup! fixup!
 check "a bare 'fixup!' with no target is still rejected" commit_rejected "fixup!"
 discard_pending
 
-# ===========================================================================
 echo "commit-msg: other Git-generated subjects"
 new_repo "$TMP/gen"
 git -C "$R" switch -q -c feat/gen
@@ -197,7 +192,6 @@ check "amending an existing merge commit (subject kept) is allowed" bash -c "
 check "'Merge …' with no merge in progress is NOT exempt" commit_rejected "Merge quick hack"
 check "'Revert \"x\" and more' (not the shape git revert generates) is NOT exempt" commit_rejected 'Revert "wip" and more'
 
-# ===========================================================================
 echo "commit-msg: the convention is opt-in per repository"
 new_repo "$TMP/nocog" nocog
 git -C "$R" switch -q -c feat/plain
@@ -218,7 +212,6 @@ git -C "$R" config bindle.conventionalCommits false
 check "bindle.conventionalCommits=false turns it off despite cog.toml" commit_ok "just some words"
 git -C "$R" config --unset bindle.conventionalCommits
 
-# ===========================================================================
 echo "commit-msg: composition with a repository-native commit-msg hook"
 new_repo "$TMP/native"
 git -C "$R" switch -q -c feat/native
@@ -246,7 +239,6 @@ else
   printf '  - cog not installed: real-cog composition checks skipped\n'
 fi
 
-# ===========================================================================
 echo "protected main, linked worktrees, detached HEAD"
 new_repo "$TMP/main1"
 echo x >"$R/f2.txt"
@@ -297,7 +289,6 @@ RC=$?
 check "an unresolvable ref is a usage error (exit 2), not a crash" rc_is 2
 check "…with a message" has "cannot resolve 'no-such-ref'"
 
-# ===========================================================================
 echo "pre-push: pending autosquash commits are a hard failure"
 new_repo "$TMP/push"
 git -C "$R" switch -q -c feat/p
@@ -454,7 +445,6 @@ printf 'refs/tags/a %s refs/tags/a %s\nrefs/tags/b %s refs/tags/b %s\n' "$ZEROS"
 tail -n +2 "$TMP/native-pre-push.out" >"$TMP/tags.out"
 check "a multi-line ref list is replayed byte-for-byte" cmp -s "$TMP/tags.in" "$TMP/tags.out"
 
-# ===========================================================================
 echo "pre-push: end-to-end through git push --dry-run (nothing is sent)"
 new_repo "$TMP/e2e"
 git init -q --bare "$TMP/e2e-remote.git"
@@ -486,7 +476,6 @@ check "git push --dry-run goes through once the history is clean" bash -c \
 check "…and the throwaway remote never received anything" bash -c \
   "[ \"\$(git -C '$TMP/e2e-remote.git' for-each-ref | wc -l | tr -d ' ')\" -eq 0 ]"
 
-# ===========================================================================
 echo "advisory signals are warnings only (never blockers)"
 new_repo "$TMP/sig"
 git -C "$R" switch -q -c feat/sig
@@ -598,7 +587,6 @@ git -C "$R" switch -q -c feat/none
 run_hist
 check "a branch with no commits ahead of its base says so" has "no commits ahead of main"
 
-# ===========================================================================
 echo "reporting is read-only"
 new_repo "$TMP/ro"
 git -C "$R" switch -q -c feat/ro
@@ -630,6 +618,5 @@ check "refs, HEAD, reflog, index, and staged/unstaged/untracked files are unchan
   test "$before" = "$after"
 check "(sanity) the report did have a BLOCK to act on" has "BLOCK"
 
-# ===========================================================================
 printf '\n  history-hygiene: %d/%d checks passed\n' "$pass" "$((pass + fail))"
 exit "$fail"

@@ -1,27 +1,20 @@
 #!/usr/bin/env python3
 """settings_json.py — structural JSON helper for install-guardrails.sh.
 
-Replaces jq as the Claude-layer settings.local.json merge engine, so
-`bindle init`/`bindle remove`/`bindle migrate-legacy-global` need only the
-interpreter already running Bindle itself (see docs/DECISIONS.md D032's
-"jq elimination" amendment) — no external `jq` binary. This script is a
-package-owned runtime asset, resolved and invoked exactly like the sibling
-shell scripts in this directory, and deliberately has no dependency on the
-`bindle` package itself (stdlib only), so it runs under any interpreter
-install-guardrails.sh is told to use ($BINDLE_PYTHON, falling back to
-`python3` on PATH for direct/test invocation).
+Claude-layer settings.local.json merge engine (D032's "jq elimination"
+amendment), so `bindle init`/`remove`/`migrate-legacy-global` need no external
+`jq`. Package-owned runtime asset, stdlib only and independent of the `bindle`
+package, so it runs under any interpreter install-guardrails.sh is given
+($BINDLE_PYTHON, falling back to `python3` on PATH for direct/test invocation).
 
-Every verb is a narrow, single-purpose operation mirroring exactly one jq
-filter the shell installer used to run — this is not a general JSON-patch
-framework. The canonical secret/deny-policy data (FILE_DENY_GLOBS, etc.)
-stays declared in install-guardrails.sh; this script only ever receives an
-already-expanded manifest as a JSON array argument.
+Each verb is one narrow operation, not a general JSON-patch framework. The
+canonical secret/deny-policy data (FILE_DENY_GLOBS, etc.) stays in
+install-guardrails.sh; this script only receives an already-expanded manifest as
+a JSON array argument.
 
-Every mutating verb writes atomically: build the new document, write it to
-a temp file in the destination's own directory, then os.replace() into
-place. On any failure, the destination is left completely untouched, the
-temp file is cleaned up, and nothing is printed — same contract as the
-jq_atomic_write bash helper it replaces.
+Every mutating verb writes atomically (temp file in the destination's directory,
+then os.replace()): on any failure the destination is untouched, the temp file
+is cleaned up, and nothing is printed.
 
 Usage: settings_json.py VERB [ARGS...]
 """
@@ -80,9 +73,6 @@ def _filter_pretooluse(doc, matcher: str, cmd: str):
         return not any(h.get("command") == cmd for h in entry.get("hooks") or [])
 
     return [entry for entry in entries if keep(entry)]
-
-
-# --- verbs -------------------------------------------------------------
 
 
 def cmd_valid_json(args):
@@ -203,10 +193,7 @@ def cmd_merge_deny(args):
 
 
 def cmd_deny_subset(args):
-    """Exit 0 iff every entry in SUBSET_JSON is already present in the
-    document's permissions.deny — used by `bindle status` to check whether
-    Bindle's previously-recorded owned deny entries are all still intact,
-    without ever writing anything."""
+    """Exit 0 iff SUBSET_JSON is a subset of permissions.deny; never writes."""
     path, subset_json = args
     try:
         doc = _load(path)
@@ -258,10 +245,10 @@ def cmd_lines_to_json_array(args):
 
 
 def _is_effectively_empty(value) -> bool:
-    """True iff VALUE is None, an empty container, or a (nested) structure
-    made up of nothing but empty containers. A non-empty list or a scalar
-    (including False/0/"") is never effectively empty — any of those
-    represents real content, even if falsy."""
+    """True iff VALUE is None or only (nested) empty containers.
+
+    A non-empty list or any scalar (even False/0/"") is real content.
+    """
     if value is None:
         return True
     if isinstance(value, dict):
@@ -272,12 +259,12 @@ def _is_effectively_empty(value) -> bool:
 
 
 def cmd_doc_is_empty(args):
-    """Exit 0 iff the settings document at PATH holds nothing but empty
-    containers (e.g. {}, {"hooks": {"PreToolUse": []}}) once Bindle's own
-    entries have already been removed from it — used by --uninstall to
-    decide whether the file itself (and its ignore rule) is safe to remove
-    entirely, versus still holding unrelated user content that must be
-    preserved untouched."""
+    """Exit 0 iff the document holds only empty containers.
+
+    E.g. {} or {"hooks": {"PreToolUse": []}}. Used by --uninstall, after
+    Bindle's entries are removed, to decide whether the file (and its ignore
+    rule) can go or still holds user content that must be preserved.
+    """
     (path,) = args
     try:
         doc = _load(path)

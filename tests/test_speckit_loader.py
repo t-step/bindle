@@ -9,13 +9,7 @@ from bindle import speckit_loader, work_ledger
 
 
 class SpeckitLoaderTestCase(unittest.TestCase):
-    """Base fixture: a temp directory standing in for a repository's Git
-    common-directory-resolved `repo_root`, with real `specs/NNN-slug/
-    tasks.md` fixture files written to disk — `load_feature()` reads
-    `tasks.md` from the filesystem, so this needs real files, not an
-    in-memory stand-in (mirrors `tests/test_work_ledger.py`'s own
-    `LedgerTestCase` fixture pattern, extended with a helper for writing a
-    feature directory's `tasks.md`)."""
+    """Temp `repo_root` with real tasks.md files: load_feature() reads disk."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -26,9 +20,7 @@ class SpeckitLoaderTestCase(unittest.TestCase):
         self.tmp.cleanup()
 
     def write_tasks_md(self, feature_dir: str, content: str) -> str:
-        """Write `content` to `{repo_root}/{feature_dir}/tasks.md`, creating
-        the feature directory if needed. Returns `feature_dir` unchanged,
-        for convenient chaining into `load_feature()` calls."""
+        """Write `content` to the feature's tasks.md; return `feature_dir`."""
         full_dir = os.path.join(self.repo_root, feature_dir)
         os.makedirs(full_dir, exist_ok=True)
         with open(os.path.join(full_dir, "tasks.md"), "w", encoding="utf-8") as f:
@@ -48,10 +40,7 @@ _BASIC_TASKS_MD = """\
 
 
 class TestLoadFeatureBasic(SpeckitLoaderTestCase):
-    """T006 (Acceptance Scenario 1.1): loading a fixture tasks.md (several
-    task lines) creates one type='task' work item per line with the
-    correct derived id/source_kind='speckit_task'/source_locator, each
-    open."""
+    """T006 (Acceptance Scenario 1.1): one open task item per task line."""
 
     def test_creates_one_open_task_per_line(self):
         feature_dir = self.write_tasks_md(
@@ -110,9 +99,7 @@ class TestLoadFeatureBasic(SpeckitLoaderTestCase):
 
 
 class TestLoadFeatureCrossFeatureCollision(SpeckitLoaderTestCase):
-    """T007 (Acceptance Scenario 1.2, SC-004): two fixture feature
-    directories that each declare a "T001" load as two distinct,
-    independently identifiable work items with no collision."""
+    """T007 (Scenario 1.2, SC-004): equal ids in two features stay distinct."""
 
     def test_same_task_id_in_two_features_does_not_collide(self):
         feature_a = self.write_tasks_md(
@@ -144,9 +131,7 @@ class TestLoadFeatureCrossFeatureCollision(SpeckitLoaderTestCase):
 
 
 class TestLoadFeatureIdempotentReload(SpeckitLoaderTestCase):
-    """T008 (Acceptance Scenario 1.3, SC-002): reloading an unchanged
-    fixture a second time creates zero new work items and leaves every
-    existing row byte-for-byte unchanged."""
+    """T008 (Scenario 1.3, SC-002): an unchanged reload changes nothing."""
 
     def test_reload_with_no_source_changes_is_a_true_noop(self):
         feature_dir = self.write_tasks_md(
@@ -172,10 +157,7 @@ class TestLoadFeatureIdempotentReload(SpeckitLoaderTestCase):
 
 
 class TestLoadFeaturePreservesRuntimeState(SpeckitLoaderTestCase):
-    """T009 (Acceptance Scenario 1.4, FR-006, SC-003): mark one previously
-    loaded task done and claim a second, then reload the same feature
-    directory; confirm both tasks' status/claim are completely
-    unaffected."""
+    """T009 (Scenario 1.4, FR-006, SC-003): reload keeps status and claims."""
 
     def test_reload_never_disturbs_status_or_claim(self):
         feature_dir = self.write_tasks_md(
@@ -195,13 +177,10 @@ class TestLoadFeaturePreservesRuntimeState(SpeckitLoaderTestCase):
 
 
 class TestLoadFeatureDependencyOrderIndependence(SpeckitLoaderTestCase):
-    """T010 (Acceptance Scenario 1.5, FR-009): a fixture whose dependent
-    task line appears *before* the task line it depends on in file order
-    still resolves the blocked_by edge correctly."""
+    """T010 (Scenario 1.5, FR-009): a forward dependency still resolves."""
 
     def test_forward_reference_dependency_resolves(self):
-        # T001 depends on T002, but T002's own line appears *after* T001's
-        # in the file.
+        # T001 depends on T002, whose line appears after T001's.
         content = (
             "- [ ] T001 First task, depends on a later line. Depends on: T002.\n"
             "- [ ] T002 Second task, appears later in the file.\n"
@@ -218,11 +197,7 @@ class TestLoadFeatureDependencyOrderIndependence(SpeckitLoaderTestCase):
 class TestLoadFeatureDeclarativeResyncAndAdditiveDependencies(
     SpeckitLoaderTestCase
 ):
-    """T011 (Acceptance Scenario 1.6, FR-007, FR-008): editing a fixture's
-    task title/description text and adding a new Depends on: reference to
-    an already-loaded task between two loads is reflected on reload; a
-    previously recorded dependency is never removed even if a later edit
-    stops declaring it."""
+    """T011 (Scenario 1.6, FR-007, FR-008): edits resync; edges are kept."""
 
     def test_title_and_description_are_resynced_on_reload(self):
         feature_dir = self.write_tasks_md(
@@ -269,7 +244,7 @@ class TestLoadFeatureDeclarativeResyncAndAdditiveDependencies(
         speckit_loader.load_feature(self.ledger, feature_dir)
         self.assertTrue(self.ledger.is_blocked("speckit:001-example-feature:T002"))
 
-        # The next revision of tasks.md no longer declares the dependency.
+        # The next revision no longer declares the dependency.
         self.write_tasks_md(
             "specs/001-example-feature",
             "- [ ] T001 First task.\n"
@@ -282,12 +257,7 @@ class TestLoadFeatureDeclarativeResyncAndAdditiveDependencies(
 
 
 class TestLoadFeatureUnparseableLineAndMissingFile(SpeckitLoaderTestCase):
-    """T012 (Acceptance Scenario 1.7, FR-011; Edge Cases, FR-012): a
-    fixture containing one line that looks like an attempted task line
-    but doesn't fully match the parser's shape is reported as skipped
-    while every other well-formed line still loads; a feature directory
-    with a missing or empty tasks.md is reported clearly rather than
-    silently producing zero work items."""
+    """T012 (Scenario 1.7, FR-011, FR-012): skips; missing or empty file."""
 
     def test_unparseable_line_is_skipped_others_still_load(self):
         content = (
@@ -354,13 +324,7 @@ class TestLoadFeatureUnparseableLineAndMissingFile(SpeckitLoaderTestCase):
 
 
 class TestLoadFeatureSourceIdentityConflict(SpeckitLoaderTestCase):
-    """A task line's deterministic id can collide with an existing row
-    that was never loaded by this Spec Kit task at all -- an unrelated
-    adhoc item reusing the same id, or a speckit_task item recorded
-    against a different source_locator. The loader must not treat this as
-    an idempotent reload: it must raise SourceIdentityConflictError and
-    leave the colliding row -- and every other existing row -- completely
-    unmutated."""
+    """A foreign-provenance id collision raises SourceIdentityConflictError."""
 
     def test_collision_with_unrelated_adhoc_item_raises_and_does_not_mutate(
         self,
@@ -376,9 +340,7 @@ class TestLoadFeatureSourceIdentityConflict(SpeckitLoaderTestCase):
             source_kind="adhoc",
             source_locator="manually created, not from Spec Kit",
         )
-        # A second, pre-existing work item with nothing to do with this
-        # collision at all -- proof the conflict does not leak mutation
-        # beyond the colliding row.
+        # An unrelated item: the conflict must not mutate other rows.
         self.ledger.create_work_item(
             id="unrelated-item",
             title="Some other work item entirely.",
@@ -405,8 +367,7 @@ class TestLoadFeatureSourceIdentityConflict(SpeckitLoaderTestCase):
             "- [ ] T001 Set up the project scaffolding.\n",
         )
         colliding_id = "speckit:001-example-feature:T001"
-        # Same source_kind, but a source_locator naming a different
-        # feature/task -- not this loader's own source.
+        # Same source_kind but another feature/task's source_locator.
         self.ledger.create_work_item(
             id=colliding_id,
             title="A different speckit task with the same derived id.",
@@ -422,11 +383,7 @@ class TestLoadFeatureSourceIdentityConflict(SpeckitLoaderTestCase):
 
 
 class TestLoadFeatureDuplicateTaskId(SpeckitLoaderTestCase):
-    """A tasks.md that declares the same Spec Kit task id on more than one
-    line must not silently let the later line's parsed content overwrite
-    the earlier one's -- reported explicitly as a load-stopping
-    TasksFileError naming both conflicting line numbers, with zero work
-    items created from any line in the file."""
+    """A repeated task id raises TasksFileError and loads nothing."""
 
     def test_duplicate_task_id_raises_with_line_numbers_and_creates_nothing(
         self,
@@ -446,8 +403,7 @@ class TestLoadFeatureDuplicateTaskId(SpeckitLoaderTestCase):
         self.assertIn("line 1", message)
         self.assertIn("line 3", message)
 
-        # The whole load stopped during parsing, before pass 1 ever ran --
-        # not even the unambiguous T002 line was loaded.
+        # Parsing stopped the load before pass 1, so T002 didn't load either.
         self.assertIsNone(
             self.ledger.get_work_item("speckit:001-example-feature:T001")
         )
@@ -457,10 +413,7 @@ class TestLoadFeatureDuplicateTaskId(SpeckitLoaderTestCase):
 
 
 class TestLoadFeatureUnresolvedDependency(SpeckitLoaderTestCase):
-    """spec.md Edge Cases: a task line names a dependency on a Spec Kit
-    task id that does not exist anywhere in the same tasks.md — the
-    loader reports this rather than silently creating a dangling
-    reference or silently dropping the dependency (FR-010)."""
+    """spec.md Edge Cases (FR-010): an unknown dependency id is reported."""
 
     def test_dependency_on_nonexistent_task_id_is_reported(self):
         feature_dir = self.write_tasks_md(

@@ -2,23 +2,15 @@
 #
 # test-check-private-info.sh — self-test suite for bin/check-private-info.sh.
 #
-# The scanner's own --self-test proves the pattern rules still catch a relay
-# email, a home path, a vault path, a transcript, and a denylist term. This
-# suite carries that self-test forward, plus proves the self-test is itself
-# failable (a gate that cannot go red is decoration), that the tree sweep
-# discloses its own scope, and that the denylist audit mode behaves.
-#
-# Bindle has no CI and no test-suite discovery mechanism (AGENTS.md); run
-# this manually, from a local pre-commit hook, or from any other check you
-# wire up by hand. It does not register itself anywhere automatically.
+# Carries the scanner's own --self-test forward and proves it is failable (a
+# gate that cannot go red is decoration), that the tree sweep discloses its
+# scope, and that the denylist audit mode behaves.
 #
 # Usage: bin/test-check-private-info.sh
 #
 set -uo pipefail
 
-# Under a git hook (pre-commit/post-merge), git exports GIT_DIR and friends to
-# subprocesses; in a worktree GIT_DIR is absolute, so a fixture git call would
-# hit the real repository. Scrub the hook environment.
+# Hook-exported GIT_DIR (absolute in a worktree) would aim fixtures at the repo.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -45,7 +37,6 @@ not_contains() { ! grep -qF -- "$1" <<<"$2"; } # not_contains NEEDLE HAYSTACK
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# ===========================================================================
 echo "scanner self-test reaches this gate:"
 
 selftest_out="$("$SCANNER" --self-test 2>&1)"
@@ -55,16 +46,12 @@ check "bin/check-private-info.sh --self-test exits clean" [ "$selftest_rc" -eq 0
 check "reports the scanner catches fixtures and passes clean files" \
   contains "scanner catches all fixtures, passes clean files" "$selftest_out"
 
-# ===========================================================================
 echo "self-test coverage floor:"
 
-# The self-test prints "  self-test: <behaved>/<total> fixtures behaved". A
-# fixture deleted from the self-test lowers <total> while the exit code stays
-# 0 — coverage can shrink silently. Assert every fixture behaved AND that the
-# fixture count has not dropped below what #268 left in place (16), the
-# three #289 message/read-fallback fixtures, and the #271 0-term-verdict
-# fixture. Raise FLOOR when fixtures are added; never lower it to make a red
-# suite green.
+# A fixture deleted from the self-test lowers <total> while the exit code stays
+# 0, so coverage can shrink silently. FLOOR = #268's 16 fixtures + the three
+# #289 message/read-fallback ones + the #271 0-term-verdict one. Raise it when
+# fixtures are added; never lower it to make a red suite green.
 FLOOR=20
 counts="$(sed -n 's|.*self-test: \([0-9]\{1,\}\)/\([0-9]\{1,\}\) fixtures behaved.*|\1 \2|p' <<<"$selftest_out")"
 behaved="${counts% *}"
@@ -74,30 +61,15 @@ check "self-test reports a fixture count" [ -n "$counts" ]
 check "every fixture behaved ($behaved/$total)" [ "$behaved" = "$total" ]
 check "fixture coverage has not shrunk (>= $FLOOR)" [ "${total:-0}" -ge "$FLOOR" ]
 
-# ===========================================================================
-# The tree sweep enumerates with `git ls-files`, so an untracked file is
-# invisible to it — and the clean verdict said only "no private info found".
-# In PR #345 that verdict was true and useless: the three offending files were
-# untracked when it ran. Same shape as the denylist disclosure directly above
-# it — "nothing matched" and "nothing was checked" must never print the same
-# line (#347).
+# git ls-files hides untracked files; a clean verdict must say so (#347).
 echo "sweep discloses its own scope (#347):"
 
-# scope_repo DIR — a throwaway git repo holding a copy of the scanner, so the
-# sweep runs against fixture content only. The scanner derives its repo root
-# from its own location, hence bin/.
+# scope_repo DIR — throwaway git repo with a scanner copy; the scanner derives
+# its repo root from its own location, hence bin/.
 #
-# Fixtures commit on branch "main" (see git symbolic-ref below), which is
-# also the exact branch name a developer's globally installed Bindle
-# guardrail (core.hooksPath, docs/DECISIONS.md D031) protects on EVERY
-# repository on the machine, this throwaway one included. Left inherited,
-# that guard silently blocks every commit here after the first (a repo's
-# very first commit is exempt as unborn-HEAD), so a fixture's later
-# assertions would observe whatever commit history the developer happens to
-# have installed rather than the deterministic history the test wrote. Point
-# core.hooksPath at an empty, repo-local directory so this fixture's git
-# history depends only on this test, never on the invoking machine's global
-# hook configuration — same isolation goal as scrubbing GIT_DIR et al above.
+# core.hooksPath is pinned to an empty dir: the global Bindle guardrail (D031)
+# protects "main" on every repo and would block fixture commits after the
+# first, making history depend on the invoking machine.
 scope_repo() {
   local r="$1"
   mkdir -p "$r/bin"
@@ -109,19 +81,9 @@ scope_repo() {
     git add -A && git -c user.email=test@example.com -c user.name=test commit -q -m init)
 }
 
-# ===========================================================================
 echo "fixture repos are isolated from the invoking machine's global Git hooks:"
 
-# Direct proof of the scope_repo isolation above: a SECOND commit on the
-# fixture's "main" branch (HEAD already exists, so the unborn-branch
-# exemption no longer applies) must succeed and print nothing about a
-# guardrail, regardless of what the developer running this suite has
-# installed globally. Before core.hooksPath was pinned in scope_repo, this
-# was silently blocked on any machine with Bindle's guardrail installed
-# (docs/DECISIONS.md D031) — it just went unnoticed by most fixtures because
-# `git add -A` still puts the content in the index they scan; only a fixture
-# that reads real commit history (the rename-detection check further below)
-# ever surfaced the blocked commit as a failure.
+# The second commit matters: a repo's first commit is exempt as unborn HEAD.
 D="$TMP/scope-hook-isolation"
 scope_repo "$D"
 printf 'second commit\n' >"$D/second.md"
@@ -164,8 +126,7 @@ out="$(cd "$D" && bin/check-private-info.sh 2>&1)"
 
 check "an ignored file does not make the sweep PARTIAL" not_contains "PARTIAL" "$out"
 
-# Pre-commit passes an explicit file list: the scope IS the argument list, so
-# there is nothing to disclose and a banner would fire on every commit.
+# Pre-commit passes an explicit list: scope is the argument list, so no banner.
 D="$TMP/scope-explicit"
 scope_repo "$D"
 printf 'clean content\n' >"$D/untracked.md"
@@ -173,14 +134,10 @@ out="$(cd "$D" && bin/check-private-info.sh tracked.md 2>&1)"
 
 check "explicit-file mode does not report PARTIAL" not_contains "PARTIAL" "$out"
 
-# A red run must be as honest about scope as a green one — otherwise fixing
-# the findings turns a partial scan into an unqualified pass.
+# A red run must disclose scope too, or fixing findings yields a false pass.
 D="$TMP/scope-finding"
 scope_repo "$D"
-# Assembled at runtime, never spelled out: a literal home path in THIS file
-# would itself be a finding, needing a `private-ok` marker (see docs/PRIVACY.md).
-# The fixture file on disk still carries the real pattern, which is what the
-# sweep reads.
+# Assembled at runtime: a literal home path here would itself be a finding.
 printf 'see /Users/%s/notes\n' someone >"$D/leak.md"
 (cd "$D" && git add -A && git -c user.email=test@example.com -c user.name=test commit -q -m leak)
 printf 'clean content\n' >"$D/untracked.md"
@@ -190,19 +147,11 @@ rc=$?
 check "a run with findings still fails" [ "$rc" -ne 0 ]
 check "a run with findings still discloses the skipped files" contains "PARTIAL" "$out"
 
-# ===========================================================================
-# --staged must scan the INDEX content a commit would actually write, not
-# whatever the working tree happens to hold at scan time. Explicit-file mode
-# (bin/check-private-info.sh FILE...) reads the working tree by design and is
-# NOT the safe pre-commit path — --staged is. Without this, staging a private
-# line and then cleaning the working-tree copy before commit would scan clean
-# while Git commits the older, still-private, staged blob.
 echo "staged-content scanning reads the index, not the working tree:"
 
 D="$TMP/staged-private-clean-worktree"
 scope_repo "$D"
-# Assembled at runtime, never spelled out (see scope-finding above): a
-# literal relay email in THIS file would itself be a finding.
+# Assembled at runtime: a literal relay email here would itself be a finding.
 printf 'contact me: %s.123@%s.appleid.com\n' abc privaterelay >"$D/leak.md"
 (cd "$D" && git add leak.md)
 printf 'nothing to see here\n' >"$D/leak.md"
@@ -234,11 +183,7 @@ rc=$?
 check "a private-by-path staged file is flagged" [ "$rc" -ne 0 ]
 check "the private path is named" contains "session-notes/leak.md" "$out"
 
-# A staged RENAME into a forbidden path must not evade the private-path rule.
-# --diff-filter=ACM alone omits R (and T): a clean `git mv` with no content
-# change registers as a pure rename, which the old filter missed entirely
-# (empty enumeration) even though the destination is exactly what the
-# private-path rule exists to catch.
+# A pure `git mv` is status R, which --diff-filter=ACM omits; it must be caught.
 D="$TMP/staged-rename-into-private-path"
 scope_repo "$D"
 printf 'clean content\n' >"$D/normal.md"
@@ -268,12 +213,6 @@ out="$(cd "$D" && bin/check-private-info.sh --staged 2>&1)"
 rc=$?
 check "--staged with nothing staged reports clean, not an error" [ "$rc" -eq 0 ]
 
-# ===========================================================================
-# The selection rule (docs/PRIVACY.md): a denylist term belongs on the list
-# only if it has ZERO UNVOUCHED tracked occurrences, forever. --audit-denylist
-# proves each term against the tracked tree BEFORE the term starts flagging
-# every commit (#271), honoring the same 'private-ok' vouch the normal scan
-# does — a vouched occurrence doesn't count against the term.
 echo "denylist audit (--audit-denylist):"
 
 D="$TMP/audit-clean"
@@ -298,8 +237,6 @@ check "the unvouched hit location is named" contains "hot.md" "$out"
 check "a private-ok vouched occurrence of the same term is not reported" \
   not_contains "vouched.md" "$out"
 
-# A term whose ONLY tracked occurrence is vouched must pass the audit outright
-# — that's the whole point of honoring private-ok here.
 D="$TMP/audit-vouched-only"
 scope_repo "$D"
 printf 'zz-solo-term appears here  private-ok\n' >"$D/ok-vouched.md"
@@ -311,8 +248,6 @@ check "a term with only a vouched occurrence passes the audit" [ "$rc" -eq 0 ]
 check "a fully-vouched term reports zero unvouched hits" \
   contains "zero unvouched tracked hits" "$out"
 
-# Mixed case: one vouched occurrence, one unvouched — the audit must still
-# fail on the unvouched one and must name only that file, not the vouched one.
 D="$TMP/audit-mixed-vouch"
 scope_repo "$D"
 printf 'zz-mixed-term vouched here  private-ok\n' >"$D/ok-vouched.md"
@@ -325,9 +260,7 @@ check "a term with at least one unvouched occurrence still fails the audit" [ "$
 check "the unvouched file is named as a finding" contains "leaky.md" "$out"
 check "the vouched-only file is not named as a finding" not_contains "ok-vouched.md" "$out"
 
-# Mutation check: prove the private-ok honoring above is real code behavior,
-# not an accident of the fixtures — a mutant that drops the audit's
-# 'private-ok' filter must go back to flagging a fully-vouched term.
+# Mutation check: private-ok honoring is real behavior, not a fixture accident.
 D="$TMP/audit-vouch-mutant"
 scope_repo "$D"
 printf 'zz-solo-term appears here  private-ok\n' >"$D/ok-vouched.md"
@@ -346,7 +279,6 @@ else
     [ "$rc" -ne 0 ]
 fi
 
-# short terms over-match (Ada hits adapter) — warn, never fail on the warning
 D="$TMP/audit-short"
 scope_repo "$D"
 printf 'zzq\n' >"$TMP/audit-short-dl.txt"
@@ -355,7 +287,6 @@ rc=$?
 check "a short term draws an over-match warning" contains "over-match" "$out"
 check "a warning alone does not fail the audit" [ "$rc" -eq 0 ]
 
-# no denylist resolves: nothing to audit — say so, explain how to create one
 D="$TMP/audit-none"
 scope_repo "$D"
 mkdir -p "$TMP/audit-nohome"
@@ -366,9 +297,7 @@ check "no denylist: audit exits 0" [ "$rc" -eq 0 ]
 check "no denylist: says nothing to audit" contains "nothing to audit" "$out"
 check "no denylist: explains how to create one" contains "one term per line" "$out"
 
-# The audit's case-insensitivity is load-bearing: a case-sensitive mutant must
-# MISS a caps-only hit the real audit catches — proving the -i flag is what
-# catches it, not an accident of the fixture.
+# Mutation check: -i is load-bearing, so a case-sensitive mutant misses caps.
 D="$TMP/audit-caps"
 scope_repo "$D"
 printf 'only ZZ-CAPS-TERM here\n' >"$D/caps.md"
@@ -395,15 +324,11 @@ else
     [ "$rc" -eq 0 ]
 fi
 
-# ===========================================================================
 echo "self-test is failable:"
 
-# A gate that cannot go red is decoration. Each case copies the scanner into a
-# throwaway tree, breaks ONE rule, and requires the self-test to notice —
-# proving the assertions above are load-bearing, not just a clean exit code.
-# The copy sits at <dir>/bin/ because the scanner derives its own repo root
-# from its location. --self-test returns before any git call, so no fixture
-# repo is needed.
+# Each case breaks ONE rule in a scanner copy and requires the self-test to go
+# red. The copy sits at <dir>/bin/ (repo root derives from location); no fixture
+# repo is needed since --self-test returns before any git call.
 mutate() { # mutate NAME SED_EXPR EXPECTED_FAILURE_TEXT
   local name="$1" expr="$2" expected="$3" d="$TMP/$1" out rc
   mkdir -p "$d/bin"
@@ -422,31 +347,24 @@ mutate() { # mutate NAME SED_EXPR EXPECTED_FAILURE_TEXT
   check "$name — names the rule that broke" contains "$expected" "$out"
 }
 
-# The relay-email pattern stops matching: relay.md must no longer be flagged.
 mutate "neutered apple-private-relay pattern" \
   's|privaterelay\\\.appleid|privaterelay-NEVERMATCH\\.appleid|' \
   "relay.md NOT flagged"
 
-# Denylist matching loses case-insensitivity: 'Dana' stops catching 'dana'.
 # shellcheck disable=SC2016 # "$term" is literal sed replacement text, not expansion
 mutate "case-sensitive denylist matching" \
   's|grep -InFi "\$term"|grep -InF "$term"|' \
   "casefold.md NOT flagged"
 
-# The clean verdict stops disclosing that NO denylist was loaded — the two
-# facts ("nothing matched" vs "nothing was checked") collapse into one line.
 mutate "clean verdict stops disclosing an absent denylist" \
   's|pattern rules only — NO personal denylist loaded|no personal denylist loaded|' \
   "does not disclose that NO denylist was loaded"
 
-# The missing-denylist advice reverts to naming the RESOLVED read path, which
-# with no denylist anywhere is the deprecated ~/.claude-kit fallback (#289).
 # shellcheck disable=SC2016 # sed pattern/replacement text, not expansions
 mutate "missing-denylist advice names the deprecated read fallback" \
   's|no personal denylist at \$DENYLIST_SUGGESTED|no personal denylist at $DENYLIST|' \
   "does not name the notes home"
 
-# ===========================================================================
 echo
 if [ "$fail" -eq 0 ]; then
   printf '  ✓ all %d checks pass\n' "$pass"

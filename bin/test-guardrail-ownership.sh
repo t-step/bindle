@@ -8,13 +8,11 @@
 #   bindle remove                -> that repo is genuinely opted back out
 #
 # Complements bin/test-git-hook-dispatch.sh (Git dispatcher mechanics) and
-# bin/test-install-guardrails.sh (Claude-layer settings mechanics): this
-# file proves the END-TO-END boundary — that opting in/out is real and
-# repo-scoped for BOTH layers together, that a linked worktree resolves
-# Claude settings the same way Claude Code itself does, and that a
-# recognized legacy global install cannot survive an opt-out. Fully
-# isolated (its own HOME) — never touches the real ~/.claude or
-# ~/.local/share/bindle.
+# bin/test-install-guardrails.sh (Claude-layer settings mechanics) with the
+# END-TO-END boundary: opting in/out is real and repo-scoped for BOTH layers, a
+# linked worktree resolves Claude settings as Claude Code does, and a
+# recognized legacy global install cannot survive an opt-out. Fully isolated
+# (its own HOME) — never touches the real ~/.claude or ~/.local/share/bindle.
 #
 # Usage: bin/test-guardrail-ownership.sh
 #
@@ -87,7 +85,6 @@ mkdir -p "$HOME"
 git config --global user.email test@example.com
 git config --global user.name Test
 
-# ===========================================================================
 echo "installing Bindle on the machine does not affect an uninitialized repository:"
 
 UNINIT_REPO="$TMP/uninit-repo"
@@ -101,7 +98,6 @@ check "the never-initialized repo has no .claude/settings.local.json" bash -c \
 check "a direct commit on 'main' in the never-initialized repo succeeds" \
   commit_on_main_succeeds "$UNINIT_REPO" x f.txt
 
-# ===========================================================================
 echo "bindle init (--apply, both layers) opts one repository in, another stays untouched:"
 
 REPO_A="$TMP/repo-a"
@@ -125,7 +121,6 @@ check "Repo B: no .claude/settings.local.json exists" bash -c \
 check "Repo B: a direct commit on 'main' succeeds" \
   commit_on_main_succeeds "$REPO_B" x f.txt
 
-# ===========================================================================
 echo "bindle remove genuinely removes both layers — the repo is truly unprotected afterward:"
 
 "$INSTALLER" --uninstall --repo "$REPO_A" >/dev/null
@@ -143,7 +138,6 @@ check "Repo A: the Bindle-owned info/exclude entry it added is gone too" bash -c
 check "Repo A: the info/exclude ownership marker is gone" bash -c \
   "[ ! -e '$(owned_exclude_file_for "$REPO_A")' ]"
 
-# ===========================================================================
 echo "a recognized legacy global install blocks (never silently migrates) a normal init/remove, for any repository (Git + Claude):"
 
 TEMPLATE_REPO="$TMP/legacy-template-repo"
@@ -174,10 +168,6 @@ REPO_E="$TMP/repo-e"
 new_fixture "$REPO_D"
 new_fixture "$REPO_E"
 
-# bindle init on Repo E is repository-scoped: it must refuse to run (not
-# silently migrate, and not silently proceed) while recognized legacy
-# global state exists, and must leave that global state — and Repo E
-# itself — completely untouched.
 check "bindle init on Repo E fails while recognized legacy global state exists" bash -c \
   "! '$INSTALLER' --apply --repo '$REPO_E' >/dev/null 2>&1"
 check "legacy global core.hooksPath was NOT migrated away by a normal init" bash -c \
@@ -189,16 +179,12 @@ check "Repo E: no repo-local core.hooksPath was installed by the failed init" ba
 check "Repo E: no .claude/settings.local.json was created by the failed init" bash -c \
   "[ ! -e '$(claude_settings_for "$REPO_E")' ]"
 
-# The same recognized legacy global state blocks a DIFFERENT repository's
-# init identically — it's genuinely machine-global, not consumed or
-# otherwise changed by the first blocked attempt.
+# Legacy state is machine-global: the first blocked attempt must not consume it.
 check "bindle init on a different repository (Repo D) is blocked identically" bash -c \
   "! '$INSTALLER' --apply --repo '$REPO_D' >/dev/null 2>&1"
 check "Repo D: no repo-local core.hooksPath was installed either" bash -c \
   "! git -C '$REPO_D' config --local --get core.hooksPath >/dev/null 2>&1"
 
-# Only the explicit, repo-independent migration command actually removes
-# the recognized legacy global state.
 "$INSTALLER" --remove-legacy-global >/dev/null
 check "legacy global core.hooksPath was migrated away by the explicit migration command" bash -c \
   '! git config --global --get core.hooksPath >/dev/null 2>&1'
@@ -217,13 +203,9 @@ check "Repo E: global core.hooksPath did not reappear after remove" bash -c \
 check "Repo E: a direct commit on 'main' succeeds after remove (no legacy fallback)" \
   commit_on_main_succeeds "$REPO_E" z h.txt
 
-# ===========================================================================
 echo "linked worktrees: Claude settings resolve to the MAIN checkout, matching Claude Code's own behavior:"
 
-# Claude Code documents that project settings are "resolved through
-# worktrees to the main checkout" — install-guardrails.sh must write to
-# the same place Claude Code will actually read, regardless of which
-# worktree bindle was run from.
+# Claude Code resolves project settings "through worktrees to the main checkout"
 WT_REPO="$TMP/wt-repo"
 new_fixture "$WT_REPO"
 git -C "$WT_REPO" switch -q -c side-branch
@@ -255,6 +237,5 @@ check "the info/exclude ownership marker is gone after remove from the linked wo
 
 git -C "$WT_REPO" worktree remove -f "$WT_LINKED"
 
-# ===========================================================================
 printf '\n  guardrail-ownership: %d/%d checks passed\n' "$pass" "$((pass + fail))"
 exit "$fail"

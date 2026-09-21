@@ -1,25 +1,16 @@
-"""Spec Kit `tasks.md` loader: idempotently loads one settled Spec Kit
-feature directory's task decomposition into the durable work ledger.
+"""Spec Kit `tasks.md` loader: idempotently loads one settled Spec Kit feature
+directory's task decomposition into the durable work ledger.
 
-Implements the accepted design in specs/003-symphony-task-integration/
-(spec.md, plan.md, research.md, data-model.md,
-contracts/speckit-task-load.md) — read those first for the "why" behind
-anything here. In short: `load_feature()` is a narrow, explicitly-invoked
-operation (never a file watcher, never a Git hook) that reads exactly one
-`specs/NNN-slug/tasks.md` file in the one line shape
-`specs/001-durable-work-ledger/tasks.md` and
-`specs/002-milestone-task-work-items/tasks.md` already use, and turns each
-parseable task line into a `type='task'` `WorkLedger` work item —
-idempotently, so a reload never duplicates a work item, never disturbs a
-previously loaded task's runtime-owned state (status, claim, evidence),
-and only ever adds a `blocked_by` edge, never removes one.
+Design and rationale: specs/003-symphony-task-integration/
+(contracts/speckit-task-load.md). `load_feature()` is explicitly invoked (no
+watcher, no Git hook), reads one `specs/NNN-slug/tasks.md` in the fixed line
+shape specs/001 and specs/002 already use, and turns each parseable task line
+into a `type='task'` `WorkLedger` work item. Reloads never duplicate a work
+item, never disturb runtime-owned state (status, claim, evidence), and only add
+`blocked_by` edges, never remove them.
 
-This module is not a general Markdown parser or workflow engine — it
-recognizes exactly one fixed line shape (research.md's "Decision:
-tasks.md line parsing strategy") and has no extension point for any
-other. It never creates, moves, or deletes a milestone work item —
-Spec Kit's own task lines have no milestone concept — and it never
-deletes or archives a work item.
+Not a general Markdown parser: one fixed line shape, no extension point. It
+never creates, moves, deletes, or archives a milestone or any other work item.
 """
 
 from __future__ import annotations
@@ -31,12 +22,7 @@ import sqlite3
 
 from .work_ledger import WorkLedger, connect
 
-# research.md's "Decision: tasks.md line parsing strategy": a task line is
-# `- [ ]` or `- [x]` (checkbox state parsed but never surfaced as
-# meaningful, per FR-012), a Spec Kit task id (`T\d{3}`, optionally suffixed
-# with one lowercase letter — `T016a`, `T017a`, observed in
-# specs/002-milestone-task-work-items/tasks.md), zero or more bracketed
-# story tags (`[US1]`, `[P]`, ...), then free-text description.
+# Line shape: ids may carry one lowercase suffix (`T016a`, seen in specs/002).
 _CHECKBOX_PREFIX_RE = re.compile(r"^-\s*\[[ xX]\]\s*")
 
 _TASK_LINE_RE = re.compile(
@@ -50,8 +36,7 @@ _TASK_LINE_RE = re.compile(
     re.VERBOSE,
 )
 
-# A "Depends on: T00X, T00Y." clause, always the trailing clause of a task
-# line's free text — extracted separately from the description it trails.
+# Trailing "Depends on: T00X, T00Y." clause, split off from the description.
 _DEPENDS_ON_RE = re.compile(
     r"""
     \s*Depends\ on:\s*
@@ -61,55 +46,26 @@ _DEPENDS_ON_RE = re.compile(
     re.VERBOSE,
 )
 
-# `title` is the description text up to its first sentence boundary — a
-# period/question mark/exclamation point followed by whitespace or the end
-# of the text (data-model.md's "Loaded Task Work Item" table). Deliberately
-# simple: a period not followed by whitespace-or-end (e.g. the one inside
-# `work_ledger.py`) is not treated as a boundary, which is enough to avoid
-# the most common false split (a file extension or module path) without
-# building a real sentence tokenizer this feature does not need.
+# Title ends at `.!?` before whitespace/end, so `work_ledger.py` stays whole.
 _SENTENCE_BOUNDARY_RE = re.compile(r"(.+?[.!?])(?:\s|$)")
 
 
 class TasksFileError(RuntimeError):
-    """Raised when a feature directory's `tasks.md` is missing, empty, or
-    malformed in a way that stops the whole load.
+    """Raised when `tasks.md` is missing, empty, taskless, or repeats an id.
 
-    spec.md's Edge Cases: "Loading is invoked against a feature directory
-    whose tasks.md does not exist, or exists but is empty — the operation
-    reports this clearly rather than silently creating zero work items
-    with no explanation." Also raised when `tasks.md` exists and is
-    non-empty but contains zero parseable task lines (T004) — from a
-    caller's perspective this is the same "nothing to load, and here is
-    why" outcome as a missing or genuinely empty file.
-
-    Also raised when the same Spec Kit task id (e.g. `T003`) is declared
-    by more than one task line in the same `tasks.md` — parsing task
-    lines into a dict keyed by task id would otherwise let a later line
-    silently overwrite an earlier one with no indication either the
-    duplicate or the choice of winner ever happened. Reported before any
-    work item is created or resynced, so a file with a duplicate id loads
-    nothing rather than partially loading and silently discarding one
-    line's content.
+    "Taskless" means no parseable task lines (T004). A duplicate id is reported
+    before any work item is created or resynced, so nothing partially loads and
+    no line silently overwrites another.
     """
 
 
 class SourceIdentityConflictError(RuntimeError):
-    """Raised when a task's deterministic work-item id collides with an
-    existing row whose recorded provenance is not this same Spec Kit
-    task's own (`source_kind = 'speckit_task'`, `source_locator` equal to
-    this feature/task's own `{feature_dir}/tasks.md#{task_id}`).
+    """Raised when a task's deterministic id collides with foreign provenance.
 
-    A primary-key collision on the deterministic id is only safe to treat
-    as "this exact task was already loaded before" — and therefore safe
-    to resync — when the existing row's provenance actually matches. An id
-    can otherwise collide with an unrelated `adhoc`/`plan`-sourced item, or
-    with a `speckit_task` item loaded from a different locator, since
-    nothing in the schema itself prevents an id from being reused for a
-    different purpose. Treating that as an idempotent reload would resync
-    (and on a future reload, keep resyncing) a work item this loader does
-    not actually own. Raised instead, before any mutation of the
-    conflicting row — the existing row is left byte-for-byte unchanged.
+    Own provenance means `source_kind = 'speckit_task'` and `source_locator`
+    equal to `{feature_dir}/tasks.md#{task_id}`. Anything else (an
+    `adhoc`/`plan` item, or another locator) is not an idempotent reload and is
+    left byte-for-byte unchanged.
     """
 
 
@@ -125,12 +81,9 @@ class ParsedTaskLine:
 
 @dataclasses.dataclass(frozen=True)
 class SkippedLine:
-    """One line reported as skipped rather than silently ignored (FR-011).
+    """A skipped line (FR-011): checkbox-prefixed but not a valid task line.
 
-    Only a line that looks like it was *trying* to be a task line (starts
-    with a `- [ ]`/`- [x]` checkbox) but does not fully match the expected
-    shape is reported this way — a section header, blank line, or ordinary
-    prose line is silently ignored instead, never reported.
+    Headers, blank lines, and prose are ignored silently instead.
     """
 
     line_number: int
@@ -140,9 +93,7 @@ class SkippedLine:
 
 @dataclasses.dataclass(frozen=True)
 class UnresolvedDependency:
-    """A `Depends on:` reference naming a task id absent from this same
-    `tasks.md` file (FR-010) — reported to the caller rather than silently
-    discarded or silently recorded against a nonexistent work item."""
+    """A `Depends on:` naming a task id absent from this `tasks.md` (FR-010)."""
 
     task_id: str
     depends_on: str
@@ -161,13 +112,7 @@ class LoadResult:
 
 @dataclasses.dataclass(frozen=True)
 class _LineParseOutcome:
-    """Internal: the result of parsing one line of `tasks.md`.
-
-    `kind` is one of `"task"` (successfully parsed — `task` is set),
-    `"skip"` (looked like an attempted task line but did not fully match —
-    `reason` is set), or `"ignore"` (ordinary non-task-line content —
-    silently dropped, never reported).
-    """
+    """`kind`: "task" (`task` set), "skip" (`reason` set), or "ignore"."""
 
     kind: str
     task: ParsedTaskLine | None = None
@@ -180,8 +125,7 @@ def _first_sentence(text: str) -> str:
 
 
 def _parse_line(line: str) -> _LineParseOutcome:
-    """Parse one raw line of `tasks.md` (research.md's "Decision:
-    tasks.md line parsing strategy")."""
+    """Parse one raw line of `tasks.md`."""
     stripped = line.strip()
     if not _CHECKBOX_PREFIX_RE.match(stripped):
         return _LineParseOutcome(kind="ignore")
@@ -237,59 +181,28 @@ def load_feature(
 ) -> LoadResult:
     """Load one Spec Kit feature directory's `tasks.md` into the ledger.
 
-    `feature_dir` is the feature directory's path relative to the
-    repository root (`ledger.repo_root`) — e.g.
-    `"specs/003-symphony-task-integration"` — exactly the value stored,
-    unmodified, as the `{feature-directory-relative-path}` component of
-    each loaded task's `source_locator` (data-model.md's "Source
-    Reference"). `tasks.md` is read from
-    `os.path.join(ledger.repo_root, feature_dir, "tasks.md")`.
+    `feature_dir` is relative to `ledger.repo_root` (e.g.
+    `"specs/003-symphony-task-integration"`) and is stored unmodified in each
+    task's `source_locator`.
 
-    Raises `TasksFileError` when `tasks.md` does not exist, is empty,
-    contains zero parseable task lines (spec.md's Edge Cases, T004), or
-    declares the same Spec Kit task id more than once — each reported
-    clearly rather than silently producing zero work items, or silently
-    letting one line's content overwrite another's.
+    Raises `TasksFileError` when `tasks.md` is missing, empty, has no parseable
+    task lines, or repeats a task id. Raises `SourceIdentityConflictError` when
+    a deterministic id collides with a row of different provenance; that row is
+    never mutated.
 
-    Raises `SourceIdentityConflictError` when a task line's deterministic
-    id collides with an existing row whose provenance is not this same
-    Spec Kit task's own — see that error's docstring. The existing row is
-    never mutated in this case.
+    Pass 1 creates each task's work item. On an id collision with matching
+    provenance it calls `resync_declarative_fields()` only if
+    `title`/`description` differ, so an unchanged reload leaves every row
+    byte-for-byte unchanged (FR-006, SC-002) and an edited line re-syncs
+    (FR-007). Status, claims, and evidence are never read or written.
 
-    Two passes within this one invocation (research.md's "Decision:
-    dependency loading order within one feature directory"), so a
-    dependency reference resolves correctly regardless of which line
-    appears first in the file (FR-009):
+    Pass 2 resolves `Depends on:` clauses against this file's ids and adds
+    missing `blocked_by` edges, never removing any (FR-008); unknown ids land in
+    `LoadResult.unresolved_dependencies` (FR-010). Two passes let a dependency
+    resolve regardless of line order (FR-009).
 
-    Pass 1 — for each parsed task line, attempt `create_work_item()`. A
-    collision on the deterministic, source-derived `id` (a primary-key
-    `sqlite3.IntegrityError`) means either this task was already loaded by
-    a prior invocation of this same loader, or the id was reused by
-    something else entirely — the loader first confirms the existing
-    row's `source_kind`/`source_locator` actually match this task's own
-    before treating the collision as an idempotent reload (raising
-    `SourceIdentityConflictError` otherwise). Once provenance is
-    confirmed, the loader compares the existing row's `title`/
-    `description` against the freshly parsed values and calls
-    `resync_declarative_fields()` only when they actually differ — never
-    unconditionally — so reloading an unchanged `tasks.md` leaves every
-    existing row byte-for-byte unchanged (FR-006, SC-002), while a
-    genuinely edited line's declarative text is re-synced on the next
-    reload (FR-007). `status`, claims, and evidence are never read or
-    written by this loader at all — `resync_declarative_fields()` itself
-    has no path to any of them.
-
-    Pass 2 — resolves every `Depends on:` clause against this same file's
-    own derived ids and adds any `blocked_by` edge not already recorded,
-    never removing one (FR-008). A dependency naming a task id absent
-    from this same `tasks.md` is reported via `LoadResult.
-    unresolved_dependencies` rather than silently discarded or silently
-    recorded against a nonexistent work item (FR-010).
-
-    A single unparseable line is reported via `LoadResult.skipped`, with
-    every other well-formed line in the same file still loaded (FR-011) —
-    this operation is not required to be all-or-nothing across a whole
-    file.
+    An unparseable line goes to `LoadResult.skipped` while the other lines still
+    load (FR-011).
     """
     tasks_path = os.path.join(ledger.repo_root, feature_dir, "tasks.md")
     if not os.path.isfile(tasks_path):
@@ -339,7 +252,7 @@ def load_feature(
     def _item_id(task_id: str) -> str:
         return f"speckit:{feature_dir_name}:{task_id}"
 
-    # -- Pass 1: create or resync every parsed task's own work item -------
+    # Pass 1: create or resync every task before resolving any dependency.
     created: list[str] = []
     resynced: list[str] = []
     for task in parsed.values():
@@ -383,7 +296,7 @@ def load_feature(
                 )
                 resynced.append(item_id)
 
-    # -- Pass 2: resolve every "Depends on:" clause, additive only --------
+    # Pass 2: resolve "Depends on:" clauses, additive only.
     conn = connect(ledger.repo_root)
     try:
         existing_edges = {
